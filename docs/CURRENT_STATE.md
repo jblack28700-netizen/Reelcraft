@@ -10,17 +10,20 @@ main
 
 ## Current Stage
 
-Documentation and architecture foundation
+Documentation foundation and technology-direction preparation
 
 ## Project Status
 
 Reelcraft does not yet contain application implementation.
 
-The repository currently establishes the persistent documentation, architecture, development workflow, and project-control foundation required before implementation begins.
+The repository currently establishes the persistent product requirements, project model, AI editing contract, architecture, development workflow, and project-control documentation required before production implementation begins.
 
 ## Completed Foundation Work
 
 - Master project guide
+- Product requirements
+- Conceptual project model
+- AI-to-deterministic editing contract
 - Technical architecture
 - Architectural decisions
 - AI handoff instructions
@@ -29,59 +32,88 @@ The repository currently establishes the persistent documentation, architecture,
 - Known issues
 - Changelog
 - Development environment documentation
+- Controlled incremental development workflow
 
 ## Current Objective
 
-Complete and verify the project-control documentation foundation.
+Evaluate and establish a safe technical direction for Reelcraft before beginning production application implementation.
+
+The evaluation must determine appropriate approaches for the desktop-first application runtime, UI, media processing, AI integration, voice, 360° workflows, local/cloud/hybrid processing, performance, GPU acceleration, storage, rendering, testing, packaging, deployment, and extensibility.
 
 ## Current Work
 
-1. Verify all documentation files.
-2. Check documentation for contradictions.
-3. Verify repository contents.
-4. Review the complete Git diff.
-5. Create a verified Git checkpoint.
-6. Define the first small implementation objective for Phase 1 — Foundation.
+The project is transitioning from:
+
+    Documentation + conceptual architecture
+
+to:
+
+    Documentation + validated technical direction
+
+No production application implementation should begin until the technology evaluation is sufficiently complete to define a safe and appropriately scoped Phase 1 implementation objective.
 
 ## Application Implementation
 
 Status: Not started.
 
-No production application features have been implemented as part of the current foundation objective.
+No production application features have been implemented as part of the current documentation and architecture foundation.
 
 ## Media Processing
 
 Status: Not implemented.
 
+The deterministic media-processing architecture is defined conceptually, but no production media engine has been implemented.
+
 ## AI Editing
 
 Status: Not implemented.
 
+The conceptual AI-to-deterministic edit contract has been established, but no production AI editing system or provider integration has been implemented.
+
 ## 360° Video
 
-Status: Architectural requirement only.
+Status: Architectural and contractual requirement only.
 
-360° video is a first-class requirement, but the processing, viewing, reframing, and export systems have not yet been implemented.
+360° video is a first-class requirement. The project has documented conceptual requirements for 360° media, but 360° viewing, processing, reframing, and export systems have not yet been implemented.
 
 ## Testing
 
 Status: Application testing infrastructure not yet implemented.
 
-Documentation and repository verification are being performed during the foundation stage.
+Documentation and repository verification are being performed during the foundation stage. Production application testing infrastructure will be established as part of the implementation architecture.
+
+## Technology Direction
+
+Status: Not yet finalized.
+
+The following remain intentionally open pending technology evaluation:
+
+- Final UI framework
+- Final application runtime
+- Project file format/schema
+- Storage implementation
+- AI provider selection
+- AI model selection
+- Local/cloud workload allocation
+- Rendering architecture
+- GPU acceleration strategy
+- Database requirements
+- Plugin/extension architecture
+- Packaging and deployment strategy
+
+Technology candidates must be evaluated against the documented requirements and architectural boundaries rather than selected solely by familiarity or popularity.
 
 ## Known Limitations
 
-- Final UI framework is not selected.
-- Final application runtime is not selected.
-- Project/edit schema is not finalized.
-- Storage architecture is not finalized.
-- AI provider/model selection is not finalized.
-- Local/cloud workload allocation is not finalized.
-- GPU acceleration strategy is not finalized.
-- Rendering architecture is not finalized.
-- Production packaging and deployment are not finalized.
+- No production application implementation exists.
+- No production media engine exists.
+- No production AI provider integration exists.
+- No production voice system exists.
+- No 360° viewer or reframing system exists.
+- Automated application testing infrastructure is not yet implemented.
+- Final technology choices remain unresolved pending evaluation.
 
-These are intentional architectural unknowns at the current stage.
+These limitations are intentional at the current stage.
 
 ## Development Environment
 
@@ -117,9 +149,14 @@ Core rules:
 - Update persistent documentation.
 - Never claim completion without verification.
 - Stop when requirements or architecture conflict.
+- Preserve technology flexibility until sufficient evidence supports a decision.
 
 ## Next Stage
 
-After the documentation foundation is verified and checkpointed, define the first small implementation objective for Phase 1 — Foundation.
+Complete the technology/runtime evaluation and establish only the technical decisions that can be safely supported by evidence.
+
+After that evaluation is verified and checkpointed, define the smallest Phase 1 implementation objective.
 
 The next implementation task must have explicit scope, success criteria, verification steps, and a Definition of Done.
+
+Do not automatically begin a major feature after the technology evaluation.
