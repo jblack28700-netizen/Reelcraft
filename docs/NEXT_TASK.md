@@ -2,53 +2,52 @@
 
 ## Objective
 
-Add and verify a reproducible build-and-test workflow for the Phase 1 desktop foundation.
+Add and verify automated protection evidence that project lifecycle operations never modify original media.
 
 ## Why This Is the Next Task
 
-The Phase 1 foundation and UI integration tests are complete, but the build/run/test commands are manual and partially environment-dependent. A small script makes the workflow reproducible for future agents and contributors.
+Phase 1 foundation, UI integration, and reproducible build/test workflow are verified. The remaining Phase 1 Definition of Done gap is explicit evidence that original media remains byte-for-byte unchanged during project create, persist, and reopen operations.
 
 ## In Scope
 
-- Add scripts/build_and_test.sh
-- Build the application using /usr/lib/qt6/bin/qmake
-- Build the test binary using the same Qt toolchain
-- Run the offscreen Qt Test suite
-- Update DEVELOPMENT_ENVIRONMENT.md to reflect verified testing infrastructure
-- Verify the script from the repository root
+- Add a test fixture file representing original media
+- Compute SHA-256 before and after project lifecycle operations
+- Verify bytes and hash remain unchanged
+- Run the full offscreen test suite
+- Update documentation
+- Create a Git checkpoint
 
 ## Explicitly Out of Scope
 
+- Full video editor
+- Production media engine
+- Media ingestion or parsing
+- 360° workflows
+- AI editing
 - New application features
-- Editor/media/AI functionality
-- CI/CD infrastructure
-- Packaging or distribution
-- Cross-platform build matrix expansion
 
 ## Definition of Done
 
-1. scripts/build_and_test.sh exists and is executable
-2. Script builds app successfully
-3. Script builds tests successfully
-4. Script runs all 14 tests offscreen successfully
-5. DEVELOPMENT_ENVIRONMENT.md accurately reflects the current test capability
-6. Documentation updated
-7. Git checkpoint created and working tree clean
+1. Automated test creates an original-media fixture
+2. Test exercises project create/save/reopen without media modification
+3. Test verifies fixture bytes and SHA-256 remain identical
+4. All tests pass offscreen
+5. Documentation updated
+6. Git checkpoint created and working tree clean
 
 ## Verification Plan
 
-- Run scripts/build_and_test.sh from the repository root
-- Confirm application build succeeds
-- Confirm test build succeeds
-- Confirm all 14 tests pass
+- Add test using QTemporaryDir and QCryptographicHash
+- Run scripts/build_and_test.sh from repository root
+- Confirm all tests pass
 - Inspect git diff --check
 - Commit and verify clean status
 
 ## Stop Conditions
 
-- Script cannot locate qmake or required Qt modules
-- Test run fails or hangs beyond timeout
-- Scope expands beyond the reproducible workflow
+- Test cannot create or read the fixture
+- Project lifecycle unexpectedly modifies media fixture
+- Scope expands beyond Phase 1 verification
 
 ## Next Task After Completion
 

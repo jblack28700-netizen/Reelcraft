@@ -342,3 +342,10 @@ Define Next Objective
 - Script runs offscreen Qt Test suite
 - Verified: 14 tests pass, WORKFLOW_EXIT=0
 - Updated DEVELOPMENT_ENVIRONMENT.md testing capability
+
+## 2026-09-03 — Original Media Safety Verification
+
+- Added test fixture representing original media
+- Added SHA-256 before/after project create/save/reopen checks
+- Verified source bytes remain unchanged
+- Full suite now: 15 passed, 0 failed

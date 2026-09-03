@@ -1,5 +1,6 @@
 #include <QtTest>
 #include <QFile>
+#include <QCryptographicHash>
 #include <QLabel>
 #include <QPushButton>
 #include <QSignalSpy>
@@ -37,6 +38,7 @@ private slots:
     void mainWindowStatusLabelUpdates();
     void applicationSaveInvalidPathEmitsError();
     void applicationOpenMissingFileEmitsError();
+    void projectLifecycleDoesNotModifyOriginalMedia();
 };
 
 void ProjectTest::initTestCase()
@@ -208,6 +210,42 @@ void ProjectTest::applicationOpenMissingFileEmitsError()
     QCOMPARE(spy.count(), 1);
     QVERIFY(spy.first().first().toString().contains(QStringLiteral("Open failed")));
     QVERIFY(!app.hasProject());
+}
+
+
+void ProjectTest::projectLifecycleDoesNotModifyOriginalMedia()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString mediaPath = tempDir.filePath(QStringLiteral("source.mp4"));
+    QFile mediaFile(mediaPath);
+    QVERIFY(mediaFile.open(QIODevice::WriteOnly));
+
+    const QByteArray originalBytes("FAKE_MEDIA_BYTES_0123456789_REELCRAFT_PHASE1");
+    QCOMPARE(mediaFile.write(originalBytes), static_cast<qint64>(originalBytes.size()));
+    mediaFile.close();
+
+    const QByteArray originalHash =
+        QCryptographicHash::hash(originalBytes, QCryptographicHash::Sha256);
+
+    Application app;
+    app.newProject();
+
+    Project project = app.currentProject();
+    project.setName(QStringLiteral("Media Safety"));
+
+    const QString projectPath = tempDir.filePath(QStringLiteral("project.reel"));
+    QVERIFY(project.save(projectPath));
+    QVERIFY(app.openProject(projectPath));
+
+    QFile reopened(mediaPath);
+    QVERIFY(reopened.open(QIODevice::ReadOnly));
+    const QByteArray afterBytes = reopened.readAll();
+    reopened.close();
+
+    QCOMPARE(afterBytes, originalBytes);
+    QCOMPARE(QCryptographicHash::hash(afterBytes, QCryptographicHash::Sha256), originalHash);
 }
 
 QTEST_MAIN(ProjectTest)

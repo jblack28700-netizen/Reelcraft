@@ -111,3 +111,11 @@ Date: 2026-09-03
 - Added scripts/build_and_test.sh
 - Verified offscreen test run: 14 passed, 0 failed
 - Updated development environment documentation
+
+## v0.1.6 — Original Media Safety Verification
+
+Date: 2026-09-03
+
+- Added automated original-media non-modification test
+- Verified byte and SHA-256 integrity across project lifecycle
+- Expanded Qt Test suite to 15 passing tests
