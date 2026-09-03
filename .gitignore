@@ -1,0 +1,5 @@
+# Qt/qmake build artifacts
+.qmake.stash
+Makefile
+*.o
+reelcraft
