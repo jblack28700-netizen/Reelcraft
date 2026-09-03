@@ -2,149 +2,61 @@
 
 ## Objective
 
-Establish the smallest working, testable Reelcraft desktop application foundation using the validated technical direction, while preserving strict separation between the UI/application layer, project state, future AI orchestration, and deterministic media execution.
-
-This is a foundation task, not a major editor-feature implementation.
+Complete automated UI integration verification for the Phase 1 desktop application foundation by directly testing MainWindow signal/slot behavior, display updates, and Application error paths.
 
 ## Why This Is the Next Task
 
-The technology/runtime evaluation is complete enough to establish a validated technical direction for Phase 1.
-
-The project now needs a minimal executable foundation that proves the core application boundaries and development workflow before larger editor capabilities are introduced.
+Phase 1 foundation is implemented and the core test suite passes, but UI-to-application communication and expected failure handling have not yet been verified through automated UI-level tests. This objective closes that verification gap without adding new product features.
 
 ## In Scope
 
-- Select and establish the desktop runtime/UI foundation for Phase 1 based on the validated technical direction.
-- Create a minimal Reelcraft application shell.
-- Establish a clear UI/application-core boundary.
-- Establish minimal project lifecycle: create, identify, persist, reopen, and close.
-- Establish a safe boundary for future deterministic media processing.
-- Establish background work that does not block the UI.
-- Establish basic cross-boundary error handling.
-- Establish the initial automated test foundation.
-- Establish a reproducible build and run workflow.
-- Verify alignment with ARCHITECTURE.md and AI_EDIT_CONTRACT.md.
+- Add object names to MainWindow widgets for testability
+- Add automated tests for MainWindow button signals
+- Add automated tests for MainWindow project/status label updates
+- Add automated tests for Application save/open failure paths
+- Update tests/tests.pro to link QtWidgets
+- Rebuild and run the full test suite offscreen
 
 ## Explicitly Out of Scope
 
 - Full video editor
-- Full timeline
+- Timeline system
 - Production media engine
-- Production video playback
+- Production playback
 - 360° viewer or reframing
 - AI editing
-- Production AI provider integration
-- Voice editing
-- B-roll intelligence
-- Scene detection
-- Speaker detection
-- Captions
-- Color grading
-- Effects system
-- Production rendering/export
-- Cloud infrastructure
-- Complete production project schema
-- Insta360 X5-specific implementation
-- Camera-specific media adapters
-- GPU-optimized production video pipeline
-- Plugin architecture
-- Production packaging/distribution
-
-## Implementation Constraints
-
-- Maintain one active development objective.
-- Inspect before changing.
-- Protect existing work.
-- Make small logical changes.
-- Test after meaningful changes.
-- Perform regression testing.
-- Use Git checkpoints before and after meaningful or risky changes.
-- Keep experiments separated from stable work.
-- Update persistent documentation.
-- Never claim completion without verification.
-- Stop when requirements or architecture conflict.
-- AI reasoning and deterministic media execution remain separate.
-- Original media must never be modified by the application foundation.
-- Project state remains separate from original media.
-- 360° remains first-class architecturally but is not implemented in Phase 1.
-- Camera-specific behavior remains behind adapters.
-- AI providers remain replaceable.
-- Voice and text remain compatible with the same intent architecture.
-- Avoid premature full-editor schema design.
-- Avoid unnecessary dependencies.
-- Keep the UI responsive and background work nonblocking.
-- Material technology decisions must be recorded in DECISIONS.md.
+- Advanced editing features
+- New application features beyond verification
 
 ## Definition of Done
 
-Phase 1 is complete only when:
-
-1. The selected Phase 1 desktop runtime/UI foundation builds successfully.
-2. Reelcraft launches successfully in the supported test environment.
-3. A basic UI shell renders reliably.
-4. UI-to-application/core communication is demonstrated.
-5. A minimal project can be created.
-6. Minimal project state can be persisted.
-7. A persisted project can be reopened successfully.
-8. Original media is never modified.
-9. Background work executes without freezing the UI.
-10. At least one expected failure/error path is handled safely.
-11. Automated tests execute successfully.
-12. Regression checks pass.
-13. The implementation respects ARCHITECTURE.md and AI_EDIT_CONTRACT.md.
-14. The build/run workflow is reproducible.
-15. Relevant documentation is updated.
-16. A verified Git checkpoint exists.
-17. git status is clean.
-18. Completion is supported by actual verification.
+1. App builds successfully
+2. Test binary builds successfully
+3. All automated tests pass, including new UI and error-path tests
+4. MainWindow button clicks verify signal emission
+5. MainWindow label updates are verified
+6. Application save/open error paths return false and emit backgroundCompleted with an error message
+7. Documentation updated
+8. Git checkpoint created and working tree clean
 
 ## Verification Plan
 
-- Build the application from the documented development environment.
-- Launch it and verify the UI shell.
-- Create, persist, close, and reopen a minimal project.
-- Exercise UI-to-core communication.
-- Exercise background work and verify UI responsiveness.
-- Exercise an invalid or failure condition.
-- If a media fixture is used, verify that original media is not modified.
-- Run automated tests.
-- Run regression checks.
-- Inspect the final diff.
-- Run git diff --check.
-- Create the Git checkpoint and verify a clean working tree.
-
-## Success Criteria
-
-Move the project from:
-
-Documentation + validated technical direction
-
-to:
-
-Validated technical direction + minimal executable application foundation
-
-without implementing major editing features or prematurely locking downstream architecture.
+- Build app with /usr/lib/qt6/bin/qmake && make
+- Build tests from tests/ with /usr/lib/qt6/bin/qmake && make
+- Run tests with QT_QPA_PLATFORM=offscreen
+- Inspect final test summary
+- Run git diff --check
+- Commit and verify clean status
 
 ## Stop Conditions
 
-Stop and ask for clarification if:
-
-- Requirements conflict with architecture.
-- A technology choice requires an unsupported major architectural commitment.
-- Phase 1 expands into a major editor feature.
-- A dependency introduces significant unnecessary lock-in.
-- A change could modify or overwrite original media.
-- The AI-to-deterministic boundary would be bypassed.
-- Verification cannot establish whether the implementation works.
-- The current environment cannot support required verification and no safe alternative exists.
+- Tests fail to compile or run
+- Widget tests cannot run headless due to environment limitations
+- Scope expands beyond verification into new features
 
 ## Next Task After Completion
 
-After Phase 1 is fully implemented, tested, verified, documented, and checkpointed, define the next smallest logical development objective.
-
-Do not automatically begin a major feature.
-
-The next objective must be established from the evidence produced by Phase 1 and documented before implementation begins.
+Define the next smallest development objective from Phase 1 evidence. Do not begin automatically.
 
 ## Status
 
@@ -152,4 +64,4 @@ Complete — 2026-09-03.
 
 ## Next Logical State
 
-Define the next smallest development objective from the verified Phase 1 foundation. Do not begin the next objective automatically; it must be documented and scoped before implementation.
+Define the next smallest development objective from the verified Phase 1 foundation. Do not begin automatically.

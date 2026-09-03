@@ -184,3 +184,18 @@ Boundaries preserved:
 - Original media is not modified
 - AI reasoning remains separate from deterministic execution
 - Production media engine, timeline, and AI editing remain unimplemented
+
+## Phase 1 UI Integration Verification — Complete
+
+Status: Complete.
+
+Added automated UI-level verification:
+- MainWindow button signal emission
+- Project label updates
+- Status label updates
+- Application save/open error paths
+
+Verification:
+- Application build: BUILD_EXIT=0
+- Tests build: TESTS_BUILD_EXIT=0
+- Automated tests: 14 passed, 0 failed, TESTS_RUN_EXIT=0

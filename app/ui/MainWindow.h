@@ -14,6 +14,10 @@ class MainWindow : public QMainWindow
 public:
     explicit MainWindow(QWidget *parent = nullptr);
 
+protected:
+    virtual QString chooseSaveFilePath();
+    virtual QString chooseOpenFilePath();
+
 public slots:
     void showProject(const Project &project);
     void showStatus(const QString &message);

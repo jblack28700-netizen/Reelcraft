@@ -324,3 +324,13 @@ Define Next Objective
 - Added Qt Test suite in tests/
 - Fixed ISODateWithMs precision and linker issues
 - Verified app build, automated tests, and offscreen runtime launch
+
+## 2026-09-03 — Phase 1 UI Integration Verification
+
+- Added object names to MainWindow widgets
+- Made file-path chooser injectable for headless UI tests
+- Added TestMainWindow override to avoid modal file dialogs
+- Added UI signal and label update tests
+- Added Application save/open error-path tests
+- Fixed test preconditions for invalid-path save
+- Verified 14 automated tests pass offscreen

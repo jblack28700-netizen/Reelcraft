@@ -23,6 +23,13 @@ MainWindow::MainWindow(QWidget *parent)
     m_openButton = new QPushButton(QStringLiteral("Open Project"), central);
     m_backgroundButton = new QPushButton(QStringLiteral("Run Background Demo"), central);
 
+    m_projectLabel->setObjectName("projectLabel");
+    m_statusLabel->setObjectName("statusLabel");
+    m_newProjectButton->setObjectName("newProjectButton");
+    m_saveButton->setObjectName("saveProjectButton");
+    m_openButton->setObjectName("openProjectButton");
+    m_backgroundButton->setObjectName("backgroundDemoButton");
+
     layout->addWidget(m_projectLabel);
     layout->addWidget(m_newProjectButton);
     layout->addWidget(m_saveButton);
@@ -35,22 +42,32 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_newProjectButton, &QPushButton::clicked, this, &MainWindow::newProjectRequested);
 
     connect(m_saveButton, &QPushButton::clicked, this, [this]() {
-        const QString filePath = QFileDialog::getSaveFileName(
-            this, QStringLiteral("Save Project"), QString(), QStringLiteral("Reelcraft Project (*.reel)"));
+        const QString filePath = chooseSaveFilePath();
         if (!filePath.isEmpty()) {
             emit saveProjectRequested(filePath);
         }
     });
 
     connect(m_openButton, &QPushButton::clicked, this, [this]() {
-        const QString filePath = QFileDialog::getOpenFileName(
-            this, QStringLiteral("Open Project"), QString(), QStringLiteral("Reelcraft Project (*.reel)"));
+        const QString filePath = chooseOpenFilePath();
         if (!filePath.isEmpty()) {
             emit openProjectRequested(filePath);
         }
     });
 
     connect(m_backgroundButton, &QPushButton::clicked, this, &MainWindow::backgroundDemoRequested);
+}
+
+QString MainWindow::chooseSaveFilePath()
+{
+    return QFileDialog::getSaveFileName(
+        this, QStringLiteral("Save Project"), QString(), QStringLiteral("Reelcraft Project (*.reel)"));
+}
+
+QString MainWindow::chooseOpenFilePath()
+{
+    return QFileDialog::getOpenFileName(
+        this, QStringLiteral("Open Project"), QString(), QStringLiteral("Reelcraft Project (*.reel)"));
 }
 
 void MainWindow::showProject(const Project &project)

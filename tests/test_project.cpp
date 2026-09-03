@@ -1,10 +1,23 @@
 #include <QtTest>
 #include <QFile>
+#include <QLabel>
+#include <QPushButton>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 
 #include "application/Application.h"
 #include "core/Project.h"
+#include "ui/MainWindow.h"
+
+class TestMainWindow : public MainWindow
+{
+public:
+    explicit TestMainWindow(QWidget *parent = nullptr) : MainWindow(parent) {}
+
+protected:
+    QString chooseSaveFilePath() override { return QStringLiteral("/tmp/reelcraft_test.reel"); }
+    QString chooseOpenFilePath() override { return QStringLiteral("/tmp/reelcraft_test.reel"); }
+};
 
 class ProjectTest : public QObject
 {
@@ -19,6 +32,11 @@ private slots:
     void applicationNewProjectEmitsSignal();
     void applicationOpenProjectEmitsSignal();
     void applicationBackgroundDemoEmitsSignal();
+    void mainWindowButtonsEmitSignals();
+    void mainWindowProjectLabelUpdates();
+    void mainWindowStatusLabelUpdates();
+    void applicationSaveInvalidPathEmitsError();
+    void applicationOpenMissingFileEmitsError();
 };
 
 void ProjectTest::initTestCase()
@@ -114,5 +132,83 @@ void ProjectTest::applicationBackgroundDemoEmitsSignal()
     QVERIFY(!app.hasProject());
 }
 
-QTEST_APPLESS_MAIN(ProjectTest)
+void ProjectTest::mainWindowButtonsEmitSignals()
+{
+    TestMainWindow window;
+    QSignalSpy newSpy(&window, &MainWindow::newProjectRequested);
+    QSignalSpy saveSpy(&window, &MainWindow::saveProjectRequested);
+    QSignalSpy openSpy(&window, &MainWindow::openProjectRequested);
+    QSignalSpy bgSpy(&window, &MainWindow::backgroundDemoRequested);
+
+    auto *newButton = window.findChild<QPushButton*>("newProjectButton");
+    auto *saveButton = window.findChild<QPushButton*>("saveProjectButton");
+    auto *openButton = window.findChild<QPushButton*>("openProjectButton");
+    auto *bgButton = window.findChild<QPushButton*>("backgroundDemoButton");
+
+    QVERIFY(newButton);
+    QVERIFY(saveButton);
+    QVERIFY(openButton);
+    QVERIFY(bgButton);
+
+    newButton->click();
+    saveButton->click();
+    openButton->click();
+    bgButton->click();
+
+    QCOMPARE(newSpy.count(), 1);
+    QCOMPARE(saveSpy.count(), 1);
+    QCOMPARE(openSpy.count(), 1);
+    QCOMPARE(bgSpy.count(), 1);
+}
+
+void ProjectTest::mainWindowProjectLabelUpdates()
+{
+    TestMainWindow window;
+    Project project;
+    project.setName(QStringLiteral("Label Test"));
+
+    window.showProject(project);
+
+    auto *label = window.findChild<QLabel*>("projectLabel");
+    QVERIFY(label);
+    QVERIFY(label->text().contains(project.name()));
+    QVERIFY(label->text().contains(project.id()));
+}
+
+void ProjectTest::mainWindowStatusLabelUpdates()
+{
+    TestMainWindow window;
+    window.showStatus(QStringLiteral("Test Status"));
+
+    auto *label = window.findChild<QLabel*>("statusLabel");
+    QVERIFY(label);
+    QCOMPARE(label->text(), QStringLiteral("Test Status"));
+}
+
+void ProjectTest::applicationSaveInvalidPathEmitsError()
+{
+    Application app;
+    QSignalSpy spy(&app, &Application::backgroundCompleted);
+
+    app.newProject();
+    spy.clear();
+
+    QVERIFY(!app.saveProject(QStringLiteral("/nonexistent_dir/nope.reel")));
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(spy.first().first().toString().contains(QStringLiteral("Save failed")));
+    QVERIFY(app.hasProject());
+}
+
+void ProjectTest::applicationOpenMissingFileEmitsError()
+{
+    Application app;
+    QSignalSpy spy(&app, &Application::backgroundCompleted);
+
+    QVERIFY(!app.openProject(QStringLiteral("/nonexistent/nope.reel")));
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(spy.first().first().toString().contains(QStringLiteral("Open failed")));
+    QVERIFY(!app.hasProject());
+}
+
+QTEST_MAIN(ProjectTest)
 #include "test_project.moc"

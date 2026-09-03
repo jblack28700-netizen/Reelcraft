@@ -94,3 +94,12 @@ Date: 2026-09-03
 - Added automated Qt Test suite (9 tests)
 - Added error handling for invalid project save/open paths
 - Preserved architecture boundaries; no production editor/media/AI systems implemented
+
+## v0.1.4 — Phase 1 UI Integration Verification
+
+Date: 2026-09-03
+
+- Added UI-level automated tests for MainWindow signals and labels
+- Added Application save/open error-path tests
+- Made MainWindow file-path chooser injectable for headless verification
+- All 14 tests pass offscreen
