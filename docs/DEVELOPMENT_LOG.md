@@ -314,3 +314,13 @@ Document
 Git Checkpoint
   ↓
 Define Next Objective
+
+## 2026-09-03 — Phase 1 Desktop Application Foundation Verified
+
+- Implemented Project state model in app/core/Project.cpp/h
+- Implemented Application lifecycle and background demo
+- Implemented MainWindow UI shell with new/save/open/background controls
+- Updated reelcraft.pro to include Qt concurrent and Project files
+- Added Qt Test suite in tests/
+- Fixed ISODateWithMs precision and linker issues
+- Verified app build, automated tests, and offscreen runtime launch

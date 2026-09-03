@@ -83,3 +83,14 @@ Date: 2026-09-02
 - Kept Wails v3 as a lower-priority/watchlist option.
 - Transitioned the project from technology-direction evaluation to controlled Phase 1 application-foundation planning.
 - No major editor feature or production media pipeline was implemented in this milestone.
+
+## v0.1.3 — Phase 1 Desktop Application Foundation Complete
+Date: 2026-09-03
+
+- Added minimal Qt 6 desktop application shell with UI/application-core separation
+- Added Project create/identify/persist/reopen/close lifecycle
+- Added non-destructive JSON project storage
+- Added background task demonstration with QtConcurrent
+- Added automated Qt Test suite (9 tests)
+- Added error handling for invalid project save/open paths
+- Preserved architecture boundaries; no production editor/media/AI systems implemented

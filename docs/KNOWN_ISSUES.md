@@ -237,3 +237,8 @@ For each future issue:
 Do not silently remove historical issues.
 
 When an issue is resolved, preserve its record and mark it resolved with the verification date and relevant checkpoint when appropriate.
+
+## 2026-09-03 — Environment/Observed
+
+- Offscreen QPA plugin reports `This plugin does not support propagateSizeHints()` during headless smoke test; not observed under a normal windowing platform.
+- `qmake` is not on the default PATH in the current environment; use `/usr/lib/qt6/bin/qmake`.

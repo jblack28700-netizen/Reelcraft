@@ -3,3 +3,8 @@
 Makefile
 *.o
 reelcraft
+
+# Generated Qt meta-object/build artifacts
+moc_*.cpp
+moc_predefs.h
+reelcraft_tests
