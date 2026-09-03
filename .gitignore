@@ -8,3 +8,6 @@ reelcraft
 moc_*.cpp
 moc_predefs.h
 reelcraft_tests
+
+# Generated Qt test moc
+*.moc
