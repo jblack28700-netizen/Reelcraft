@@ -24,6 +24,51 @@ Superseded decisions should remain in this document for historical traceability.
 
 ---
 
+# Decision 013 — Qt 6 as the Phase 1 Desktop Foundation
+
+**Status:** Accepted
+
+## Context
+
+Reelcraft has completed the technology/runtime evaluation and is ready to establish the smallest executable Phase 1 application foundation.
+
+The requirements call for a desktop-first application capable of supporting responsive UI, background processing, future GPU-accelerated presentation, interactive 2D/3D content, and first-class 360° workflows.
+
+The technology evaluation considered Qt 6, Electron, and Tauri 2. No candidate was treated as a permanent dependency solely because it was evaluated.
+
+## Decision
+
+Qt 6 will be used as the current desktop application foundation for Phase 1.
+
+Qt will provide the application/UI foundation and GPU-capable presentation layer while remaining separate from:
+
+- AI reasoning and provider integrations
+- Project/edit-state ownership
+- Deterministic media processing
+- Rendering/export implementation
+- Storage/database implementation
+- Local/cloud workload allocation
+
+The selection is an implementation decision, not a new product requirement. The architecture must preserve clear boundaries so that downstream systems are not unnecessarily coupled to Qt.
+
+## Rationale
+
+Qt 6 provides a strong native foundation for Reelcraft's requirements involving GPU-capable desktop presentation, interactive 2D/3D rendering, video integration, and the future first-class 360° viewport.
+
+It also provides a mature cross-platform application framework with native multimedia and graphics capabilities, reducing the need to construct critical video/graphics integration primarily through a web-rendering layer.
+
+The decision is supported by the current requirements and technology evaluation, while recognizing that actual implementation, compatibility, licensing, performance, and maintainability evidence may justify revisiting the choice.
+
+## Consequences
+
+Phase 1 implementation may introduce Qt 6 dependencies.
+
+The project must verify Qt installation, compiler/toolchain compatibility, licensing implications, build reproducibility, application startup, UI responsiveness, and integration boundaries during implementation.
+
+If implementation evidence demonstrates that Qt 6 is unsuitable for Reelcraft's actual requirements, the decision may be revisited through the documented architecture-evolution and technology-evaluation process.
+
+---
+
 # Decision 001 — AI and Media Execution Must Remain Separate
 
 **Status:** Accepted
