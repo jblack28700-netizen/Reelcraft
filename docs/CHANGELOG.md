@@ -103,3 +103,11 @@ Date: 2026-09-03
 - Added Application save/open error-path tests
 - Made MainWindow file-path chooser injectable for headless verification
 - All 14 tests pass offscreen
+
+## v0.1.5 — Reproducible Build-and-Test Workflow
+
+Date: 2026-09-03
+
+- Added scripts/build_and_test.sh
+- Verified offscreen test run: 14 passed, 0 failed
+- Updated development environment documentation

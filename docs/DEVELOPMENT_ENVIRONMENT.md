@@ -89,6 +89,14 @@ When a dependency becomes required:
 
 ---
 
+# Verified Phase 1 Build-and-Test Workflow
+
+- Script: scripts/build_and_test.sh
+- Toolchain: /usr/lib/qt6/bin/qmake
+- Tests: tests/tests.pro using Qt Test
+- Execution: QT_QPA_PLATFORM=offscreen
+- Verified result: 14 passed, 0 failed
+
 # Future Environment Requirements
 
 The final Reelcraft runtime environment has not yet been selected.
@@ -161,8 +169,8 @@ Do not silently change the environment in ways that could affect reproducibility
 # Current Environment Limitations
 
 - The final production environment is not yet defined.
-- The final application runtime is not yet selected.
-- Automated application testing infrastructure does not yet exist.
+- The final production runtime is not yet selected; Phase 1 uses Qt 6 via /usr/lib/qt6/bin/qmake.
+- A minimal Phase 1 Qt Test suite exists (14 tests). Run scripts/build_and_test.sh to build and run offscreen.
 - GPU acceleration strategy is not yet finalized.
 - Local and cloud processing allocation is not yet finalized.
 - Production packaging and deployment are not yet defined.

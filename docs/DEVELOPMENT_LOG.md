@@ -334,3 +334,11 @@ Define Next Objective
 - Added Application save/open error-path tests
 - Fixed test preconditions for invalid-path save
 - Verified 14 automated tests pass offscreen
+
+## 2026-09-03 — Reproducible Build-and-Test Workflow
+
+- Added scripts/build_and_test.sh
+- Script builds app and tests using /usr/lib/qt6/bin/qmake
+- Script runs offscreen Qt Test suite
+- Verified: 14 tests pass, WORKFLOW_EXIT=0
+- Updated DEVELOPMENT_ENVIRONMENT.md testing capability
