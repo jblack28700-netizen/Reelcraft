@@ -385,3 +385,18 @@ This document is a living architectural document.
 Architecture may change when testing, implementation experience, performance measurements, security requirements, or creator workflow requirements reveal a better approach.
 
 Significant architectural changes must be recorded in DECISIONS.md and reflected in project history.
+
+## Platform Boundary Constraint
+
+Desktop is the first-class supported platform for the current Reelcraft stage.
+
+Android is a planned future platform, not a current product target. Termux/Ubuntu on Android is a development environment only and does not constitute native Android support.
+
+To preserve future portability without prematurely restructuring the Phase 1 desktop foundation:
+
+- Keep project state and application orchestration independent of QtWidgets; QtCore is acceptable.
+- Keep UI-specific concerns, including file dialogs and windowing, outside the core application and project model.
+- Prefer cross-platform Qt APIs such as QFile, QStandardPaths, QJsonDocument, and QUuid.
+- Do not introduce X11/Wayland-specific or Android-specific behavior into project or application layers.
+- Preserve the deterministic media engine and AI orchestration as platform-independent concepts.
+- Maintain the boundary where the UI supplies paths/data rather than core code invoking platform dialogs directly.

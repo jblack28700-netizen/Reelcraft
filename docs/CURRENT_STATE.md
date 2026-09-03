@@ -211,3 +211,13 @@ Verification:
 - Test computes SHA-256 before and after create/save/reopen
 - Test verifies bytes and hash remain identical
 - Automated tests: 15 passed, 0 failed
+
+## Platform Strategy
+
+Status: Documented.
+
+- Desktop: first-class supported platform at the current stage.
+- Android: planned future platform, not a current product target.
+- Termux/Ubuntu on Android: development environment only; does not constitute native Android support.
+
+This classification is recorded in DECISIONS.md and ARCHITECTURE.md and does not introduce Android support or modify application source.

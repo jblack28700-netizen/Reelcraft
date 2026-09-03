@@ -176,3 +176,13 @@ Do not silently change the environment in ways that could affect reproducibility
 - Production packaging and deployment are not yet defined.
 
 These limitations are expected at the current foundation stage.
+
+## Platform Classification
+
+Desktop is the first-class supported platform at the current stage.
+
+Android is a planned future platform, not a current product target.
+
+Termux/Ubuntu on Android is a development environment only and does not constitute native Android support.
+
+Consequently, performance and graphical behavior must be validated on representative desktop or native Android environments, not inferred from the current Termux/Ubuntu userspace.

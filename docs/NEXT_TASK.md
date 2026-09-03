@@ -2,61 +2,57 @@
 
 ## Objective
 
-Add and verify automated protection evidence that project lifecycle operations never modify original media.
-
-## Why This Is the Next Task
-
-Phase 1 foundation, UI integration, and reproducible build/test workflow are verified. The remaining Phase 1 Definition of Done gap is explicit evidence that original media remains byte-for-byte unchanged during project create, persist, and reopen operations.
-
-## In Scope
-
-- Add a test fixture file representing original media
-- Compute SHA-256 before and after project lifecycle operations
-- Verify bytes and hash remain unchanged
-- Run the full offscreen test suite
-- Update documentation
-- Create a Git checkpoint
-
-## Explicitly Out of Scope
-
-- Full video editor
-- Production media engine
-- Media ingestion or parsing
-- 360° workflows
-- AI editing
-- New application features
-
-## Definition of Done
-
-1. Automated test creates an original-media fixture
-2. Test exercises project create/save/reopen without media modification
-3. Test verifies fixture bytes and SHA-256 remain identical
-4. All tests pass offscreen
-5. Documentation updated
-6. Git checkpoint created and working tree clean
-
-## Verification Plan
-
-- Add test using QTemporaryDir and QCryptographicHash
-- Run scripts/build_and_test.sh from repository root
-- Confirm all tests pass
-- Inspect git diff --check
-- Commit and verify clean status
-
-## Stop Conditions
-
-- Test cannot create or read the fixture
-- Project lifecycle unexpectedly modifies media fixture
-- Scope expands beyond Phase 1 verification
-
-## Next Task After Completion
-
-Define the next smallest development objective from the verified Phase 1 foundation. Do not begin automatically.
+Perform and document the first real desktop smoke test of the Phase 1 Reelcraft application.
 
 ## Status
 
-Complete — 2026-09-03.
+Not started — blocked by environment.
 
-## Next Logical State
+Current development environment has no real graphical Qt session. Android/Termux/Ubuntu is development-only and cannot provide the real desktop windowing platform required for this objective.
 
-Define the next smallest development objective from the verified Phase 1 foundation. Do not begin automatically.
+## Why This Is the Next Task
+
+Phase 1 automated tests run offscreen. A real desktop smoke test is required to verify that the UI shell renders reliably and background work does not freeze the UI.
+
+## In Scope
+
+- Launch reelcraft with a real Qt platform plugin
+- Verify the main window appears and remains open
+- Exercise New Project, Save Project, Open Project, Run Background Demo through the visible UI
+- Verify project lifecycle and UI responsiveness
+- Document the result and create a Git checkpoint
+
+## Explicitly Out of Scope
+
+- Android support, SDK/NDK, Termux:X11 configuration
+- Application source changes unless a defect is confirmed
+- New product features
+- Production media/AI/editor work
+- Offscreen-only verification
+
+## Definition of Done
+
+- Application launches successfully against a real desktop/windowing platform
+- Main window renders and remains open
+- UI controls behave correctly
+- Background demo completes without visibly freezing the UI
+- Smoke test documented and checkpointed
+- Working tree clean
+
+## Verification Plan
+
+- Establish real graphical Qt session
+- Run ./reelcraft without QT_QPA_PLATFORM override
+- Perform visible UI verification
+- Record exact environment, commands, observed behavior, and warnings
+- Commit documentation and verify clean status
+
+## Stop Conditions
+
+- No real graphical Qt display available
+- Launch fails or UI cannot be verified visually
+- Scope expands beyond smoke test
+
+## Next Task After Completion
+
+Define the next smallest development objective from the verified Phase 1 foundation.

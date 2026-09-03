@@ -349,3 +349,11 @@ Define Next Objective
 - Added SHA-256 before/after project create/save/reopen checks
 - Verified source bytes remain unchanged
 - Full suite now: 15 passed, 0 failed
+
+## 2026-09-03 — Platform Strategy Recorded
+
+- Added Decision 014: Desktop first-class, Android planned future
+- Documented platform boundary constraints
+- Classified Android/Termux as development-only
+- Confirmed no application source modifications
+- Existing automated tests still pass

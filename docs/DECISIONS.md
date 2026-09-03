@@ -429,3 +429,36 @@ When a significant architectural decision changes:
 9. Create a Git checkpoint.
 
 Never silently overwrite architectural history.
+
+---
+
+# Decision 014 — Platform Strategy: Desktop First-Class, Android Planned Future
+
+**Status:** Accepted
+
+## Context
+
+Phase 1 uses Qt 6 as the desktop application foundation. Current development occurs in an Android/Termux/Ubuntu environment. This environment is not a native Android deployment target and must not be treated as evidence of Android support. Reelcraft is desktop-first per REQUIREMENTS.md.
+
+## Decision
+
+Desktop is the first-class supported platform at the current stage.
+
+Android is a planned future platform, not a current product target.
+
+Termux/Ubuntu on Android is a development environment only and does not constitute native Android support.
+
+## Rationale
+
+- Desktop-first requirements remain authoritative.
+- The current development environment is a Linux userspace hosted by Android, not native Android Qt deployment.
+- QtCore/QtWidgets separation already provides a useful portability boundary.
+- Expanding Android support now would be scope creep and unsupported by evidence.
+
+## Consequences
+
+- Phase 1 remains desktop-only.
+- No Android SDK/NDK, Termux:X11, or native Android packaging work is authorized.
+- Future architecture work should preserve platform-independent core boundaries.
+- Qt Widgets is not permanently committed as the mobile/UI implementation solely because it is used in Phase 1.
+- Android/Termux is recorded as development-only and is not representative of desktop or Android performance.

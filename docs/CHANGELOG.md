@@ -119,3 +119,12 @@ Date: 2026-09-03
 - Added automated original-media non-modification test
 - Verified byte and SHA-256 integrity across project lifecycle
 - Expanded Qt Test suite to 15 passing tests
+
+## v0.1.7 — Platform Strategy Documentation
+
+Date: 2026-09-03
+
+- Recorded Decision 014: Desktop first-class, Android planned future
+- Recorded platform boundary constraints
+- Classified Termux/Ubuntu as development-only
+- No application source changes
