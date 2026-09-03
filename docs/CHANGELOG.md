@@ -67,3 +67,19 @@ AI output is untrusted until validated. Original media remains protected, 360° 
 A substantial production application skeleton remains intentionally deferred until the technology/runtime evaluation provides sufficient evidence for a safe implementation direction.
 
 No production video editor, media engine, AI provider integration, voice system, or 360° editing system was implemented in this milestone.
+
+## v0.1.2 — Technology Direction Validated
+
+Date: 2026-09-02
+
+- Completed the focused technology and runtime evaluation.
+- Established validated requirements for the desktop application rendering layer.
+- Confirmed the separation between UI/application systems, AI reasoning, and deterministic media execution.
+- Confirmed first-class 360° requirements without prematurely implementing the 360° pipeline.
+- Preserved replaceable AI providers and local/cloud/hybrid processing options.
+- Preserved non-destructive media handling and portable project-state requirements.
+- Established automated testing and regression protection as Phase 1 requirements.
+- Kept Qt 6, Electron, and Tauri 2 as evaluated candidates rather than permanent technology commitments.
+- Kept Wails v3 as a lower-priority/watchlist option.
+- Transitioned the project from technology-direction evaluation to controlled Phase 1 application-foundation planning.
+- No major editor feature or production media pipeline was implemented in this milestone.

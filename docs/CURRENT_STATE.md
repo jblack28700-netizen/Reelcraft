@@ -36,13 +36,13 @@ The repository currently establishes the persistent product requirements, projec
 
 ## Current Objective
 
-Evaluate and establish a safe technical direction for Reelcraft before beginning production application implementation.
+Define and implement the smallest safe Phase 1 application foundation using the validated technical direction.
 
-The evaluation must determine appropriate approaches for the desktop-first application runtime, UI, media processing, AI integration, voice, 360° workflows, local/cloud/hybrid processing, performance, GPU acceleration, storage, rendering, testing, packaging, deployment, and extensibility.
+The objective is to establish a working, testable desktop application shell with clean boundaries between the UI/application layer, project state, future AI orchestration, and deterministic media execution. The implementation must remain narrowly scoped and must not prematurely lock downstream systems or implement major editor features.
 
 ## Current Work
 
-The project is transitioning from:
+The project has transitioned from:
 
     Documentation + conceptual architecture
 
@@ -50,7 +50,9 @@ to:
 
     Documentation + validated technical direction
 
-No production application implementation should begin until the technology evaluation is sufficiently complete to define a safe and appropriately scoped Phase 1 implementation objective.
+The technology/runtime evaluation is complete enough to define and begin the smallest safe Phase 1 application-foundation objective.
+
+Production implementation remains strictly scoped to the active Phase 1 objective. Major editor features and downstream systems must not be started automatically.
 
 ## Application Implementation
 
@@ -153,10 +155,10 @@ Core rules:
 
 ## Next Stage
 
-Complete the technology/runtime evaluation and establish only the technical decisions that can be safely supported by evidence.
+The technology/runtime evaluation is complete enough to establish a validated technical direction for Phase 1.
 
-After that evaluation is verified and checkpointed, define the smallest Phase 1 implementation objective.
+The next objective is to define and implement the smallest safe Phase 1 application foundation.
 
-The next implementation task must have explicit scope, success criteria, verification steps, and a Definition of Done.
+The Phase 1 implementation task must have explicit scope, success criteria, verification steps, and a Definition of Done.
 
-Do not automatically begin a major feature after the technology evaluation.
+Do not automatically begin a major feature after the foundation task.

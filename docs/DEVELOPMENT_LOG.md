@@ -115,3 +115,202 @@ The project is ready to begin a focused technology/runtime evaluation rather tha
 ### Next Work
 
 Evaluate one technical area at a time, document evidence and consequences, record material decisions, update architecture documentation when required, and establish the smallest safe Phase 1 implementation objective only after the evaluation is complete.
+
+---
+
+## 2026-09-02 — Technology and Runtime Evaluation Completed
+
+### Objective
+
+Evaluate the implementation-level technical direction required to safely begin Reelcraft production application development without prematurely locking the project into an unsuitable runtime, UI framework, media architecture, AI provider, rendering strategy, or deployment model.
+
+### Evaluation Completed
+
+The following areas were evaluated against the established Reelcraft requirements and architecture:
+
+- Desktop-first application runtime approaches.
+- Desktop UI and application architecture approaches.
+- Deterministic media-processing integration.
+- AI integration and provider abstraction.
+- Voice interaction using the same intent architecture as text.
+- First-class 360° video requirements.
+- Local, cloud, and hybrid processing models.
+- Performance, background processing, and GPU considerations.
+- Project state, storage, portability, and recovery considerations.
+- Rendering and export architecture.
+- Automated testing requirements.
+- Packaging and deployment considerations.
+- Integration risks, portability risks, licensing considerations, and technology lock-in.
+
+### Runtime and UI Direction
+
+The primary desktop application approaches evaluated were:
+
+- Qt 6
+- Electron
+- Tauri 2
+
+Wails v3 was considered as a lower-priority/watchlist option because its v3 release remains less mature than the established alternatives.
+
+No framework is recorded as a permanent dependency solely because it was evaluated.
+
+The evaluation established that Reelcraft requires a desktop application rendering layer capable of:
+
+- Reliable desktop UI rendering.
+- High-resolution video presentation.
+- Interactive 2D/3D rendering.
+- GPU-accelerated rendering where available.
+- Interactive 360° presentation.
+- Integration between video frames and interactive visual content.
+- Separation between UI/application work and deterministic media processing.
+
+### Media and Rendering Direction
+
+The deterministic media engine must remain separate from the UI and AI reasoning layers.
+
+The application must support background processing so expensive media operations do not block interactive UI work.
+
+Rendering and export should remain behind deterministic media-system boundaries rather than being directly controlled by AI-generated arbitrary commands.
+
+The evaluation did not justify prematurely fixing a complete production media stack, codec strategy, GPU pipeline, or rendering implementation.
+
+### AI Direction
+
+The existing AI-to-deterministic boundary remains validated:
+
+AI reasoning → Structured Edit Plan → Validation → Deterministic Media Execution
+
+AI output remains untrusted until validated.
+
+AI providers and models remain replaceable.
+
+Voice interaction should produce the same underlying editing intent representation as text rather than becoming a separate editing architecture.
+
+### 360° Direction
+
+360° video remains a first-class media capability.
+
+The application foundation must therefore be capable of supporting a future interactive 360° viewport and related GPU-capable rendering requirements without treating 360° as a later conversion layer.
+
+The evaluation did not justify implementing the complete 360° pipeline during Phase 1.
+
+### Processing Model
+
+Local, cloud, and hybrid processing remain valid architectural options.
+
+The evaluation did not justify permanently assigning every workload to local or cloud execution at this stage.
+
+The architecture should preserve the ability to choose processing location per workload as implementation evidence becomes available.
+
+### Performance and GPU Direction
+
+GPU capability is an important architectural consideration for Reelcraft because the product must eventually handle high-resolution video, interactive 360° presentation, and complex visual rendering.
+
+The current Android/Termux/Ubuntu development environment is not sufficient by itself to establish production desktop GPU performance characteristics.
+
+Performance-sensitive implementation choices must therefore be validated through representative desktop testing rather than assumptions based on the development environment.
+
+### Storage and Project Direction
+
+Project state must remain separate from original media.
+
+Original media must remain untouched by editing operations.
+
+The project representation should remain portable and recoverable while allowing large media assets to remain separately managed.
+
+A complete production project schema is intentionally deferred until the selected runtime and implementation architecture provide sufficient evidence.
+
+### Testing Direction
+
+Automated testing is a required part of the implementation workflow.
+
+Phase 1 must establish enough testing infrastructure to verify:
+
+- Application startup.
+- Core/UI communication.
+- Project persistence and reopening.
+- Boundary/error behavior.
+- Background processing behavior.
+- Regression protection for established functionality.
+
+### Technology-Agnostic Conclusions
+
+The following conclusions are architectural requirements rather than commitments to a specific technology:
+
+- Desktop-first is required.
+- AI reasoning and deterministic media execution remain separate.
+- AI output must be validated before execution.
+- Editing remains non-destructive.
+- Original media remains protected.
+- 360° video is first-class.
+- Camera-specific behavior uses adapters.
+- AI providers remain replaceable.
+- Voice and text share the same intent architecture.
+- Local/cloud/hybrid processing remains possible.
+- Performance-sensitive work must not block the interactive UI.
+- GPU acceleration should be used where appropriate and available.
+- Project state must remain portable and recoverable.
+- Automated testing is required.
+- Human review remains the final authority.
+- Technology choices must remain evidence-based.
+
+### Technology-Specific Evaluation Status
+
+The evaluated desktop approaches remain candidates rather than permanent commitments.
+
+The evaluation provides enough direction to begin a narrowly scoped application-foundation implementation, but it does not justify prematurely locking every downstream subsystem.
+
+Technology selection for the Phase 1 application foundation must remain limited to what is required to establish the desktop shell, application/core boundary, project-state foundation, testing foundation, and reproducible development workflow.
+
+### Important Constraints
+
+The following remain intentionally unresolved until implementation evidence justifies them:
+
+- Final production media-engine implementation.
+- Complete GPU/video-frame pipeline.
+- Final AI providers and models.
+- Complete local/cloud workload allocation.
+- Final production project schema.
+- Full database/storage architecture.
+- Complete 360° processing and reframing implementation.
+- Final rendering/export implementation.
+- Plugin architecture.
+- Production packaging and deployment details.
+
+### Result
+
+The project has moved from:
+
+    Documentation + conceptual architecture
+
+to:
+
+    Documentation + validated technical direction
+
+The technology evaluation is complete enough to define the smallest safe Phase 1 implementation objective without beginning a major editor feature prematurely.
+
+### Next Work
+
+Define and implement the smallest Phase 1 application-foundation objective using the validated technical direction.
+
+The next task must preserve the controlled workflow:
+
+Inspect
+  ↓
+Define Objective
+  ↓
+Define Scope
+  ↓
+Define Definition of Done
+  ↓
+Implement Small Change
+  ↓
+Test
+  ↓
+Verify
+  ↓
+Document
+  ↓
+Git Checkpoint
+  ↓
+Define Next Objective
