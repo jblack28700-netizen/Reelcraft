@@ -400,3 +400,16 @@ To preserve future portability without prematurely restructuring the Phase 1 des
 - Do not introduce X11/Wayland-specific or Android-specific behavior into project or application layers.
 - Preserve the deterministic media engine and AI orchestration as platform-independent concepts.
 - Maintain the boundary where the UI supplies paths/data rather than core code invoking platform dialogs directly.
+
+
+## Expanded Apple Platform Portability Constraint — 2026-09-03
+
+Desktop remains first-class now. macOS is a planned future desktop platform. iOS and iPadOS are planned future considerations, not committed targets.
+
+To preserve future Apple portability without premature implementation:
+
+- Keep project state and application orchestration independent of QtWidgets.
+- Keep UI file/path selection outside core application and project model.
+- Keep deterministic media engine, AI orchestration, GPU strategy, storage, permissions, background processing, and hardware acceleration platform-neutral.
+- Treat macOS, iOS, and iPadOS requirements as future platform-specific adapters, not core assumptions.
+- Do not introduce Linux, X11, Wayland, Android, macOS, iOS, or iPadOS-specific behavior into core layers.

@@ -56,3 +56,10 @@ Phase 1 automated tests run offscreen. A real desktop smoke test is required to 
 ## Next Task After Completion
 
 Define the next smallest development objective from the verified Phase 1 foundation.
+
+
+## Platform Strategy Documentation
+
+Status: Complete — 2026-09-03.
+
+The platform classification was extended to Apple platforms as documentation only. The next active objective remains the real desktop smoke test, still blocked until a real graphical Qt session is available.

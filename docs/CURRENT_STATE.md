@@ -221,3 +221,18 @@ Status: Documented.
 - Termux/Ubuntu on Android: development environment only; does not constitute native Android support.
 
 This classification is recorded in DECISIONS.md and ARCHITECTURE.md and does not introduce Android support or modify application source.
+
+
+## Expanded Platform Strategy — 2026-09-03
+
+Status: Documented.
+
+- Linux desktop: first-class / currently verified
+- Windows desktop: planned future desktop platform
+- macOS: planned future desktop platform
+- Android: planned future platform
+- iOS: planned future consideration
+- iPadOS: planned future consideration
+- Termux/Ubuntu: development environment only
+
+No Apple or Android implementation has been started. No application source files were changed for this classification.

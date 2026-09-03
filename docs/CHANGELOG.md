@@ -128,3 +128,13 @@ Date: 2026-09-03
 - Recorded platform boundary constraints
 - Classified Termux/Ubuntu as development-only
 - No application source changes
+
+
+## v0.1.8 — Apple Platform Portability Classification
+
+Date: 2026-09-03
+
+- Extended Decision 014 platform strategy
+- Classified macOS, iOS, and iPadOS as future portability targets
+- Recorded platform-neutral architectural constraints
+- No application source changes

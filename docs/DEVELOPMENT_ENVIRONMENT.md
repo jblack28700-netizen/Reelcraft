@@ -186,3 +186,16 @@ Android is a planned future platform, not a current product target.
 Termux/Ubuntu on Android is a development environment only and does not constitute native Android support.
 
 Consequently, performance and graphical behavior must be validated on representative desktop or native Android environments, not inferred from the current Termux/Ubuntu userspace.
+
+
+## Expanded Platform Classification — 2026-09-03
+
+- Linux desktop: first-class / currently verified
+- Windows desktop: planned future desktop platform
+- macOS: planned future desktop platform
+- Android: planned future platform
+- iOS: planned future consideration
+- iPadOS: planned future consideration
+- Termux/Ubuntu: development environment only
+
+The current verified build/test workflow is Linux-only. Apple platform classification is a portability record only.

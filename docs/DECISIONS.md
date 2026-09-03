@@ -462,3 +462,22 @@ Termux/Ubuntu on Android is a development environment only and does not constitu
 - Future architecture work should preserve platform-independent core boundaries.
 - Qt Widgets is not permanently committed as the mobile/UI implementation solely because it is used in Phase 1.
 - Android/Termux is recorded as development-only and is not representative of desktop or Android performance.
+
+
+## Expanded Platform Classification — 2026-09-03
+
+The platform strategy from Decision 014 is extended without creating a new decision number.
+
+Verified current platform classification:
+
+- Linux desktop: first-class / currently verified
+- Windows desktop: planned future desktop platform
+- macOS: planned future desktop platform
+- Android: planned future platform
+- iOS: planned future consideration
+- iPadOS: planned future consideration
+- Termux/Ubuntu: development environment only
+
+Desktop remains the current first-class product priority.
+
+This classification does not authorize Apple SDKs, toolchains, targets, dependencies, Android implementation, UI replacement, Termux:X11 configuration, or native Apple/Android builds.

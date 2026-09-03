@@ -357,3 +357,12 @@ Define Next Objective
 - Classified Android/Termux as development-only
 - Confirmed no application source modifications
 - Existing automated tests still pass
+
+
+## 2026-09-03 — Apple Platform Portability Classification
+
+- Verified QFileDialog/path selection remains isolated in MainWindow
+- Verified Project and Application layers use QtCore only
+- Extended platform strategy without creating a new decision
+- Recorded macOS/iOS/iPadOS classification and portability constraints
+- No application source files changed
