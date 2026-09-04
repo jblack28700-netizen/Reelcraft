@@ -207,3 +207,11 @@ Date: 2026-09-03
 - Added automated integration tests for viewer state signal flow.
 - Verified UI readout and Reset Viewport behavior.
 - Full test suite: 27 passed, 0 failed.
+
+## v0.2.4 — Keyboard Viewer Controls
+
+Date: 2026-09-03
+
+- Added keyboard controls for viewer yaw/pitch/roll/FOV.
+- Added automated keyboard-control tests.
+- Full test suite: 29 passed, 0 failed.

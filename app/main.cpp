@@ -40,6 +40,23 @@ int main(int argc, char *argv[])
                          &window, &MainWindow::showRoll);
         QObject::connect(viewport, &ViewportState::fieldOfViewChanged,
                          &window, &MainWindow::showFieldOfView);
+
+        QObject::connect(&window, &MainWindow::viewportYawDeltaRequested,
+                         viewport, [viewport](double delta) {
+                             viewport->setYaw(viewport->yaw() + delta);
+                         });
+        QObject::connect(&window, &MainWindow::viewportPitchDeltaRequested,
+                         viewport, [viewport](double delta) {
+                             viewport->setPitch(viewport->pitch() + delta);
+                         });
+        QObject::connect(&window, &MainWindow::viewportRollDeltaRequested,
+                         viewport, [viewport](double delta) {
+                             viewport->setRoll(viewport->roll() + delta);
+                         });
+        QObject::connect(&window, &MainWindow::viewportFovDeltaRequested,
+                         viewport, [viewport](double delta) {
+                             viewport->setFieldOfView(viewport->fieldOfView() + delta);
+                         });
     }
 
     return app.exec();

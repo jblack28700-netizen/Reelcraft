@@ -3,6 +3,7 @@
 #include <QCryptographicHash>
 #include <QLabel>
 #include <QPushButton>
+#include <QKeyEvent>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 
@@ -52,6 +53,8 @@ private slots:
     void mainWindowResetViewportButtonEmitsSignal();
     void applicationViewerStateUpdatesMainWindowLabels();
     void applicationResetViewportUpdatesMainWindowLabels();
+    void mainWindowKeyboardEmitsViewportDeltas();
+    void applicationKeyboardUpdatesViewportState();
 };
 
 void ProjectTest::initTestCase()
@@ -481,6 +484,63 @@ void ProjectTest::applicationResetViewportUpdatesMainWindowLabels()
     QCOMPARE(pitch->text(), QStringLiteral("Pitch: 0.00"));
     QCOMPARE(roll->text(), QStringLiteral("Roll: 0.00"));
     QCOMPARE(fov->text(), QStringLiteral("FOV: 90.00"));
+}
+
+void ProjectTest::mainWindowKeyboardEmitsViewportDeltas()
+{
+    TestMainWindow window;
+    QSignalSpy yawSpy(&window, &MainWindow::viewportYawDeltaRequested);
+    QSignalSpy pitchSpy(&window, &MainWindow::viewportPitchDeltaRequested);
+    QSignalSpy rollSpy(&window, &MainWindow::viewportRollDeltaRequested);
+    QSignalSpy fovSpy(&window, &MainWindow::viewportFovDeltaRequested);
+
+    QKeyEvent left(QEvent::KeyPress, Qt::Key_Left, Qt::NoModifier);
+    QKeyEvent up(QEvent::KeyPress, Qt::Key_Up, Qt::NoModifier);
+    QKeyEvent q(QEvent::KeyPress, Qt::Key_Q, Qt::NoModifier);
+    QKeyEvent minus(QEvent::KeyPress, Qt::Key_Minus, Qt::NoModifier);
+
+    QApplication::sendEvent(&window, &left);
+    QApplication::sendEvent(&window, &up);
+    QApplication::sendEvent(&window, &q);
+    QApplication::sendEvent(&window, &minus);
+
+    QCOMPARE(yawSpy.count(), 1);
+    QCOMPARE(pitchSpy.count(), 1);
+    QCOMPARE(rollSpy.count(), 1);
+    QCOMPARE(fovSpy.count(), 1);
+}
+
+void ProjectTest::applicationKeyboardUpdatesViewportState()
+{
+    Application app;
+    TestMainWindow window;
+
+    ViewportState *state = app.viewportState();
+    QVERIFY(state);
+
+    QObject::connect(&window, &MainWindow::viewportYawDeltaRequested,
+                     [state](double delta) { state->setYaw(state->yaw() + delta); });
+    QObject::connect(&window, &MainWindow::viewportPitchDeltaRequested,
+                     [state](double delta) { state->setPitch(state->pitch() + delta); });
+    QObject::connect(&window, &MainWindow::viewportRollDeltaRequested,
+                     [state](double delta) { state->setRoll(state->roll() + delta); });
+    QObject::connect(&window, &MainWindow::viewportFovDeltaRequested,
+                     [state](double delta) { state->setFieldOfView(state->fieldOfView() + delta); });
+
+    QKeyEvent right(QEvent::KeyPress, Qt::Key_Right, Qt::NoModifier);
+    QKeyEvent down(QEvent::KeyPress, Qt::Key_Down, Qt::NoModifier);
+    QKeyEvent e(QEvent::KeyPress, Qt::Key_E, Qt::NoModifier);
+    QKeyEvent plus(QEvent::KeyPress, Qt::Key_Plus, Qt::NoModifier);
+
+    QApplication::sendEvent(&window, &right);
+    QApplication::sendEvent(&window, &down);
+    QApplication::sendEvent(&window, &e);
+    QApplication::sendEvent(&window, &plus);
+
+    QCOMPARE(state->yaw(), 5.0);
+    QCOMPARE(state->pitch(), -5.0);
+    QCOMPARE(state->roll(), 5.0);
+    QCOMPARE(state->fieldOfView(), 95.0);
 }
 QTEST_MAIN(ProjectTest)
 #include "test_project.moc"

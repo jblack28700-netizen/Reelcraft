@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 
 #include <QFileDialog>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QPushButton>
 #include <QVBoxLayout>
@@ -116,4 +117,42 @@ void MainWindow::showRoll(double value)
 void MainWindow::showFieldOfView(double value)
 {
     m_fieldOfViewLabel->setText(QStringLiteral("FOV: %1").arg(value, 0, 'f', 2));
+}
+void MainWindow::keyPressEvent(QKeyEvent *event)
+{
+    constexpr double step = 5.0;
+
+    switch (event->key()) {
+    case Qt::Key_Left:
+        emit viewportYawDeltaRequested(-step);
+        break;
+    case Qt::Key_Right:
+        emit viewportYawDeltaRequested(step);
+        break;
+    case Qt::Key_Up:
+        emit viewportPitchDeltaRequested(step);
+        break;
+    case Qt::Key_Down:
+        emit viewportPitchDeltaRequested(-step);
+        break;
+    case Qt::Key_Q:
+        emit viewportRollDeltaRequested(-step);
+        break;
+    case Qt::Key_E:
+        emit viewportRollDeltaRequested(step);
+        break;
+    case Qt::Key_Plus:
+    case Qt::Key_Equal:
+        emit viewportFovDeltaRequested(step);
+        break;
+    case Qt::Key_Minus:
+    case Qt::Key_Underscore:
+        emit viewportFovDeltaRequested(-step);
+        break;
+    default:
+        QMainWindow::keyPressEvent(event);
+        return;
+    }
+
+    event->accept();
 }

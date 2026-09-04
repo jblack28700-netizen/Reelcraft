@@ -6,6 +6,7 @@
 
 class QLabel;
 class QPushButton;
+class QKeyEvent;
 
 class MainWindow : public QMainWindow
 {
@@ -17,6 +18,7 @@ public:
 protected:
     virtual QString chooseSaveFilePath();
     virtual QString chooseOpenFilePath();
+    void keyPressEvent(QKeyEvent *event) override;
 
 public slots:
     void showProject(const Project &project);
@@ -32,6 +34,10 @@ signals:
     void openProjectRequested(const QString &filePath);
     void backgroundDemoRequested();
     void resetViewportRequested();
+    void viewportYawDeltaRequested(double delta);
+    void viewportPitchDeltaRequested(double delta);
+    void viewportRollDeltaRequested(double delta);
+    void viewportFovDeltaRequested(double delta);
 
 private:
     QLabel *m_projectLabel = nullptr;

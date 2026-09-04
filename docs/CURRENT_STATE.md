@@ -327,3 +327,16 @@ Added automated integration tests verifying the full viewer-state signal flow:
 - Reset Viewport button returns MainWindow labels to defaults.
 
 Automated tests: 27 passed, 0 failed.
+
+## Phase 2 Keyboard Viewer Controls — Complete
+
+Status: Complete.
+
+Added keyboard controls to MainWindow:
+- Left/Right adjusts yaw.
+- Up/Down adjusts pitch.
+- Q/E adjusts roll.
+- Plus/Minus adjusts field of view.
+- Deltas are emitted as signals; viewer state remains owned by Application.
+
+Automated tests: 29 passed, 0 failed.

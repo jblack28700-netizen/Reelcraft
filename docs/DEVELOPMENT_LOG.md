@@ -433,3 +433,11 @@ Define Next Objective
 - Verified Application ViewportState updates MainWindow labels.
 - Verified Reset Viewport updates UI labels through signal wiring.
 - Full suite: 27 passed, 0 failed.
+
+## 2026-09-03 — Keyboard Viewer Controls
+
+- Added MainWindow keyPressEvent handling.
+- Added viewport delta signals for yaw/pitch/roll/FOV.
+- Wired keyboard deltas to Application-owned ViewportState in main.cpp.
+- Added tests for keyboard signal emission and state updates.
+- Full suite: 29 passed, 0 failed.
