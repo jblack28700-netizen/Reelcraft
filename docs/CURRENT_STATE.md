@@ -309,3 +309,11 @@ Integrated `ViewportState` into the `Application` layer:
 - `Application::resetViewport()` restores default yaw/pitch/roll/FOV.
 
 No rendering, playback, media, or camera-specific code was introduced.
+
+## Phase 2 UI Viewer Readout — Complete
+
+Status: Complete.
+
+MainWindow now displays viewer yaw/pitch/roll/FOV and exposes Reset Viewport.
+Viewer state is read-only at the UI layer and remains owned by Application.
+No rendering, playback, media, or camera code was introduced.
