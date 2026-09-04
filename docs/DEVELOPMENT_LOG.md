@@ -483,3 +483,10 @@ Define Next Objective
 - Installed event filter on viewer-related buttons.
 - Added focused-button keyboard delta test.
 - Full suite: 36 passed, 0 failed.
+
+
+## 2026-09-04 — Invalid Viewer State Fallback Verification
+
+- Added invalid persisted viewer state fallback test.
+- Verified project opens and resets viewer state safely.
+- Full suite: 37 passed, 0 failed.

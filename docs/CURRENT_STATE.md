@@ -401,3 +401,12 @@ Status: Complete.
 MainWindow now installs an event filter on viewer-related buttons so keyboard yaw/pitch/roll/FOV controls still work while a button has focus.
 
 Automated tests: 36 passed, 0 failed.
+
+
+## Phase 2 Invalid Viewer State Fallback Verification — Complete
+
+Status: Complete.
+
+Added an automated test verifying that a project containing invalid persisted viewer state still opens successfully and falls back to default viewer orientation.
+
+Automated tests: 37 passed, 0 failed.

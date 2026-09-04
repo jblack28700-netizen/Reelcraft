@@ -63,6 +63,7 @@ private slots:
     void applicationSaveAndOpenPersistsViewportState();
     void restoredViewerStateUpdatesMainWindowLabels();
     void focusedButtonKeyPressEmitsViewportDelta();
+    void invalidPersistedViewerStateFallsBackToDefaults();
 };
 
 void ProjectTest::initTestCase()
@@ -718,6 +719,38 @@ void ProjectTest::focusedButtonKeyPressEmitsViewportDelta()
     QApplication::sendEvent(button, &right);
 
     QCOMPARE(yawSpy.count(), 1);
+}
+
+void ProjectTest::invalidPersistedViewerStateFallsBackToDefaults()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    Project project;
+    project.setName(QStringLiteral("Invalid Viewer State"));
+
+    QJsonObject invalidViewerState;
+    invalidViewerState.insert(QStringLiteral("yaw"), QStringLiteral("not-a-number"));
+    project.setViewerState(invalidViewerState);
+
+    const QString filePath = tempDir.filePath(QStringLiteral("invalid_viewer.reel"));
+    QVERIFY(project.save(filePath));
+
+    Application app;
+    ViewportState *state = app.viewportState();
+    QVERIFY(state);
+
+    state->setYaw(12.0);
+    state->setPitch(-8.0);
+    state->setRoll(3.0);
+    state->setFieldOfView(100.0);
+
+    QVERIFY(app.openProject(filePath));
+
+    QCOMPARE(state->yaw(), 0.0);
+    QCOMPARE(state->pitch(), 0.0);
+    QCOMPARE(state->roll(), 0.0);
+    QCOMPARE(state->fieldOfView(), 90.0);
 }
 QTEST_MAIN(ProjectTest)
 #include "test_project.moc"

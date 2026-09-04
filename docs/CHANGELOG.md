@@ -267,3 +267,11 @@ Date: 2026-09-04
 - Keyboard viewer controls now work while buttons have focus.
 - Added focused-button keyboard test.
 - Full test suite: 36 passed, 0 failed.
+
+
+## v0.2.11 — Invalid Viewer State Fallback Verification
+
+Date: 2026-09-04
+
+- Added automated invalid viewer state fallback test.
+- Full test suite: 37 passed, 0 failed.
