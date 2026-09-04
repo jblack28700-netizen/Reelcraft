@@ -163,3 +163,11 @@ Date: 2026-09-03
 - Corrected verified test count to 15 in DEVELOPMENT_ENVIRONMENT.md.
 - Documented manual desktop smoke path.
 - No application source changes.
+
+## v0.1.12 — Phase 1 Desktop Foundation Complete
+
+Date: 2026-09-03
+
+- Formally declared Phase 1 Desktop Application Foundation complete.
+- Consolidated verified Phase 1 evidence.
+- No application source changes.

@@ -10,7 +10,7 @@ main
 
 ## Current Stage
 
-Phase 1 Desktop Application Foundation implemented and verified
+Phase 1 Desktop Application Foundation — Complete
 
 ## Project Status
 
@@ -264,3 +264,24 @@ Verified that the existing build-and-test workflow works from a clean Git checko
 - Test build succeeded
 - Automated tests: 15 passed, 0 failed
 - No application source changes
+
+
+## Phase 1 Formal Completion
+
+Status: Complete — 2026-09-03.
+
+Phase 1 Desktop Application Foundation is formally complete.
+
+Verified Definition-of-Done evidence:
+- Desktop runtime/UI foundation builds successfully
+- Reelcraft launches against a real Qt X11 session via Termux:X11
+- Basic UI shell renders reliably
+- UI-to-application/core communication is demonstrated
+- Minimal project create/persist/reopen workflow works
+- Original media is never modified by lifecycle operations
+- Background work executes without freezing the UI
+- Expected failure paths are handled safely
+- Automated test suite: 15 passed, 0 failed
+- Clean-checkout build-and-test workflow verified
+- Architecture boundaries preserved
+- Working tree clean
