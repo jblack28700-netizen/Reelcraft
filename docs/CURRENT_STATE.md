@@ -358,3 +358,15 @@ Application::openProject now resets viewer yaw/pitch/roll/FOV to defaults.
 This ensures each opened project starts from a neutral viewer orientation.
 
 Automated tests: 31 passed, 0 failed.
+
+
+## Phase 2 Viewer State JSON Serialization — Complete
+
+Status: Complete.
+
+ViewportState now supports JSON object serialization/deserialization:
+- toJsonObject()
+- readFromJsonObject()
+- Independent from Project persistence.
+
+Automated tests: 33 passed, 0 failed.

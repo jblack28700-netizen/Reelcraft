@@ -89,3 +89,45 @@ void ViewportState::setFieldOfView(double value)
         emit fieldOfViewChanged(m_fieldOfView);
     }
 }
+
+QJsonObject ViewportState::toJsonObject() const
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("yaw"), m_yaw);
+    object.insert(QStringLiteral("pitch"), m_pitch);
+    object.insert(QStringLiteral("roll"), m_roll);
+    object.insert(QStringLiteral("fieldOfView"), m_fieldOfView);
+    return object;
+}
+
+bool ViewportState::readFromJsonObject(const QJsonObject &object, QString *error)
+{
+    if (error) {
+        error->clear();
+    }
+
+    const QString yawKey = QStringLiteral("yaw");
+    const QString pitchKey = QStringLiteral("pitch");
+    const QString rollKey = QStringLiteral("roll");
+    const QString fovKey = QStringLiteral("fieldOfView");
+
+    const bool valid =
+        object.contains(yawKey) && object.value(yawKey).isDouble() &&
+        object.contains(pitchKey) && object.value(pitchKey).isDouble() &&
+        object.contains(rollKey) && object.value(rollKey).isDouble() &&
+        object.contains(fovKey) && object.value(fovKey).isDouble();
+
+    if (!valid) {
+        if (error) {
+            *error = QStringLiteral("Viewer state JSON is missing required numeric fields.");
+        }
+        return false;
+    }
+
+    setYaw(object.value(yawKey).toDouble());
+    setPitch(object.value(pitchKey).toDouble());
+    setRoll(object.value(rollKey).toDouble());
+    setFieldOfView(object.value(fovKey).toDouble());
+
+    return true;
+}

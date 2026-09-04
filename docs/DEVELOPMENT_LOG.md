@@ -453,3 +453,10 @@ Define Next Objective
 - Application::openProject now calls resetViewport.
 - Added test verifying viewer state resets on open.
 - Full suite: 31 passed, 0 failed.
+
+
+## 2026-09-04 — Viewer State JSON Serialization
+
+- Added toJsonObject and readFromJsonObject.
+- Added round-trip and invalid-JSON tests.
+- Full suite: 33 passed, 0 failed.

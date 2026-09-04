@@ -2,8 +2,8 @@
 
 ## Phase 2 Status
 
-Open-project viewer reset complete — 2026-09-04.
+Viewer state JSON serialization complete — 2026-09-04.
 
 ## Next Logical State
 
-Define the next smallest Phase 2 development objective from the verified viewer reset behavior. Do not begin automatically.
+Define the next smallest Phase 2 development objective from the verified viewer state serialization. Do not begin automatically.

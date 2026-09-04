@@ -231,3 +231,12 @@ Date: 2026-09-04
 - Added viewer-state reset on open project.
 - Added automated open-project reset test.
 - Full test suite: 31 passed, 0 failed.
+
+
+## v0.2.7 — Viewer State JSON Serialization
+
+Date: 2026-09-04
+
+- Added ViewportState JSON export/import.
+- Added automated serialization tests.
+- Full test suite: 33 passed, 0 failed.

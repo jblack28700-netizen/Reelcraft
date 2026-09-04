@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QObject>
+#include <QJsonObject>
+#include <QString>
 
 class ViewportState : public QObject
 {
@@ -18,6 +20,9 @@ public:
     void setPitch(double value);
     void setRoll(double value);
     void setFieldOfView(double value);
+
+    QJsonObject toJsonObject() const;
+    bool readFromJsonObject(const QJsonObject &object, QString *error = nullptr);
 
 signals:
     void yawChanged(double value);

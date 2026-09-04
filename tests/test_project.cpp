@@ -1,5 +1,6 @@
 #include <QtTest>
 #include <QFile>
+#include <QJsonObject>
 #include <QCryptographicHash>
 #include <QLabel>
 #include <QPushButton>
@@ -57,6 +58,8 @@ private slots:
     void applicationKeyboardUpdatesViewportState();
     void newProjectResetsViewport();
     void openProjectResetsViewport();
+    void viewportStateJsonRoundTrip();
+    void viewportStateRejectsInvalidJson();
 };
 
 void ProjectTest::initTestCase()
@@ -589,6 +592,38 @@ void ProjectTest::openProjectResetsViewport()
     QCOMPARE(state->pitch(), 0.0);
     QCOMPARE(state->roll(), 0.0);
     QCOMPARE(state->fieldOfView(), 90.0);
+}
+
+void ProjectTest::viewportStateJsonRoundTrip()
+{
+    ViewportState original;
+    original.setYaw(30.0);
+    original.setPitch(-15.0);
+    original.setRoll(10.0);
+    original.setFieldOfView(75.0);
+
+    const QJsonObject object = original.toJsonObject();
+
+    ViewportState restored;
+    QString error;
+    const bool ok = restored.readFromJsonObject(object, &error);
+
+    QVERIFY(ok);
+    QVERIFY(error.isEmpty());
+    QCOMPARE(restored.yaw(), original.yaw());
+    QCOMPARE(restored.pitch(), original.pitch());
+    QCOMPARE(restored.roll(), original.roll());
+    QCOMPARE(restored.fieldOfView(), original.fieldOfView());
+}
+
+void ProjectTest::viewportStateRejectsInvalidJson()
+{
+    ViewportState state;
+    QString error;
+
+    QJsonObject empty;
+    QVERIFY(!state.readFromJsonObject(empty, &error));
+    QVERIFY(!error.isEmpty());
 }
 QTEST_MAIN(ProjectTest)
 #include "test_project.moc"
