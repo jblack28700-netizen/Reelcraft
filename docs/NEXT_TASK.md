@@ -2,7 +2,7 @@
 
 ## Phase 2 Status
 
-New-project viewer reset complete — 2026-09-03.
+Open-project viewer reset complete — 2026-09-04.
 
 ## Next Logical State
 

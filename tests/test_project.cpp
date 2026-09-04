@@ -56,6 +56,7 @@ private slots:
     void mainWindowKeyboardEmitsViewportDeltas();
     void applicationKeyboardUpdatesViewportState();
     void newProjectResetsViewport();
+    void openProjectResetsViewport();
 };
 
 void ProjectTest::initTestCase()
@@ -556,6 +557,33 @@ void ProjectTest::newProjectResetsViewport()
     state->setFieldOfView(120.0);
 
     app.newProject();
+
+    QCOMPARE(state->yaw(), 0.0);
+    QCOMPARE(state->pitch(), 0.0);
+    QCOMPARE(state->roll(), 0.0);
+    QCOMPARE(state->fieldOfView(), 90.0);
+}
+
+void ProjectTest::openProjectResetsViewport()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    Project project;
+    project.setName(QStringLiteral("Open Reset"));
+    const QString filePath = tempDir.filePath(QStringLiteral("open_reset.reel"));
+    QVERIFY(project.save(filePath));
+
+    Application app;
+    ViewportState *state = app.viewportState();
+    QVERIFY(state);
+
+    state->setYaw(25.0);
+    state->setPitch(-40.0);
+    state->setRoll(10.0);
+    state->setFieldOfView(115.0);
+
+    QVERIFY(app.openProject(filePath));
 
     QCOMPARE(state->yaw(), 0.0);
     QCOMPARE(state->pitch(), 0.0);

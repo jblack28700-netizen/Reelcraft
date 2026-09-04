@@ -349,3 +349,12 @@ Application::newProject now resets viewer yaw/pitch/roll/FOV to defaults.
 This ensures each new project starts from a neutral viewer orientation.
 
 Automated tests: 30 passed, 0 failed.
+
+## Phase 2 Open Project Viewer Reset — Complete
+
+Status: Complete.
+
+Application::openProject now resets viewer yaw/pitch/roll/FOV to defaults.
+This ensures each opened project starts from a neutral viewer orientation.
+
+Automated tests: 31 passed, 0 failed.

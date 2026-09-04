@@ -447,3 +447,9 @@ Define Next Objective
 - Application::newProject now calls resetViewport.
 - Added test verifying viewer state resets on new project.
 - Full suite: 30 passed, 0 failed.
+
+## 2026-09-04 — Open Project Resets Viewer State
+
+- Application::openProject now calls resetViewport.
+- Added test verifying viewer state resets on open.
+- Full suite: 31 passed, 0 failed.

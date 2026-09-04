@@ -223,3 +223,11 @@ Date: 2026-09-03
 - Added viewer-state reset on new project creation.
 - Added automated reset test.
 - Full test suite: 30 passed, 0 failed.
+
+## v0.2.6 — Open Project Viewer Reset
+
+Date: 2026-09-04
+
+- Added viewer-state reset on open project.
+- Added automated open-project reset test.
+- Full test suite: 31 passed, 0 failed.

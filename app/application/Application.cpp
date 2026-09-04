@@ -66,6 +66,7 @@ bool Application::openProject(const QString &filePath)
 
     m_currentProject = loaded;
     m_hasProject = true;
+    resetViewport();
     emit projectChanged(m_currentProject);
     return true;
 }
