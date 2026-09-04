@@ -340,3 +340,12 @@ Added keyboard controls to MainWindow:
 - Deltas are emitted as signals; viewer state remains owned by Application.
 
 Automated tests: 29 passed, 0 failed.
+
+## Phase 2 New Project Viewer Reset — Complete
+
+Status: Complete.
+
+Application::newProject now resets viewer yaw/pitch/roll/FOV to defaults.
+This ensures each new project starts from a neutral viewer orientation.
+
+Automated tests: 30 passed, 0 failed.
