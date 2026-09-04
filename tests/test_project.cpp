@@ -64,6 +64,7 @@ private slots:
     void restoredViewerStateUpdatesMainWindowLabels();
     void focusedButtonKeyPressEmitsViewportDelta();
     void invalidPersistedViewerStateFallsBackToDefaults();
+    void applicationAdjustViewportSlots();
 };
 
 void ProjectTest::initTestCase()
@@ -751,6 +752,21 @@ void ProjectTest::invalidPersistedViewerStateFallsBackToDefaults()
     QCOMPARE(state->pitch(), 0.0);
     QCOMPARE(state->roll(), 0.0);
     QCOMPARE(state->fieldOfView(), 90.0);
+}
+
+void ProjectTest::applicationAdjustViewportSlots()
+{
+    Application app;
+
+    app.adjustViewportYaw(10.0);
+    app.adjustViewportPitch(-5.0);
+    app.adjustViewportRoll(7.0);
+    app.adjustViewportFieldOfView(-10.0);
+
+    QCOMPARE(app.viewportState()->yaw(), 10.0);
+    QCOMPARE(app.viewportState()->pitch(), -5.0);
+    QCOMPARE(app.viewportState()->roll(), 7.0);
+    QCOMPARE(app.viewportState()->fieldOfView(), 80.0);
 }
 QTEST_MAIN(ProjectTest)
 #include "test_project.moc"

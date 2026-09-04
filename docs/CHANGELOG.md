@@ -275,3 +275,12 @@ Date: 2026-09-04
 
 - Added automated invalid viewer state fallback test.
 - Full test suite: 37 passed, 0 failed.
+
+
+## v0.2.12 — Application-Level Viewer Adjust Slots
+
+Date: 2026-09-04
+
+- Moved viewer adjustment operations into Application.
+- Added application-level adjust slot test.
+- Full test suite: 38 passed, 0 failed.

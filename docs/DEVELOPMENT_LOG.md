@@ -490,3 +490,11 @@ Define Next Objective
 - Added invalid persisted viewer state fallback test.
 - Verified project opens and resets viewer state safely.
 - Full suite: 37 passed, 0 failed.
+
+
+## 2026-09-04 — Application-Level Viewer Adjust Slots
+
+- Added Application viewer adjustment slots.
+- Replaced main.cpp UI lambdas with application-slot connections.
+- Added application adjustment slot test.
+- Full suite: 38 passed, 0 failed.

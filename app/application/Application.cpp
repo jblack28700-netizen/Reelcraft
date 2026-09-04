@@ -98,3 +98,31 @@ void Application::resetViewport()
     m_viewportState->setRoll(0.0);
     m_viewportState->setFieldOfView(90.0);
 }
+
+void Application::adjustViewportYaw(double delta)
+{
+    if (m_viewportState) {
+        m_viewportState->setYaw(m_viewportState->yaw() + delta);
+    }
+}
+
+void Application::adjustViewportPitch(double delta)
+{
+    if (m_viewportState) {
+        m_viewportState->setPitch(m_viewportState->pitch() + delta);
+    }
+}
+
+void Application::adjustViewportRoll(double delta)
+{
+    if (m_viewportState) {
+        m_viewportState->setRoll(m_viewportState->roll() + delta);
+    }
+}
+
+void Application::adjustViewportFieldOfView(double delta)
+{
+    if (m_viewportState) {
+        m_viewportState->setFieldOfView(m_viewportState->fieldOfView() + delta);
+    }
+}

@@ -25,6 +25,10 @@ public slots:
     bool openProject(const QString &filePath);
     void runBackgroundDemo();
     void resetViewport();
+    void adjustViewportYaw(double delta);
+    void adjustViewportPitch(double delta);
+    void adjustViewportRoll(double delta);
+    void adjustViewportFieldOfView(double delta);
 
 signals:
     void projectChanged(const Project &project);

@@ -410,3 +410,14 @@ Status: Complete.
 Added an automated test verifying that a project containing invalid persisted viewer state still opens successfully and falls back to default viewer orientation.
 
 Automated tests: 37 passed, 0 failed.
+
+
+## Phase 2 Application-Level Viewer Adjust Slots — Complete
+
+Status: Complete.
+
+Viewer adjustment is now an application-layer operation:
+- Application owns adjustViewportYaw/Pitch/Roll/FieldOfView slots.
+- MainWindow delta signals connect to Application slots instead of UI-layer lambdas.
+
+Automated tests: 38 passed, 0 failed.

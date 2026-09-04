@@ -42,21 +42,13 @@ int main(int argc, char *argv[])
                          &window, &MainWindow::showFieldOfView);
 
         QObject::connect(&window, &MainWindow::viewportYawDeltaRequested,
-                         viewport, [viewport](double delta) {
-                             viewport->setYaw(viewport->yaw() + delta);
-                         });
+                         &application, &Application::adjustViewportYaw);
         QObject::connect(&window, &MainWindow::viewportPitchDeltaRequested,
-                         viewport, [viewport](double delta) {
-                             viewport->setPitch(viewport->pitch() + delta);
-                         });
+                         &application, &Application::adjustViewportPitch);
         QObject::connect(&window, &MainWindow::viewportRollDeltaRequested,
-                         viewport, [viewport](double delta) {
-                             viewport->setRoll(viewport->roll() + delta);
-                         });
+                         &application, &Application::adjustViewportRoll);
         QObject::connect(&window, &MainWindow::viewportFovDeltaRequested,
-                         viewport, [viewport](double delta) {
-                             viewport->setFieldOfView(viewport->fieldOfView() + delta);
-                         });
+                         &application, &Application::adjustViewportFieldOfView);
     }
 
     return app.exec();
