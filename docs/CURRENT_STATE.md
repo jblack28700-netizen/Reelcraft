@@ -464,3 +464,12 @@ Status: Complete.
 Project::load now rejects project files whose schemaVersion is newer than the current supported schema version.
 
 Automated tests: 42 passed, 0 failed.
+
+
+## Phase 2 Application Open Future Schema Fails Safely — Complete
+
+Status: Complete.
+
+Added an application-level test verifying that opening a project with a future unsupported schema version fails safely, preserves the current project, and emits an error through backgroundCompleted.
+
+Automated tests: 43 passed, 0 failed.

@@ -2,7 +2,7 @@
 
 ## Phase 2 Status
 
-Future schema version rejection complete — 2026-09-04.
+Application open future schema fails safely — 2026-09-04.
 
 ## Next Logical State
 

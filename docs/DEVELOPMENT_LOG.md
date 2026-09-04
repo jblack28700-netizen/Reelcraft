@@ -530,3 +530,11 @@ Define Next Objective
 - Project::load now rejects newer unsupported schema versions.
 - Added future schema rejection test.
 - Full suite: 42 passed, 0 failed.
+
+
+## 2026-09-04 — Application Open Future Schema Fails Safely
+
+- Added application-level future schema failure test.
+- Verified current project is preserved.
+- Verified backgroundCompleted error is emitted.
+- Full suite: 43 passed, 0 failed.

@@ -70,6 +70,7 @@ private slots:
     void legacyProjectWithoutVersionLoadsSchemaOne();
     void projectSchemaVersionRoundTrip();
     void futureProjectSchemaVersionIsRejected();
+    void applicationOpenFutureSchemaProjectFailsSafely();
 };
 
 void ProjectTest::initTestCase()
@@ -846,6 +847,36 @@ void ProjectTest::futureProjectSchemaVersionIsRejected()
     QVERIFY(!ok);
     QVERIFY(!loaded.isValid());
     QVERIFY(error.contains(QStringLiteral("newer unsupported schema version")));
+}
+
+void ProjectTest::applicationOpenFutureSchemaProjectFailsSafely()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    QJsonObject future;
+    future.insert(QStringLiteral("id"), QStringLiteral("future-app-id"));
+    future.insert(QStringLiteral("name"), QStringLiteral("Future App Project"));
+    future.insert(QStringLiteral("created"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+    future.insert(QStringLiteral("schemaVersion"), Project::CurrentSchemaVersion + 1);
+
+    const QString filePath = tempDir.filePath(QStringLiteral("future_app_schema.reel"));
+    QFile file(filePath);
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
+    file.write(QJsonDocument(future).toJson(QJsonDocument::Compact));
+    file.close();
+
+    Application app;
+    app.newProject();
+    const QString originalName = app.currentProject().name();
+
+    QSignalSpy spy(&app, &Application::backgroundCompleted);
+
+    QVERIFY(!app.openProject(filePath));
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(spy.first().first().toString().contains(QStringLiteral("Open failed")));
+    QVERIFY(app.hasProject());
+    QCOMPARE(app.currentProject().name(), originalName);
 }
 QTEST_MAIN(ProjectTest)
 #include "test_project.moc"

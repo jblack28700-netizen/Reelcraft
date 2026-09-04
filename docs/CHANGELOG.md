@@ -318,3 +318,11 @@ Date: 2026-09-04
 
 - Reject project files created with a newer unsupported schema version.
 - Full test suite: 42 passed, 0 failed.
+
+
+## v0.2.17 — Application Open Future Schema Fails Safely
+
+Date: 2026-09-04
+
+- Added application-level future schema rejection verification.
+- Full test suite: 43 passed, 0 failed.
