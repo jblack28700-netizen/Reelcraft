@@ -326,3 +326,12 @@ Date: 2026-09-04
 
 - Added application-level future schema rejection verification.
 - Full test suite: 43 passed, 0 failed.
+
+
+## v0.2.18 — Phase 2 Clean-Checkout Re-Verification
+
+Date: 2026-09-04
+
+- Re-verified Phase 2 workflow from clean checkout.
+- 43 automated tests pass.
+- No application source changes.
