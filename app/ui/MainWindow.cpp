@@ -30,6 +30,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_newProjectButton = new QPushButton(QStringLiteral("New Project"), central);
     m_saveButton = new QPushButton(QStringLiteral("Save Project"), central);
     m_openButton = new QPushButton(QStringLiteral("Open Project"), central);
+    m_importButton = new QPushButton(QStringLiteral("Import Media"), central);
     m_backgroundButton = new QPushButton(QStringLiteral("Run Background Demo"), central);
     m_resetViewportButton = new QPushButton(QStringLiteral("Reset Viewport"), central);
 
@@ -42,6 +43,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_newProjectButton->setObjectName("newProjectButton");
     m_saveButton->setObjectName("saveProjectButton");
     m_openButton->setObjectName("openProjectButton");
+    m_importButton->setObjectName("importMediaButton");
     m_backgroundButton->setObjectName("backgroundDemoButton");
     m_resetViewportButton->setObjectName("resetViewportButton");
 
@@ -58,6 +60,7 @@ MainWindow::MainWindow(QWidget *parent)
     layout->addWidget(m_newProjectButton);
     layout->addWidget(m_saveButton);
     layout->addWidget(m_openButton);
+    layout->addWidget(m_importButton);
     layout->addWidget(m_backgroundButton);
     layout->addWidget(m_resetViewportButton);
     layout->addWidget(m_statusLabel);
@@ -81,11 +84,19 @@ MainWindow::MainWindow(QWidget *parent)
         }
     });
 
+    connect(m_importButton, &QPushButton::clicked, this, [this]() {
+        const QString filePath = chooseMediaFilePath();
+        if (!filePath.isEmpty()) {
+            emit importMediaRequested(filePath);
+        }
+    });
+
     connect(m_backgroundButton, &QPushButton::clicked, this, &MainWindow::backgroundDemoRequested);
 
     m_newProjectButton->installEventFilter(this);
     m_saveButton->installEventFilter(this);
     m_openButton->installEventFilter(this);
+    m_importButton->installEventFilter(this);
     m_backgroundButton->installEventFilter(this);
     m_resetViewportButton->installEventFilter(this);
 }
@@ -100,6 +111,14 @@ QString MainWindow::chooseOpenFilePath()
 {
     return QFileDialog::getOpenFileName(
         this, QStringLiteral("Open Project"), QString(), QStringLiteral("Reelcraft Project (*.reel)"));
+}
+
+QString MainWindow::chooseMediaFilePath()
+{
+    // Media content is not decoded here; any existing regular file may be
+    // selected and validated by the application layer.
+    return QFileDialog::getOpenFileName(
+        this, QStringLiteral("Import Media"), QString(), QStringLiteral("All files (*)"));
 }
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)

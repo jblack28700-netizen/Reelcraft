@@ -534,3 +534,27 @@ Boundaries preserved:
 - No real media, video decoding/playback, timeline, AI editing, export, audio, effects, reframing, virtual camera, or camera-specific logic introduced.
 - No schema changes; no new dependencies.
 - ViewerScene and all non-presentation behavior unchanged.
+
+
+## Phase 2 Objective 4 — Real Media Foundation — Complete
+
+Status: Complete.
+
+Established the foundation for importing and representing real media files while preserving Reelcraft's non-destructive architecture:
+
+- `app/core/MediaItem`: QtCore-only deterministic media record — stable id (SHA-256 of the canonical path), stored path, file name, size, last-modified UTC, extension-derived format tag, optional free-form attributes (future home for content/360° classification metadata). Validation accepts only existing, readable, regular files; the original file is never modified. JSON serialization/deserialization with strict validation.
+- `Application`-owned media management: `mediaItems()`, headless `importMediaFile(path)` slot — requires an active project, validates, deduplicates the same canonical path idempotently, preserves import order, and reports through the existing `backgroundCompleted` signal boundary.
+- `Project`: optional additive `media` JSON section (mirroring the `viewerState` pattern) written only when non-empty and read back on load; legacy/absent-media projects unaffected. No schema-version bump or migration.
+- Save serializes the current media list into the project; open restores and revalidates it deterministically; invalid persisted entries fall back safely (empty media) without failing the open.
+- `MainWindow`: Import Media button with injectable file chooser and `importMediaRequested` signal; wired to `Application::importMediaFile` in `main.cpp`.
+
+Verification:
+- Application build succeeded.
+- Offscreen launch smoke: event loop alive until timeout (SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 68 passed, 0 failed (55 prior + 13 new).
+- New tests: media metadata recording, invalid-path rejection, id determinism, JSON round trip, invalid-JSON rejection, import requires active project, deduplication and ordering, invalid-import rejection, persistence/reopen determinism, original-media byte/SHA-256 invariance, legacy project with empty media, invalid persisted media fallback, and Import Media button signal.
+
+Boundaries preserved:
+- No decoding/playback, timeline, editing, AI, export, audio, effects, camera-specific logic, viewer/presentation changes, schema migration, or new dependencies.
+- Media management is separate from the viewer/playback layers; 360° remains first-class conceptually (attributes placeholder) without camera-specific implementation.

@@ -23,6 +23,7 @@ public:
 protected:
     virtual QString chooseSaveFilePath();
     virtual QString chooseOpenFilePath();
+    virtual QString chooseMediaFilePath();
     void keyPressEvent(QKeyEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
 
@@ -38,6 +39,7 @@ signals:
     void newProjectRequested();
     void saveProjectRequested(const QString &filePath);
     void openProjectRequested(const QString &filePath);
+    void importMediaRequested(const QString &filePath);
     void backgroundDemoRequested();
     void resetViewportRequested();
     void viewportYawDeltaRequested(double delta);
@@ -57,6 +59,7 @@ private:
     QPushButton *m_newProjectButton = nullptr;
     QPushButton *m_saveButton = nullptr;
     QPushButton *m_openButton = nullptr;
+    QPushButton *m_importButton = nullptr;
     QPushButton *m_backgroundButton = nullptr;
     QPushButton *m_resetViewportButton = nullptr;
 

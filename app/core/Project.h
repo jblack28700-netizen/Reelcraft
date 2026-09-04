@@ -3,6 +3,7 @@
 #include <QDateTime>
 #include <QMetaType>
 #include <QString>
+#include <QJsonArray>
 #include <QJsonObject>
 
 class Project
@@ -20,6 +21,12 @@ public:
     QJsonObject viewerState() const;
     void setViewerState(const QJsonObject &viewerState);
 
+    // Optional additive media section (array of media record objects). Kept as
+    // opaque JSON here, mirroring the viewerState pattern: Application owns the
+    // authoritative media list and serializes it into this section on save.
+    QJsonArray media() const;
+    void setMedia(const QJsonArray &media);
+
     int schemaVersion() const;
     static constexpr int CurrentSchemaVersion = 2;
 
@@ -31,6 +38,7 @@ private:
     QString m_name;
     QDateTime m_created;
     QJsonObject m_viewerState;
+    QJsonArray m_media;
     int m_schemaVersion = CurrentSchemaVersion;
 };
 

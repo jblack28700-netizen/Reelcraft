@@ -5,96 +5,106 @@
 - Phase 1 Desktop Application Foundation — complete and verified.
 - Phase 2 Objective 1 — Viewer State Foundation — complete and verified (viewport orientation model, application ownership, UI readout/keyboard controls, JSON serialization and persistence, schema versioning).
 - Phase 2 Objective 2 — Viewer Presentation Foundation — complete and verified at checkpoint `58cd561` (deterministic synthetic 360° test scene in `ViewerScene`; minimal presentation surface in `ViewerWidget` embedded in the desktop UI).
-- Phase 2 Objective 3 — Viewer Camera Integration — complete and verified (deterministic `ViewerProjection` camera/view transform; camera-driven `ViewerWidget` presentation following the authoritative application-owned `ViewportState`; Application→UI wiring in `main.cpp`).
-- Automated suite: 55 passed, 0 failed. Working tree clean at the Objective 3 checkpoint commit.
+- Phase 2 Objective 3 — Viewer Camera Integration — complete and verified at checkpoint `fb7bb49` (deterministic `ViewerProjection` camera/view transform; camera-driven `ViewerWidget` presentation following the authoritative application-owned `ViewportState`; Application→UI wiring in `main.cpp`).
+- Phase 2 Objective 4 — Real Media Foundation — complete and verified (`MediaItem` media records; `Application`-owned import/validation/deduplication; optional additive project `media` JSON section persisted on save and restored deterministically on reopen; Import Media UI; original files never modified).
+- Automated suite: 68 passed, 0 failed. Working tree clean at the Objective 4 checkpoint commit.
 
 See `CURRENT_STATE.md` and `DEVELOPMENT_LOG.md` for the verified record.
 
-## Active Objective — Phase 2, Objective 3: Viewer Camera Integration
+## Active Objective — Phase 2, Objective 4: Real Media Foundation
 
-Status: **Complete — implemented and verified (2026-09-04; automated suite 55 passed, 0 failed).**
+Status: **Complete — implemented and verified (2026-09-04; automated suite 68 passed, 0 failed).**
 
 ### Objective
 
-Connect the existing application-owned `ViewportState` to the existing `ViewerWidget` presentation layer so the deterministic synthetic 360° test scene is presented through a viewer camera whose orientation (yaw/pitch/roll) and field of view follow `ViewportState`:
+Establish the smallest controlled foundation for importing and representing real media files while preserving Reelcraft's non-destructive architecture:
 
-1. **Camera/view transform** — a deterministic transform that maps a scene marker direction (yaw/pitch) through a camera defined by yaw/pitch/roll/FOV into view/screen coordinates, suitable for headless unit testing.
-2. **ViewportState→camera behavior** — yaw/pitch/roll/FOV behavior consistent with the already-verified `ViewportState` semantics (yaw/roll normalized to [−180, 180), pitch clamped to [−90, 90], FOV clamped to [20, 140]).
-3. **Presentation consumes the camera** — `ViewerWidget` renders the existing synthetic scene from the camera view (orientation and FOV honored) rather than a fixed identity unwrap.
-4. **Wiring through the existing boundary** — changes to the application-owned `ViewportState` reach the presentation through the established signal/slot application/UI boundary. `Application` remains the single owner of viewer state; no duplicate orientation state.
-5. **Automated tests** — deterministic tests for the camera/view transform, the ViewportState→viewer integration, and an updated offscreen presentation check.
+1. **Import/select real media files** — a user can choose a real media file through the desktop UI, and the application layer can import a media path headlessly.
+2. **Validate media references** — an import is accepted only when it refers to an existing, readable, regular file; directories, missing files, and unreadable paths are rejected with a clear error.
+3. **Record minimal media metadata** — each imported file is represented by a deterministic media record (stable id, stored path, file name, size, last-modified time, extension-derived format tag) without decoding or probing the file content.
+4. **Preserve original media unchanged** — importing, saving, and reopening never modify the original file (byte/SHA-256 invariant).
+5. **Deterministic project persistence/reopen** — imported media records are saved with the project and restored deterministically on reopen; projects without media behave exactly as today.
+6. **Clear separation** — media management lives outside the viewer/playback and presentation layers; the viewer, camera, and presentation code are untouched.
+7. **360° first-class, no camera-specific implementation** — the media record leaves room for future 360°/content classification metadata but performs no 360° detection or camera-specific logic now.
+8. **Headless-testable logic** — media/project logic is QtCore-based and covered by automated offscreen tests using synthetic real files in temporary directories.
 
-The existing synthetic 360° scene (`ViewerScene`) is preserved unchanged as the deterministic test environment.
+**Persistence constraint (no schema migration):** media records are persisted as an optional, additive `media` section inside the project JSON, mirroring the verified optional `viewerState` precedent: absent in legacy and older projects; written only when non-empty; readers that ignore unknown fields remain safe. No schema-version bump and no migration is planned. If the smallest correct implementation proves this additive approach is not safe and a schema-version change/migration is truly required, the implementing agent must stop and report rather than proceed.
 
 ### Scope
 
-- A camera/view transform model whose behavior is testable without a windowing platform and independent of QtWidgets where feasible.
-- Camera-driven presentation of the existing deterministic scene in `ViewerWidget` (default `ViewportState` must remain consistent with the verified defaults: yaw/pitch/roll 0, FOV 90, FRONT marker centered at identity).
-- Wiring from the application-owned `ViewportState` to the presentation via the existing signal/slot application boundary.
-- Reuse of `ViewportState` as the single source of orientation/FOV; no duplicate state.
-- Automated tests added to the existing Qt Test suite, runnable offscreen.
-- Updates to the existing deterministic render test only where the intended camera-driven presentation change requires it; expectations must remain deterministic and verified.
-- The build/test workflow must continue to run through the existing build-and-test workflow without new external dependencies.
+- A QtCore-only media record model (e.g., `MediaItem`): deterministic id derived from the canonical absolute path (stable across repeated imports), stored path, file name, size in bytes, last-modified UTC timestamp, and an extension-derived format tag; validation of the referenced file; equality; and an optional free-form attributes object that is the future home for content/360° classification metadata (no classification logic now).
+- Application-owned media management with a clear media/application boundary: an import slot that validates and deduplicates (importing the same canonical path twice is idempotent), a deterministic media list with stable ordering, and error reporting through the existing application signal boundary (mirroring the save/open error handling).
+- Project persistence/reopen following the verified `viewerState` pattern: the application serializes its current media list into the project's optional `media` section on save and restores/revalidates it on open; legacy and no-media projects are unaffected; invalid persisted media entries fall back deterministically without failing the open.
+- Real file selection in the UI: an Import Media action using the existing injectable file-chooser pattern, wired through the existing signal/slot application boundary, with minimal status feedback.
+- Automated tests using synthetic real files created in temporary directories (no real media assets, no decode).
+- No new dependencies; the existing build-and-test workflow is preserved.
 
 ### Explicit Non-Goals
 
-- Real media import, decoding, frames, or playback of any kind
-- Video processing, codecs, FFmpeg, or proxies
+- Video decoding, demuxing, frame reading, or probing of any kind (no FFmpeg/ffprobe)
+- Playback, preview, or presentation of media content
 - Timeline, clips, tracks, or sequencing
+- Editing engine, cuts, or edit decisions
 - AI editing, analysis, or provider integration
 - Export or render pipelines and format handling
-- Audio, captions, effects, transitions, or color
+- Audio processing or audio waveform/metadata extraction
+- Effects, transitions, captions, or color
 - Camera-specific hardware logic, adapters, metadata, stitching, or Insta360-specific behavior
-- 360° reframing, keyframed viewpoints, or virtual-camera automation
-- Project schema/persistence changes (no new fields). If the defined objective turns out to require a schema change, stop and explain rather than proceeding.
+- 360° detection, classification, reframing, or virtual-camera behavior
+- Viewer camera, presentation, or scene changes (`ViewerWidget`, `ViewerProjection`, `ViewerScene`, `ViewportState` wiring are untouched)
+- Schema-version bump or schema migration (see persistence constraint above)
 - Performance optimization, GPU strategy, or production rendering architecture
 - New dependencies. If a dependency appears necessary to satisfy this objective, stop and report instead of adding it.
-- Unrelated documentation cleanup
-- Any change to `ViewerScene` or its deterministic ground truth
+- Unrelated refactoring or documentation cleanup
 
 ### Definition of Done
 
 A task is complete only when:
 
-- The camera/view transform exists per scope and is verified by deterministic unit tests (marker directions mapped through known camera yaw/pitch/roll/FOV to expected view coordinates).
-- `ViewerWidget` presents the existing synthetic scene through the camera, honoring yaw/pitch/roll/FOV consistent with the verified `ViewportState` semantics.
-- Application-owned `ViewportState` changes drive the presented view through the existing signal/slot boundary; no duplicate orientation state exists.
-- New automated tests pass, including ViewportState→viewer integration; the full test suite is green.
-- The pre-existing 48-test regression suite remains green; any update to camera-affected presentation test expectations is deliberate, deterministic, and documented in the change.
+- Import selection records validated media per scope: existing/readable/regular files accepted with deterministic id and metadata; missing, unreadable, and directory paths rejected with an error surfaced through the application boundary.
+- Duplicate imports of the same canonical path are idempotent; media ordering is deterministic.
+- Media records persist through project save and restore deterministically on reopen; projects without media behave exactly as before; legacy project files still load.
+- Original media files are never modified: an automated test verifies byte and SHA-256 invariance across import, save, and reopen.
+- Media management is clearly separated: no decode, playback, viewer, camera, or presentation code was touched or introduced.
+- New automated tests pass; the pre-existing 55-test regression suite remains green.
 - The application and tests build and pass through the existing workflow offscreen.
-- No new dependencies, no schema changes, and no out-of-scope system were started.
+- No new dependencies and no schema migration were performed.
 - Relevant documentation is updated (CURRENT_STATE / DEVELOPMENT_LOG / CHANGELOG per the established convention).
 - A Git checkpoint exists and the working tree is clean.
 
 ### Verification Strategy
 
-- **Unit tests:** camera/view transform math — FRONT centered at default orientation; yaw/pitch changes move known markers to expected view positions (e.g., yaw +90 brings a side marker toward center); roll rotates the view plane; FOV changes coverage/apparent placement; behavior consistent with ViewportState normalization/clamping.
-- **Integration:** `Application` adjust slots (`adjustViewportYaw/Pitch/Roll/FieldOfView`, reset) result in the expected presented camera orientation/FOV through the existing wiring.
-- **UI-level:** the viewer surface reflects application-owned state; existing MainWindow readout tests continue to pass.
-- **Regression:** all 48 baseline tests remain green; presentation-test expectation updates are limited to the camera-driven behavior change and are deterministic.
-- **Offscreen run:** full suite via the existing build-and-test script; rendered output is verified through deterministic pixel/image invariants rather than visual assertion.
+- **Unit tests:** media record validation and deterministic id stability (same canonical path → same id; distinct paths → distinct ids); metadata recorded correctly.
+- **Application integration:** import success, duplicate/idempotent import, and error paths (missing/unreadable/directory) — mirroring the existing save/open error tests via the application signal boundary.
+- **Persistence:** project save→reopen round trip with media, without media, and with legacy project files; invalid persisted `media` entries fall back safely and deterministically.
+- **Media safety:** byte/SHA-256 invariance of the original file across import→save→reopen.
+- **UI-level:** Import Media signal emission and the injectable file chooser, following the existing headless MainWindow test pattern.
+- **Regression:** all 55 baseline tests remain green.
+- **Offscreen run:** full suite via the existing build-and-test script.
 - **Optional real-session smoke** via Termux:X11 after implementation, following the Phase 1 precedent.
 
 ### Architectural Boundaries
 
-- `Application` keeps owning `ViewportState`; the presentation layer only displays its effect and never becomes a second source of orientation state.
-- Camera/view math remains independent of QtWidgets where feasible for headless testing (consistent with the platform-neutral core rule); the windowing/rendering surface stays in the UI layer.
-- `ViewerScene` and the deterministic test scene are unchanged.
-- AI, media, project-model, and persistence boundaries are untouched; no access to original media; no schema change.
+- Media records and application-level media management are QtCore-only and headless-testable; windowing/file-chooser concerns stay in the UI layer (injectable chooser, mirroring the open/save pattern).
+- The application owns the authoritative media list; the `Project` object carries only the opaque, optional `media` JSON section (same pattern as the verified `viewerState` persistence) — no schema-version change.
+- The viewer/presentation layers (`ViewerScene`, `ViewerProjection`, `ViewerWidget`, `ViewportState` ownership and wiring) are untouched.
+- Original media is never written, moved, or deleted; editing remains non-destructive (Decision 002).
+- No decoding/media-engine, AI, timeline, or export subsystem is introduced; 360° remains a first-class conceptual requirement without camera-specific implementation (Decision 003).
 
 ### Risks / Unknowns
 
-- The camera-driven presentation intentionally changes how the scene is drawn; the existing deterministic render test may require a justified, deterministic update (baseline count otherwise unchanged).
-- The exact projection model (e.g., pinhole perspective with chosen FOV semantics vs. equirectangular reprojection) is intentionally unselected; it must be chosen on evidence during implementation, kept deterministic/offscreen-safe, and recorded as a decision if material.
-- Roll and FOV semantics must be defined precisely and consistently with `ViewportState` (which stores them but does not define presentation meaning); ambiguity here must be resolved before implementation, not guessed.
-- The offscreen QPA plugin may constrain rendering; a software/deterministic presentation path is required (environment limitation already recorded in KNOWN_ISSUES).
-- Wiring must avoid state drift: exactly one owner of orientation/FOV (`ViewportState` in `Application`).
-- Scope-creep risk toward reframing, playback, or real media; non-goals must be enforced.
+- Media references are machine-specific absolute paths; reopening on another machine or after the file moves can make a reference unavailable. Validation on reopen must flag this without failing the open; cross-machine reference portability is a later concern (Decision 006 caution).
+- The additive `media` section keeps the current schema version intentionally. Older v2 readers that ignore unknown fields are safe but could drop the section if they resave; acceptable now only because media is auxiliary, and the persistence constraint above requires a stop-and-report if this becomes unsafe.
+- Deterministic ids derived from canonical paths are stable for a given file but change if the file is renamed/moved; duplicate detection is defined per canonical path.
+- Content type and 360° status cannot be determined without decoding; only factual metadata is recorded, plus the attributes placeholder. No guessing.
+- A file may change or disappear between import and reopen; revalidation treats it as recorded-but-unavailable rather than corrupting the project.
+- MainWindow additions must not regress existing tests; existing object names, signals, and behavior must be preserved.
+- Scope-creep risk toward decoding/playback/probing; non-goals must be enforced.
 
 ### Implementation Gate
 
-This objective is defined and recorded only. Implementation begins in a separate controlled task only after this definition is accepted. The implementing agent must re-read the project state, confirm this objective and its non-goals, preserve the one-active-objective rule and the verified checkpoint (`58cd561`), and stop-and-ask on any conflict with the recorded architecture — including before adding any dependency or making any schema change.
+This objective is defined and recorded only. Implementation begins in a separate controlled task only after this definition is accepted. The implementing agent must re-read the project state, confirm this objective and its non-goals, preserve the one-active-objective rule and the verified checkpoint (`fb7bb49`), and stop-and-ask on any conflict with the recorded architecture — including before adding any dependency and before any schema-version change or migration.
 
 ## Next Logical State
 
-Define the next smallest Phase 2 development objective from the verified Phase 2 Objective 3 state. Do not begin automatically.
+Define the next smallest Phase 2 development objective from the verified Phase 2 Objective 4 state. Do not begin automatically.

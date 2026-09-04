@@ -1,6 +1,8 @@
 #include <QtTest>
 #include <QFile>
+#include <QFileInfo>
 #include <QImage>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonDocument>
 #include <QCryptographicHash>
@@ -13,6 +15,7 @@
 #include <QtMath>
 
 #include "application/Application.h"
+#include "core/MediaItem.h"
 #include "core/Project.h"
 #include "ui/MainWindow.h"
 #include "ui/ViewerWidget.h"
@@ -28,6 +31,7 @@ public:
 protected:
     QString chooseSaveFilePath() override { return QStringLiteral("/tmp/reelcraft_test.reel"); }
     QString chooseOpenFilePath() override { return QStringLiteral("/tmp/reelcraft_test.reel"); }
+    QString chooseMediaFilePath() override { return QStringLiteral("/tmp/reelcraft_media_test.bin"); }
 };
 
 class ProjectTest : public QObject
@@ -89,6 +93,19 @@ private slots:
     void viewerProjectionRollRotatesViewContent();
     void viewerProjectionLargerFieldOfViewBringsMarkersCloser();
     void viewerWidgetCameraFollowsApplicationViewportState();
+    void mediaItemRecordsMetadataFromRealFile();
+    void mediaItemRejectsInvalidPaths();
+    void mediaItemIdIsDeterministic();
+    void mediaItemJsonRoundTrip();
+    void mediaItemRejectsInvalidJson();
+    void applicationImportMediaRequiresActiveProject();
+    void applicationImportMediaDeduplicatesAndOrders();
+    void applicationImportMediaRejectsInvalidPath();
+    void mediaReferencesPersistAndReopenDeterministically();
+    void originalMediaUnchangedByImportAndLifecycle();
+    void legacyProjectOpensWithEmptyMedia();
+    void invalidPersistedMediaFallsBackSafely();
+    void mainWindowImportButtonEmitsSignal();
 };
 
 void ProjectTest::initTestCase()
@@ -1160,6 +1177,360 @@ void ProjectTest::viewerWidgetCameraFollowsApplicationViewportState()
     // Reset restores FRONT to center.
     app.resetViewport();
     expectCenter(255, 213, 79);
+}
+
+void ProjectTest::mediaItemRecordsMetadataFromRealFile()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString mediaPath = tempDir.filePath(QStringLiteral("clip_x5.360.mp4"));
+    QFile mediaFile(mediaPath);
+    QVERIFY(mediaFile.open(QIODevice::WriteOnly));
+    const QByteArray bytes(4096, 'A');
+    QCOMPARE(mediaFile.write(bytes), static_cast<qint64>(bytes.size()));
+    mediaFile.close();
+
+    QString error;
+    const MediaItem item = MediaItem::createFromFilePath(mediaPath, &error);
+    QVERIFY(item.isValid());
+    QVERIFY(error.isEmpty());
+
+    const QString canonical = QFileInfo(mediaPath).canonicalFilePath();
+    QVERIFY(!canonical.isEmpty());
+    QCOMPARE(item.path(), canonical);
+    QCOMPARE(item.fileName(), QStringLiteral("clip_x5.360.mp4"));
+    QCOMPARE(item.formatTag(), QStringLiteral("mp4"));
+    QCOMPARE(item.sizeBytes(), static_cast<qint64>(bytes.size()));
+    QVERIFY(item.lastModifiedUtc().isValid());
+    QVERIFY(!item.id().isEmpty());
+    QVERIFY(item.referenceExists());
+}
+
+void ProjectTest::mediaItemRejectsInvalidPaths()
+{
+    QString error;
+
+    // Empty path.
+    QVERIFY(!MediaItem::createFromFilePath(QString(), &error).isValid());
+    QVERIFY(!error.isEmpty());
+
+    // Missing file.
+    const MediaItem missing =
+        MediaItem::createFromFilePath(QStringLiteral("/nonexistent/nope.mp4"), &error);
+    QVERIFY(!missing.isValid());
+    QVERIFY(error.contains(QStringLiteral("does not exist")));
+
+    // Directory.
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    const MediaItem directory = MediaItem::createFromFilePath(tempDir.path(), &error);
+    QVERIFY(!directory.isValid());
+    QVERIFY(error.contains(QStringLiteral("directory")));
+}
+
+void ProjectTest::mediaItemIdIsDeterministic()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString firstPath = tempDir.filePath(QStringLiteral("first.bin"));
+    const QString secondPath = tempDir.filePath(QStringLiteral("second.bin"));
+    for (const QString &path : { firstPath, secondPath }) {
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("MEDIA");
+        file.close();
+    }
+
+    const MediaItem first = MediaItem::createFromFilePath(firstPath);
+    const MediaItem firstAgain = MediaItem::createFromFilePath(firstPath);
+    const MediaItem second = MediaItem::createFromFilePath(secondPath);
+
+    QVERIFY(first.isValid());
+    QVERIFY(second.isValid());
+    QCOMPARE(first.id(), firstAgain.id());
+    QVERIFY(first.id() != second.id());
+}
+
+void ProjectTest::mediaItemJsonRoundTrip()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString mediaPath = tempDir.filePath(QStringLiteral("roundtrip.mov"));
+    QFile mediaFile(mediaPath);
+    QVERIFY(mediaFile.open(QIODevice::WriteOnly));
+    mediaFile.write(QByteArray(128, 'B'));
+    mediaFile.close();
+
+    MediaItem original = MediaItem::createFromFilePath(mediaPath);
+    QVERIFY(original.isValid());
+    QJsonObject attributes;
+    attributes.insert(QStringLiteral("note"), QStringLiteral("future metadata home"));
+    original.setAttributes(attributes);
+
+    const QJsonObject object = original.toJsonObject();
+
+    MediaItem restored;
+    QString error;
+    QVERIFY(restored.readFromJsonObject(object, &error));
+    QVERIFY(error.isEmpty());
+    QVERIFY(restored.isValid());
+
+    QCOMPARE(restored.id(), original.id());
+    QCOMPARE(restored.path(), original.path());
+    QCOMPARE(restored.fileName(), original.fileName());
+    QCOMPARE(restored.formatTag(), original.formatTag());
+    QCOMPARE(restored.sizeBytes(), original.sizeBytes());
+    QCOMPARE(restored.lastModifiedUtc().toMSecsSinceEpoch(),
+             original.lastModifiedUtc().toMSecsSinceEpoch());
+    QCOMPARE(restored.attributes().value(QStringLiteral("note")).toString(),
+             QStringLiteral("future metadata home"));
+}
+
+void ProjectTest::mediaItemRejectsInvalidJson()
+{
+    MediaItem item;
+    QString error;
+
+    QJsonObject empty;
+    QVERIFY(!item.readFromJsonObject(empty, &error));
+    QVERIFY(!error.isEmpty());
+
+    QJsonObject partial;
+    partial.insert(QStringLiteral("id"), QStringLiteral("abc"));
+    QVERIFY(!item.readFromJsonObject(partial, &error));
+    QVERIFY(!error.isEmpty());
+}
+
+void ProjectTest::applicationImportMediaRequiresActiveProject()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    const QString mediaPath = tempDir.filePath(QStringLiteral("media.bin"));
+    QFile mediaFile(mediaPath);
+    QVERIFY(mediaFile.open(QIODevice::WriteOnly));
+    mediaFile.write("DATA");
+    mediaFile.close();
+
+    Application app;
+    QSignalSpy spy(&app, &Application::backgroundCompleted);
+
+    QVERIFY(!app.importMediaFile(mediaPath));
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(spy.first().first().toString().contains(QStringLiteral("No project")));
+
+    app.newProject();
+    spy.clear();
+    QVERIFY(app.importMediaFile(mediaPath));
+    QCOMPARE(app.mediaItems().size(), 1);
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(spy.first().first().toString().contains(QStringLiteral("Imported media")));
+}
+
+void ProjectTest::applicationImportMediaDeduplicatesAndOrders()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString firstPath = tempDir.filePath(QStringLiteral("first.mp4"));
+    const QString secondPath = tempDir.filePath(QStringLiteral("second.mov"));
+    for (const QString &path : { firstPath, secondPath }) {
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(QByteArray(16, 'x'));
+        file.close();
+    }
+
+    Application app;
+    app.newProject();
+    QSignalSpy spy(&app, &Application::backgroundCompleted);
+
+    QVERIFY(app.importMediaFile(firstPath));
+    QVERIFY(app.importMediaFile(secondPath));
+
+    // Re-importing the same canonical path is idempotent.
+    QVERIFY(app.importMediaFile(firstPath));
+    QCOMPARE(app.mediaItems().size(), 2);
+    QVERIFY(spy.last().first().toString().contains(QStringLiteral("already imported")));
+
+    // Import order is preserved deterministically.
+    QCOMPARE(app.mediaItems().at(0).fileName(), QStringLiteral("first.mp4"));
+    QCOMPARE(app.mediaItems().at(1).fileName(), QStringLiteral("second.mov"));
+}
+
+void ProjectTest::applicationImportMediaRejectsInvalidPath()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    Application app;
+    app.newProject();
+    QSignalSpy spy(&app, &Application::backgroundCompleted);
+
+    QVERIFY(!app.importMediaFile(QStringLiteral("/nonexistent/nope.mp4")));
+    QCOMPARE(app.mediaItems().size(), 0);
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(spy.first().first().toString().contains(QStringLiteral("Import failed")));
+
+    spy.clear();
+    QVERIFY(!app.importMediaFile(tempDir.path()));
+    QCOMPARE(app.mediaItems().size(), 0);
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(spy.first().first().toString().contains(QStringLiteral("Import failed")));
+}
+
+void ProjectTest::mediaReferencesPersistAndReopenDeterministically()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString firstPath = tempDir.filePath(QStringLiteral("first.mp4"));
+    const QString secondPath = tempDir.filePath(QStringLiteral("second.mov"));
+    for (const QString &path : { firstPath, secondPath }) {
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(path.endsWith(QStringLiteral("mp4")) ? QByteArray(32, '1') : QByteArray(48, '2'));
+        file.close();
+    }
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(firstPath));
+    QVERIFY(app.importMediaFile(secondPath));
+
+    const QString projectPath = tempDir.filePath(QStringLiteral("media_project.reel"));
+    QVERIFY(app.saveProject(projectPath));
+
+    Application reopened;
+    QVERIFY(reopened.openProject(projectPath));
+
+    const QList<MediaItem> items = reopened.mediaItems();
+    QCOMPARE(items.size(), 2);
+
+    const QList<MediaItem> originalItems = app.mediaItems();
+    QCOMPARE(items.at(0).id(), originalItems.at(0).id());
+    QCOMPARE(items.at(0).fileName(), QStringLiteral("first.mp4"));
+    QCOMPARE(items.at(0).sizeBytes(), originalItems.at(0).sizeBytes());
+    QCOMPARE(items.at(0).formatTag(), QStringLiteral("mp4"));
+    QCOMPARE(items.at(1).id(), originalItems.at(1).id());
+    QCOMPARE(items.at(1).fileName(), QStringLiteral("second.mov"));
+    QCOMPARE(items.at(1).formatTag(), QStringLiteral("mov"));
+}
+
+void ProjectTest::originalMediaUnchangedByImportAndLifecycle()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString mediaPath = tempDir.filePath(QStringLiteral("source.mp4"));
+    QFile mediaFile(mediaPath);
+    QVERIFY(mediaFile.open(QIODevice::WriteOnly));
+    const QByteArray originalBytes("REAL_MEDIA_BYTES_0123456789_REELCRAFT_OBJ4");
+    QCOMPARE(mediaFile.write(originalBytes), static_cast<qint64>(originalBytes.size()));
+    mediaFile.close();
+
+    const QByteArray originalHash =
+        QCryptographicHash::hash(originalBytes, QCryptographicHash::Sha256);
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(mediaPath));
+
+    const QString projectPath = tempDir.filePath(QStringLiteral("project.reel"));
+    QVERIFY(app.saveProject(projectPath));
+
+    Application reopened;
+    QVERIFY(reopened.openProject(projectPath));
+    QCOMPARE(reopened.mediaItems().size(), 1);
+
+    QFile after(mediaPath);
+    QVERIFY(after.open(QIODevice::ReadOnly));
+    const QByteArray afterBytes = after.readAll();
+    after.close();
+
+    QCOMPARE(afterBytes, originalBytes);
+    QCOMPARE(QCryptographicHash::hash(afterBytes, QCryptographicHash::Sha256), originalHash);
+}
+
+void ProjectTest::legacyProjectOpensWithEmptyMedia()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    // A project file without any media section (legacy style).
+    QJsonObject legacy;
+    legacy.insert(QStringLiteral("id"), QStringLiteral("legacy-media-id"));
+    legacy.insert(QStringLiteral("name"), QStringLiteral("Legacy No Media"));
+    legacy.insert(QStringLiteral("created"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+
+    const QString projectPath = tempDir.filePath(QStringLiteral("legacy.reel"));
+    QFile file(projectPath);
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
+    file.write(QJsonDocument(legacy).toJson(QJsonDocument::Compact));
+    file.close();
+
+    Application app;
+    QVERIFY(app.openProject(projectPath));
+    QVERIFY(app.mediaItems().isEmpty());
+    QVERIFY(app.currentProject().media().isEmpty());
+}
+
+void ProjectTest::invalidPersistedMediaFallsBackSafely()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    auto writeProject = [&tempDir](const QString &name, const QJsonValue &mediaValue) {
+        QJsonObject project;
+        project.insert(QStringLiteral("id"), QStringLiteral("id-") + name);
+        project.insert(QStringLiteral("name"), QStringLiteral("Project ") + name);
+        project.insert(QStringLiteral("created"),
+                       QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+        project.insert(QStringLiteral("schemaVersion"), Project::CurrentSchemaVersion);
+        project.insert(QStringLiteral("media"), mediaValue);
+
+        const QString projectPath = tempDir.filePath(name + QStringLiteral(".reel"));
+        QFile file(projectPath);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            return QString();
+        }
+        file.write(QJsonDocument(project).toJson(QJsonDocument::Compact));
+        file.close();
+        return projectPath;
+    };
+
+    // media present but not an array.
+    const QString wrongTypePath = writeProject(QStringLiteral("wrongtype"), QJsonValue(QStringLiteral("nope")));
+    QVERIFY(!wrongTypePath.isEmpty());
+    Application appWrongType;
+    QVERIFY(appWrongType.openProject(wrongTypePath));
+    QVERIFY(appWrongType.mediaItems().isEmpty());
+
+    // media array containing an invalid record.
+    QJsonArray badArray;
+    QJsonObject badRecord;
+    badRecord.insert(QStringLiteral("id"), QStringLiteral("incomplete"));
+    badArray.append(badRecord);
+    const QString badRecordPath = writeProject(QStringLiteral("badrecord"), badArray);
+    QVERIFY(!badRecordPath.isEmpty());
+    Application appBadRecord;
+    QVERIFY(appBadRecord.openProject(badRecordPath));
+    QVERIFY(appBadRecord.mediaItems().isEmpty());
+}
+
+void ProjectTest::mainWindowImportButtonEmitsSignal()
+{
+    TestMainWindow window;
+    QSignalSpy spy(&window, &MainWindow::importMediaRequested);
+
+    auto *button = window.findChild<QPushButton *>(QStringLiteral("importMediaButton"));
+    QVERIFY(button);
+
+    button->click();
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.first().first().toString(), QStringLiteral("/tmp/reelcraft_media_test.bin"));
 }
 
 QTEST_MAIN(ProjectTest)

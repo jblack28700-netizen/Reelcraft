@@ -48,6 +48,16 @@ void Project::setViewerState(const QJsonObject &viewerState)
     m_viewerState = viewerState;
 }
 
+QJsonArray Project::media() const
+{
+    return m_media;
+}
+
+void Project::setMedia(const QJsonArray &media)
+{
+    m_media = media;
+}
+
 int Project::schemaVersion() const
 {
     return m_schemaVersion;
@@ -62,6 +72,9 @@ bool Project::save(const QString &filePath, QString *error) const
     object.insert(QStringLiteral("schemaVersion"), m_schemaVersion);
     if (!m_viewerState.isEmpty()) {
         object.insert(QStringLiteral("viewerState"), m_viewerState);
+    }
+    if (!m_media.isEmpty()) {
+        object.insert(QStringLiteral("media"), m_media);
     }
 
     QFile file(filePath);
@@ -142,6 +155,11 @@ Project Project::load(const QString &filePath, bool *ok, QString *error)
     const QJsonValue viewerStateValue = object.value(QStringLiteral("viewerState"));
     if (viewerStateValue.isObject()) {
         project.m_viewerState = viewerStateValue.toObject();
+    }
+
+    const QJsonValue mediaValue = object.value(QStringLiteral("media"));
+    if (mediaValue.isArray()) {
+        project.m_media = mediaValue.toArray();
     }
 
     if (ok) {

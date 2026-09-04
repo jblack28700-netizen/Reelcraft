@@ -356,3 +356,15 @@ Date: 2026-09-04
 - Added camera transform and Application→viewer integration tests.
 - Full test suite: 55 passed, 0 failed.
 - No media, playback, timeline, AI, export, reframing, or camera-specific logic yet.
+
+## v0.2.21 — Real Media Foundation
+
+Date: 2026-09-04
+
+- Added real media file import: select/import a media file, validated as an existing, readable, regular file.
+- Media references recorded with deterministic metadata (stable id, path, file name, size, last-modified, format tag).
+- Media records persist in the project file (optional additive section) and restore deterministically on reopen; projects without media are unaffected.
+- Original media files are never modified (verified byte/SHA-256 invariance).
+- Added media validation, integrity, and persistence/reopen tests.
+- Full test suite: 68 passed, 0 failed.
+- No decoding, playback, timeline, AI, export, audio, effects, reframing, or camera-specific logic yet.

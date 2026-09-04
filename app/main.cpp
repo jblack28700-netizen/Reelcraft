@@ -21,6 +21,8 @@ int main(int argc, char *argv[])
                      &application, &Application::saveProject);
     QObject::connect(&window, &MainWindow::openProjectRequested,
                      &application, &Application::openProject);
+    QObject::connect(&window, &MainWindow::importMediaRequested,
+                     &application, &Application::importMediaFile);
     QObject::connect(&window, &MainWindow::backgroundDemoRequested,
                      &application, &Application::runBackgroundDemo);
     QObject::connect(&window, &MainWindow::resetViewportRequested,

@@ -7,6 +7,7 @@ TARGET = reelcraft
 SOURCES += \
     app/main.cpp \
     app/application/Application.cpp \
+    app/core/MediaItem.cpp \
     app/core/Project.cpp \
     app/viewer/ViewerProjection.cpp \
     app/viewer/ViewerScene.cpp \
@@ -16,6 +17,7 @@ SOURCES += \
 
 HEADERS += \
     app/application/Application.h \
+    app/core/MediaItem.h \
     app/core/Project.h \
     app/viewer/ViewerProjection.h \
     app/viewer/ViewerScene.h \

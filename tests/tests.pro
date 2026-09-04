@@ -7,6 +7,7 @@ INCLUDEPATH += ../app
 
 SOURCES += \
     test_project.cpp \
+    ../app/core/MediaItem.cpp \
     ../app/core/Project.cpp \
     ../app/application/Application.cpp \
     ../app/viewer/ViewerProjection.cpp \
@@ -16,6 +17,7 @@ SOURCES += \
     ../app/ui/ViewerWidget.cpp
 
 HEADERS += \
+    ../app/core/MediaItem.h \
     ../app/core/Project.h \
     ../app/application/Application.h \
     ../app/viewer/ViewerProjection.h \

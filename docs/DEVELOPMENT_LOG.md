@@ -597,5 +597,32 @@ Connect the application-owned ViewportState to the ViewerWidget presentation lay
 
 - No media, decoding/playback, timeline, AI, export, audio, effects, reframing, virtual camera, camera-specific logic, schema changes, or new dependencies introduced.
 
+## 2026-09-04 — Phase 2 Objective 4: Real Media Foundation
+
+### Objective
+
+Implement the formal Objective 4 definition (NEXT_TASK.md): import/reference real media files, validate references, record minimal factual metadata, and persist/reopen them non-destructively — with no decoding, playback, or viewer changes.
+
+### Work Completed
+
+- Added `app/core/MediaItem.{h,cpp}` — QtCore-only deterministic media record (stable id = SHA-256 of canonical path; path, file name, size bytes, last-modified UTC, extension-derived format tag; optional attributes placeholder). Creation validates existing/readable/regular files; JSON round trip with strict validation; original media never modified.
+- `Application`: `mediaItems()` accessor and `importMediaFile(path)` slot (active-project requirement, dedupe of canonical path, deterministic import order, errors via `backgroundCompleted`). `newProject` clears media; `saveProject` serializes the media list into the project; `openProject` restores/revalidates it.
+- `Project`: optional additive `media` JSON section (array) written only when non-empty; load reads only arrays; legacy and no-media projects unaffected; no schema-version bump or migration.
+- `MainWindow`: Import Media button (`importMediaButton`) with injectable `chooseMediaFilePath()`; `importMediaRequested` signal; wired to the application slot in `main.cpp`.
+- Extended `reelcraft.pro` and `tests/tests.pro` with MediaItem.
+
+### Verification
+
+- Application build succeeded; offscreen launch smoke event loop alive until timeout (SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 68 passed, 0 failed (55 prior + 13 new, all green on the full run).
+- New tests cover: metadata recording, invalid-path rejection, id determinism, JSON round trip/invalid JSON, import requires a project, deduplication + ordering, invalid import rejection, persistence/reopen determinism, original-media byte/SHA-256 invariance, legacy no-media project, invalid persisted media fallback, and Import Media button signal.
+
+### Boundary Notes
+
+- No decoding, playback, timeline, editing, AI, export, audio, effects, camera-specific logic, viewer/presentation changes, schema migration, or new dependencies.
+- 360° remains conceptually first-class via the attributes placeholder; no camera-specific implementation.
+
+
 
 
