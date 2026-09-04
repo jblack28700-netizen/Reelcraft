@@ -19,6 +19,7 @@ protected:
     virtual QString chooseSaveFilePath();
     virtual QString chooseOpenFilePath();
     void keyPressEvent(QKeyEvent *event) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 public slots:
     void showProject(const Project &project);

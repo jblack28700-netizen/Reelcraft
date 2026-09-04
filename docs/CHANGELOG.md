@@ -258,3 +258,12 @@ Date: 2026-09-04
 
 - Added UI integration test for restored viewer state.
 - Full test suite: 35 passed, 0 failed.
+
+
+## v0.2.10 — Focused Button Keyboard Input
+
+Date: 2026-09-04
+
+- Keyboard viewer controls now work while buttons have focus.
+- Added focused-button keyboard test.
+- Full test suite: 36 passed, 0 failed.

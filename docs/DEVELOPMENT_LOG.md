@@ -475,3 +475,11 @@ Define Next Objective
 
 - Added test for restored viewer state updating MainWindow labels.
 - Full suite: 35 passed, 0 failed.
+
+
+## 2026-09-04 — Focused Button Keyboard Input
+
+- Added MainWindow::eventFilter.
+- Installed event filter on viewer-related buttons.
+- Added focused-button keyboard delta test.
+- Full suite: 36 passed, 0 failed.

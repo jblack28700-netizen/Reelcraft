@@ -392,3 +392,12 @@ Status: Complete.
 Added an automated UI integration test proving that viewer state restored by Application::openProject updates MainWindow yaw/pitch/roll/FOV labels through the existing signal wiring.
 
 Automated tests: 35 passed, 0 failed.
+
+
+## Phase 2 Focused Button Keyboard Input — Complete
+
+Status: Complete.
+
+MainWindow now installs an event filter on viewer-related buttons so keyboard yaw/pitch/roll/FOV controls still work while a button has focus.
+
+Automated tests: 36 passed, 0 failed.

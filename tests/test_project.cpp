@@ -62,6 +62,7 @@ private slots:
     void viewportStateRejectsInvalidJson();
     void applicationSaveAndOpenPersistsViewportState();
     void restoredViewerStateUpdatesMainWindowLabels();
+    void focusedButtonKeyPressEmitsViewportDelta();
 };
 
 void ProjectTest::initTestCase()
@@ -703,6 +704,20 @@ void ProjectTest::restoredViewerStateUpdatesMainWindowLabels()
     QCOMPARE(pitch->text(), QStringLiteral("Pitch: -18.00"));
     QCOMPARE(roll->text(), QStringLiteral("Roll: 9.00"));
     QCOMPARE(fov->text(), QStringLiteral("FOV: 105.00"));
+}
+
+void ProjectTest::focusedButtonKeyPressEmitsViewportDelta()
+{
+    TestMainWindow window;
+    QSignalSpy yawSpy(&window, &MainWindow::viewportYawDeltaRequested);
+
+    auto *button = window.findChild<QPushButton*>("newProjectButton");
+    QVERIFY(button);
+
+    QKeyEvent right(QEvent::KeyPress, Qt::Key_Right, Qt::NoModifier);
+    QApplication::sendEvent(button, &right);
+
+    QCOMPARE(yawSpy.count(), 1);
 }
 QTEST_MAIN(ProjectTest)
 #include "test_project.moc"

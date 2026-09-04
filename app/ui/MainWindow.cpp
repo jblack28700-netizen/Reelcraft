@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 
 #include <QFileDialog>
+#include <QEvent>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QPushButton>
@@ -74,6 +75,12 @@ MainWindow::MainWindow(QWidget *parent)
     });
 
     connect(m_backgroundButton, &QPushButton::clicked, this, &MainWindow::backgroundDemoRequested);
+
+    m_newProjectButton->installEventFilter(this);
+    m_saveButton->installEventFilter(this);
+    m_openButton->installEventFilter(this);
+    m_backgroundButton->installEventFilter(this);
+    m_resetViewportButton->installEventFilter(this);
 }
 
 QString MainWindow::chooseSaveFilePath()
@@ -86,6 +93,31 @@ QString MainWindow::chooseOpenFilePath()
 {
     return QFileDialog::getOpenFileName(
         this, QStringLiteral("Open Project"), QString(), QStringLiteral("Reelcraft Project (*.reel)"));
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event)
+{
+    if (event->type() == QEvent::KeyPress) {
+        auto *keyEvent = static_cast<QKeyEvent *>(event);
+        switch (keyEvent->key()) {
+        case Qt::Key_Left:
+        case Qt::Key_Right:
+        case Qt::Key_Up:
+        case Qt::Key_Down:
+        case Qt::Key_Q:
+        case Qt::Key_E:
+        case Qt::Key_Plus:
+        case Qt::Key_Equal:
+        case Qt::Key_Minus:
+        case Qt::Key_Underscore:
+            keyPressEvent(keyEvent);
+            return true;
+        default:
+            break;
+        }
+    }
+
+    return QMainWindow::eventFilter(watched, event);
 }
 
 void MainWindow::showProject(const Project &project)
