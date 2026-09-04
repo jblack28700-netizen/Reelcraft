@@ -8,6 +8,8 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
+#include "ui/ViewerWidget.h"
+
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
@@ -43,7 +45,12 @@ MainWindow::MainWindow(QWidget *parent)
     m_backgroundButton->setObjectName("backgroundDemoButton");
     m_resetViewportButton->setObjectName("resetViewportButton");
 
+    m_viewerWidget = new ViewerWidget(central);
+    m_viewerWidget->setObjectName("viewerWidget");
+    m_viewerWidget->setMinimumHeight(160);
+
     layout->addWidget(m_projectLabel);
+    layout->addWidget(m_viewerWidget);
     layout->addWidget(m_yawLabel);
     layout->addWidget(m_pitchLabel);
     layout->addWidget(m_rollLabel);

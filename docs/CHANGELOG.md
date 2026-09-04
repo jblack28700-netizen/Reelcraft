@@ -335,3 +335,14 @@ Date: 2026-09-04
 - Re-verified Phase 2 workflow from clean checkout.
 - 43 automated tests pass.
 - No application source changes.
+
+## v0.2.19 — Minimal Viewer Presentation Surface
+
+Date: 2026-09-04
+
+- Added a deterministic synthetic 360° test scene (10 oriented markers, no media).
+- Added a minimal viewer presentation surface rendering the scene as an identity equirectangular view.
+- The desktop shell now displays the viewer surface.
+- Added deterministic render and scene tests.
+- Full test suite: 48 passed, 0 failed.
+- No ViewportState→camera integration, media, playback, or rendering pipeline yet.

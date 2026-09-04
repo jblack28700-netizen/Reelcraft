@@ -546,3 +546,30 @@ Define Next Objective
 - Ran existing build-and-test script.
 - Confirmed app/test builds and 43 passing tests.
 - Original repository remained clean.
+
+## 2026-09-04 — Phase 2 Objective 2: Minimal Viewer Presentation Surface
+
+### Objective
+
+Implement the first Objective 2 subtask: a minimal viewer presentation surface, a deterministic synthetic 360° test scene, and the minimum UI wiring to display it. ViewportState→camera integration was explicitly out of scope.
+
+### Work Completed
+
+- Added `app/viewer/ViewerScene.{h,cpp}` — deterministic synthetic 360° test scene of 10 oriented markers (FRONT/BACK/LEFT/RIGHT/UP/DOWN + 4 diagonals) using ViewportState-compatible angle conventions (yaw normalized to [-180,180), pitch clamped to [-90,90]). QtCore-only; no media or camera logic.
+- Added `app/ui/ViewerWidget.{h,cpp}` — minimal presentation surface that renders the scene as an identity equirectangular unwrap (background, 30° orientation grid, colored markers with labels). No camera state, no ViewportState connection, no media.
+- Wired the viewer surface into MainWindow (`viewerWidget` object name) with no Application/core changes.
+- Extended `reelcraft.pro` and `tests/tests.pro` with the new sources/headers.
+
+### Verification
+
+- Application build succeeded (offscreen launch smoke: event loop alive until timeout, SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 48 passed, 0 failed (43 regression + 5 new viewer tests).
+- New tests cover: deterministic scene ground truth, marker range validity, ViewerWidget scene presence, MainWindow viewer surface, and deterministic render pixel checks (background, FRONT/LEFT/RIGHT marker colors).
+
+### Boundary Notes
+
+- No ViewportState→camera behavior, media, playback, timeline, AI, export, audio, effects, reframing, or camera-specific logic was introduced.
+- No new dependencies were added (QtWidgets/QtCore only, already in use).
+
+

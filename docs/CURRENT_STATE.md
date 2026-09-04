@@ -486,3 +486,26 @@ Re-verified the Phase 2 build-and-test workflow from a clean Git checkout after 
 - Test build succeeded.
 - Automated tests: 43 passed, 0 failed.
 - No application source changes.
+
+
+## Phase 2 Objective 2 — Minimal Viewer Presentation Surface — Complete
+
+Status: Complete.
+
+Implemented the first Phase 2 Objective 2 (Viewer Presentation Foundation) subtask — a minimal viewer presentation surface with a deterministic synthetic 360° test scene:
+
+- `app/viewer/ViewerScene`: deterministic synthetic 360° test scene of 10 oriented markers (FRONT/BACK/LEFT/RIGHT/UP/DOWN and 4 diagonals) using ViewportState-compatible angle conventions. QtCore-only; no media, camera, or rendering logic.
+- `app/ui/ViewerWidget`: minimal presentation surface rendering the scene as an identity equirectangular unwrap (background, 30° orientation grid, colored labeled markers). No camera state and no ViewportState connection yet.
+- MainWindow now embeds the viewer surface (`viewerWidget` object name). No Application/core/project/schema changes.
+
+Verification:
+- Application build succeeded.
+- Offscreen launch smoke: event loop alive until timeout (SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 48 passed, 0 failed (43 regression + 5 new).
+- New tests: deterministic scene ground truth, marker range validity, ViewerWidget scene presence, MainWindow viewer surface, deterministic render pixel checks.
+
+Boundaries preserved:
+- ViewportState→camera behavior not implemented (next Objective 2 subtask, not started).
+- No real media, video decoding/playback, timeline, AI editing, export, audio, effects, reframing, virtual camera, or camera-specific logic introduced.
+- No new dependencies introduced.

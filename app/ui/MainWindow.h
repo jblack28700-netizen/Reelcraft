@@ -7,6 +7,7 @@
 class QLabel;
 class QPushButton;
 class QKeyEvent;
+class ViewerWidget;
 
 class MainWindow : public QMainWindow
 {
@@ -54,4 +55,6 @@ private:
     QPushButton *m_openButton = nullptr;
     QPushButton *m_backgroundButton = nullptr;
     QPushButton *m_resetViewportButton = nullptr;
+
+    ViewerWidget *m_viewerWidget = nullptr;
 };

@@ -1,17 +1,22 @@
 #include <QtTest>
 #include <QFile>
+#include <QImage>
 #include <QJsonObject>
 #include <QJsonDocument>
 #include <QCryptographicHash>
+#include <QColor>
 #include <QLabel>
 #include <QPushButton>
 #include <QKeyEvent>
 #include <QSignalSpy>
 #include <QTemporaryDir>
+#include <QtMath>
 
 #include "application/Application.h"
 #include "core/Project.h"
 #include "ui/MainWindow.h"
+#include "ui/ViewerWidget.h"
+#include "viewer/ViewerScene.h"
 #include "viewer/ViewportState.h"
 
 class TestMainWindow : public MainWindow
@@ -71,6 +76,11 @@ private slots:
     void projectSchemaVersionRoundTrip();
     void futureProjectSchemaVersionIsRejected();
     void applicationOpenFutureSchemaProjectFailsSafely();
+    void viewerSceneGroundTruthIsDeterministic();
+    void viewerSceneMarkerRangesAreValid();
+    void viewerWidgetPresentsDeterministicScene();
+    void mainWindowContainsViewerSurface();
+    void viewerWidgetRenderIsDeterministic();
 };
 
 void ProjectTest::initTestCase()
@@ -878,5 +888,113 @@ void ProjectTest::applicationOpenFutureSchemaProjectFailsSafely()
     QVERIFY(app.hasProject());
     QCOMPARE(app.currentProject().name(), originalName);
 }
+
+void ProjectTest::viewerSceneGroundTruthIsDeterministic()
+{
+    const ViewerScene first = ViewerScene::createDeterministicTestScene();
+    const ViewerScene second = ViewerScene::createDeterministicTestScene();
+
+    QVERIFY(first.isValid());
+    QCOMPARE(first.markerCount(), 10);
+    QCOMPARE(first.markers().size(), second.markers().size());
+    QCOMPARE(second.markers().size(), 10);
+
+    for (int i = 0; i < first.markers().size(); ++i) {
+        QCOMPARE(first.markers().at(i).label, second.markers().at(i).label);
+        QVERIFY(qAbs(first.markers().at(i).yaw - second.markers().at(i).yaw) < 1e-9);
+        QVERIFY(qAbs(first.markers().at(i).pitch - second.markers().at(i).pitch) < 1e-9);
+    }
+
+    const int front = first.markerIndex(QStringLiteral("FRONT"));
+    QVERIFY(front >= 0);
+    QVERIFY(qAbs(first.markers().at(front).yaw) < 1e-9);
+    QVERIFY(qAbs(first.markers().at(front).pitch) < 1e-9);
+
+    const int back = first.markerIndex(QStringLiteral("BACK"));
+    QVERIFY(back >= 0);
+    QVERIFY(qAbs(first.markers().at(back).yaw - (-180.0)) < 1e-9);
+    QVERIFY(qAbs(first.markers().at(back).pitch) < 1e-9);
+
+    const int up = first.markerIndex(QStringLiteral("UP"));
+    QVERIFY(up >= 0);
+    QVERIFY(qAbs(first.markers().at(up).pitch - 90.0) < 1e-9);
+
+    const int rightUp = first.markerIndex(QStringLiteral("RIGHT_UP"));
+    QVERIFY(rightUp >= 0);
+    QVERIFY(qAbs(first.markers().at(rightUp).yaw - 90.0) < 1e-9);
+    QVERIFY(qAbs(first.markers().at(rightUp).pitch - 45.0) < 1e-9);
+}
+
+void ProjectTest::viewerSceneMarkerRangesAreValid()
+{
+    const ViewerScene scene = ViewerScene::createDeterministicTestScene();
+    QVERIFY(scene.isValid());
+
+    QStringList seenLabels;
+    for (const ViewerSceneMarker &marker : scene.markers()) {
+        QVERIFY(!marker.label.isEmpty());
+        QVERIFY(marker.yaw >= -180.0 && marker.yaw < 180.0);
+        QVERIFY(marker.pitch >= -90.0 && marker.pitch <= 90.0);
+        QVERIFY(!seenLabels.contains(marker.label));
+        seenLabels.append(marker.label);
+    }
+}
+
+void ProjectTest::viewerWidgetPresentsDeterministicScene()
+{
+    ViewerWidget widget;
+
+    QVERIFY(widget.scene().isValid());
+    QCOMPARE(widget.scene().markerCount(), 10);
+    QVERIFY(widget.scene().markerIndex(QStringLiteral("FRONT")) >= 0);
+    QVERIFY(widget.scene().markerIndex(QStringLiteral("BACK")) >= 0);
+    QVERIFY(widget.scene().markerIndex(QStringLiteral("LEFT_DOWN")) >= 0);
+}
+
+void ProjectTest::mainWindowContainsViewerSurface()
+{
+    TestMainWindow window;
+
+    auto *viewer = window.findChild<ViewerWidget *>(QStringLiteral("viewerWidget"));
+    QVERIFY(viewer);
+    QVERIFY(viewer->scene().isValid());
+    QCOMPARE(viewer->scene().markerCount(), 10);
+}
+
+void ProjectTest::viewerWidgetRenderIsDeterministic()
+{
+    ViewerWidget widget;
+    widget.resize(400, 200);
+
+    const QImage image = widget.grab().toImage();
+    QVERIFY(!image.isNull());
+    QVERIFY(image.width() > 0);
+    QVERIFY(image.height() > 0);
+
+    const double scaleX = static_cast<double>(image.width()) / 400.0;
+    const double scaleY = static_cast<double>(image.height()) / 200.0;
+
+    auto expectPixel = [scaleX, scaleY](const QImage &img, double logicalX,
+                                        double logicalY, int red, int green, int blue) {
+        const QColor color =
+            img.pixelColor(qRound(logicalX * scaleX), qRound(logicalY * scaleY));
+        QCOMPARE(color.red(), red);
+        QCOMPARE(color.green(), green);
+        QCOMPARE(color.blue(), blue);
+    };
+
+    // Background sample away from grid lines and markers.
+    expectPixel(image, 399.0, 5.0, 18, 20, 24);
+
+    // FRONT marker (yaw 0, pitch 0) maps to the canvas center.
+    expectPixel(image, 200.0, 100.0, 255, 213, 79);
+
+    // LEFT marker (yaw -90, pitch 0).
+    expectPixel(image, 100.0, 100.0, 129, 199, 132);
+
+    // RIGHT marker (yaw 90, pitch 0).
+    expectPixel(image, 300.0, 100.0, 240, 98, 146);
+}
+
 QTEST_MAIN(ProjectTest)
 #include "test_project.moc"
