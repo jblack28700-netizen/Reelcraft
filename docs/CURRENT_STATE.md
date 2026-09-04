@@ -421,3 +421,16 @@ Viewer adjustment is now an application-layer operation:
 - MainWindow delta signals connect to Application slots instead of UI-layer lambdas.
 
 Automated tests: 38 passed, 0 failed.
+
+
+## Phase 2 Clean-Checkout Verification — Complete
+
+Status: Complete.
+
+Verified the Phase 2 build-and-test workflow from a clean Git checkout:
+- Cloned current commit into a temporary directory.
+- Ran scripts/build_and_test.sh.
+- Application build succeeded.
+- Test build succeeded.
+- Automated tests: 38 passed, 0 failed.
+- No application source changes.

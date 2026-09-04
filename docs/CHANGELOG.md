@@ -284,3 +284,12 @@ Date: 2026-09-04
 - Moved viewer adjustment operations into Application.
 - Added application-level adjust slot test.
 - Full test suite: 38 passed, 0 failed.
+
+
+## v0.2.13 — Phase 2 Clean-Checkout Verification
+
+Date: 2026-09-04
+
+- Verified Phase 2 workflow from clean checkout.
+- 38 automated tests pass.
+- No application source changes.
