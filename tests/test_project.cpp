@@ -61,6 +61,7 @@ private slots:
     void viewportStateJsonRoundTrip();
     void viewportStateRejectsInvalidJson();
     void applicationSaveAndOpenPersistsViewportState();
+    void restoredViewerStateUpdatesMainWindowLabels();
 };
 
 void ProjectTest::initTestCase()
@@ -655,6 +656,53 @@ void ProjectTest::applicationSaveAndOpenPersistsViewportState()
     QCOMPARE(restored->pitch(), -12.0);
     QCOMPARE(restored->roll(), 7.0);
     QCOMPARE(restored->fieldOfView(), 100.0);
+}
+
+void ProjectTest::restoredViewerStateUpdatesMainWindowLabels()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    Application app;
+    ViewportState *state = app.viewportState();
+    QVERIFY(state);
+
+    app.newProject();
+    state->setYaw(42.0);
+    state->setPitch(-18.0);
+    state->setRoll(9.0);
+    state->setFieldOfView(105.0);
+
+    const QString filePath = tempDir.filePath(QStringLiteral("viewer_ui_restore.reel"));
+    QVERIFY(app.saveProject(filePath));
+
+    Application reopened;
+    ViewportState *restored = reopened.viewportState();
+    QVERIFY(restored);
+
+    TestMainWindow window;
+
+    QObject::connect(restored, &ViewportState::yawChanged, &window, &MainWindow::showYaw);
+    QObject::connect(restored, &ViewportState::pitchChanged, &window, &MainWindow::showPitch);
+    QObject::connect(restored, &ViewportState::rollChanged, &window, &MainWindow::showRoll);
+    QObject::connect(restored, &ViewportState::fieldOfViewChanged, &window, &MainWindow::showFieldOfView);
+
+    QVERIFY(reopened.openProject(filePath));
+
+    auto *yaw = window.findChild<QLabel*>("yawLabel");
+    auto *pitch = window.findChild<QLabel*>("pitchLabel");
+    auto *roll = window.findChild<QLabel*>("rollLabel");
+    auto *fov = window.findChild<QLabel*>("fieldOfViewLabel");
+
+    QVERIFY(yaw);
+    QVERIFY(pitch);
+    QVERIFY(roll);
+    QVERIFY(fov);
+
+    QCOMPARE(yaw->text(), QStringLiteral("Yaw: 42.00"));
+    QCOMPARE(pitch->text(), QStringLiteral("Pitch: -18.00"));
+    QCOMPARE(roll->text(), QStringLiteral("Roll: 9.00"));
+    QCOMPARE(fov->text(), QStringLiteral("FOV: 105.00"));
 }
 QTEST_MAIN(ProjectTest)
 #include "test_project.moc"
