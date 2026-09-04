@@ -199,3 +199,11 @@ Date: 2026-09-03
 - Added Reset Viewport UI action.
 - Added UI-level viewer state tests.
 - Full test suite: 25 passed, 0 failed.
+
+## v0.2.3 — Viewer State Integration Tests
+
+Date: 2026-09-03
+
+- Added automated integration tests for viewer state signal flow.
+- Verified UI readout and Reset Viewport behavior.
+- Full test suite: 27 passed, 0 failed.

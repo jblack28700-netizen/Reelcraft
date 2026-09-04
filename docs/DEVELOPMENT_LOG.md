@@ -426,3 +426,10 @@ Define Next Objective
 - Wired ViewerState signals in main.cpp.
 - Added UI tests for viewer labels and reset button.
 - Full suite: 25 passed, 0 failed.
+
+## 2026-09-03 — Viewer State Integration Tests
+
+- Added end-to-end viewer state integration tests.
+- Verified Application ViewportState updates MainWindow labels.
+- Verified Reset Viewport updates UI labels through signal wiring.
+- Full suite: 27 passed, 0 failed.

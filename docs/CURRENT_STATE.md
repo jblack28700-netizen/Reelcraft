@@ -317,3 +317,13 @@ Status: Complete.
 MainWindow now displays viewer yaw/pitch/roll/FOV and exposes Reset Viewport.
 Viewer state is read-only at the UI layer and remains owned by Application.
 No rendering, playback, media, or camera code was introduced.
+
+## Phase 2 Viewer State Integration Tests — Complete
+
+Status: Complete.
+
+Added automated integration tests verifying the full viewer-state signal flow:
+- Application-owned ViewportState updates MainWindow yaw/pitch/roll/FOV labels.
+- Reset Viewport button returns MainWindow labels to defaults.
+
+Automated tests: 27 passed, 0 failed.

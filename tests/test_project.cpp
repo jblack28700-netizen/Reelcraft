@@ -50,6 +50,8 @@ private slots:
     void applicationResetViewportRestoresDefaults();
     void mainWindowViewerLabelsUpdate();
     void mainWindowResetViewportButtonEmitsSignal();
+    void applicationViewerStateUpdatesMainWindowLabels();
+    void applicationResetViewportUpdatesMainWindowLabels();
 };
 
 void ProjectTest::initTestCase()
@@ -406,6 +408,79 @@ void ProjectTest::mainWindowResetViewportButtonEmitsSignal()
 
     button->click();
     QCOMPARE(spy.count(), 1);
+}
+
+void ProjectTest::applicationViewerStateUpdatesMainWindowLabels()
+{
+    Application app;
+    TestMainWindow window;
+
+    ViewportState *state = app.viewportState();
+    QVERIFY(state);
+
+    QObject::connect(state, &ViewportState::yawChanged, &window, &MainWindow::showYaw);
+    QObject::connect(state, &ViewportState::pitchChanged, &window, &MainWindow::showPitch);
+    QObject::connect(state, &ViewportState::rollChanged, &window, &MainWindow::showRoll);
+    QObject::connect(state, &ViewportState::fieldOfViewChanged, &window, &MainWindow::showFieldOfView);
+
+    state->setYaw(30.5);
+    state->setPitch(-15.25);
+    state->setRoll(45.0);
+    state->setFieldOfView(110.0);
+
+    auto *yaw = window.findChild<QLabel*>("yawLabel");
+    auto *pitch = window.findChild<QLabel*>("pitchLabel");
+    auto *roll = window.findChild<QLabel*>("rollLabel");
+    auto *fov = window.findChild<QLabel*>("fieldOfViewLabel");
+
+    QVERIFY(yaw);
+    QVERIFY(pitch);
+    QVERIFY(roll);
+    QVERIFY(fov);
+
+    QCOMPARE(yaw->text(), QStringLiteral("Yaw: 30.50"));
+    QCOMPARE(pitch->text(), QStringLiteral("Pitch: -15.25"));
+    QCOMPARE(roll->text(), QStringLiteral("Roll: 45.00"));
+    QCOMPARE(fov->text(), QStringLiteral("FOV: 110.00"));
+}
+
+void ProjectTest::applicationResetViewportUpdatesMainWindowLabels()
+{
+    Application app;
+    TestMainWindow window;
+
+    ViewportState *state = app.viewportState();
+    QVERIFY(state);
+
+    QObject::connect(state, &ViewportState::yawChanged, &window, &MainWindow::showYaw);
+    QObject::connect(state, &ViewportState::pitchChanged, &window, &MainWindow::showPitch);
+    QObject::connect(state, &ViewportState::rollChanged, &window, &MainWindow::showRoll);
+    QObject::connect(state, &ViewportState::fieldOfViewChanged, &window, &MainWindow::showFieldOfView);
+    QObject::connect(&window, &MainWindow::resetViewportRequested, &app, &Application::resetViewport);
+
+    state->setYaw(30.0);
+    state->setPitch(-45.0);
+    state->setRoll(15.0);
+    state->setFieldOfView(120.0);
+
+    auto *button = window.findChild<QPushButton*>("resetViewportButton");
+    QVERIFY(button);
+    button->click();
+
+    auto *yaw = window.findChild<QLabel*>("yawLabel");
+    auto *pitch = window.findChild<QLabel*>("pitchLabel");
+    auto *roll = window.findChild<QLabel*>("rollLabel");
+    auto *fov = window.findChild<QLabel*>("fieldOfViewLabel");
+
+    QVERIFY(yaw);
+    QVERIFY(pitch);
+    QVERIFY(roll);
+    QVERIFY(fov);
+
+    QCOMPARE(yaw->text(), QStringLiteral("Yaw: 0.00"));
+    QCOMPARE(pitch->text(), QStringLiteral("Pitch: 0.00"));
+    QCOMPARE(roll->text(), QStringLiteral("Roll: 0.00"));
+    QCOMPARE(fov->text(), QStringLiteral("FOV: 90.00"));
 }
 QTEST_MAIN(ProjectTest)
 #include "test_project.moc"
