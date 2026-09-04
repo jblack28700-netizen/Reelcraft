@@ -302,3 +302,11 @@ Date: 2026-09-04
 - Added project schema versioning.
 - Preserved backward compatibility with version-less project files.
 - Full test suite: 40 passed, 0 failed.
+
+
+## v0.2.15 — Project Schema Version Round Trip
+
+Date: 2026-09-04
+
+- Added automated schema version round-trip verification.
+- Full test suite: 41 passed, 0 failed.

@@ -2,7 +2,7 @@
 
 ## Phase 2 Status
 
-Project schema versioning complete — 2026-09-04.
+Project schema version round trip complete — 2026-09-04.
 
 ## Next Logical State
 

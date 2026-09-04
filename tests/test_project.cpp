@@ -68,6 +68,7 @@ private slots:
     void applicationAdjustViewportSlots();
     void projectDefaultsHaveSchemaVersion();
     void legacyProjectWithoutVersionLoadsSchemaOne();
+    void projectSchemaVersionRoundTrip();
 };
 
 void ProjectTest::initTestCase()
@@ -799,6 +800,25 @@ void ProjectTest::legacyProjectWithoutVersionLoadsSchemaOne()
 
     QVERIFY(ok);
     QCOMPARE(loaded.schemaVersion(), 1);
+}
+
+void ProjectTest::projectSchemaVersionRoundTrip()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    Project project;
+    project.setName(QStringLiteral("Schema Round Trip"));
+    QCOMPARE(project.schemaVersion(), Project::CurrentSchemaVersion);
+
+    const QString filePath = tempDir.filePath(QStringLiteral("schema_roundtrip.reel"));
+    QVERIFY(project.save(filePath));
+
+    bool ok = false;
+    Project loaded = Project::load(filePath, &ok);
+
+    QVERIFY(ok);
+    QCOMPARE(loaded.schemaVersion(), Project::CurrentSchemaVersion);
 }
 QTEST_MAIN(ProjectTest)
 #include "test_project.moc"

@@ -446,3 +446,12 @@ Project JSON now includes a `schemaVersion` field.
 - `schemaVersion()` exposes the loaded/default version.
 
 Automated tests: 40 passed, 0 failed.
+
+
+## Phase 2 Project Schema Version Round Trip — Complete
+
+Status: Complete.
+
+Added an automated round-trip test verifying that a newly saved project preserves Project::CurrentSchemaVersion when loaded.
+
+Automated tests: 41 passed, 0 failed.

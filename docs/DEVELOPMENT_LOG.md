@@ -516,3 +516,10 @@ Define Next Objective
 - Legacy projects without version load as schema 1.
 - Added default and legacy-version tests.
 - Full suite: 40 passed, 0 failed.
+
+
+## 2026-09-04 — Project Schema Version Round Trip
+
+- Added project schema version round-trip test.
+- Verified new projects preserve current schema version after save/load.
+- Full suite: 41 passed, 0 failed.
