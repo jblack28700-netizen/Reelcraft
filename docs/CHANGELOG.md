@@ -346,3 +346,13 @@ Date: 2026-09-04
 - Added deterministic render and scene tests.
 - Full test suite: 48 passed, 0 failed.
 - No ViewportState→camera integration, media, playback, or rendering pipeline yet.
+
+## v0.2.20 — Viewer Camera Integration
+
+Date: 2026-09-04
+
+- Added a deterministic camera/view transform (yaw/pitch/roll/FOV) for the viewer.
+- The viewer presentation now follows the application-owned viewport state: rotating the viewport deterministically changes the camera view of the synthetic 360° scene.
+- Added camera transform and Application→viewer integration tests.
+- Full test suite: 55 passed, 0 failed.
+- No media, playback, timeline, AI, export, reframing, or camera-specific logic yet.

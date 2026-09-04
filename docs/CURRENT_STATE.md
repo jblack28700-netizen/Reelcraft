@@ -509,3 +509,28 @@ Boundaries preserved:
 - ViewportState→camera behavior not implemented (next Objective 2 subtask, not started).
 - No real media, video decoding/playback, timeline, AI editing, export, audio, effects, reframing, virtual camera, or camera-specific logic introduced.
 - No new dependencies introduced.
+
+
+## Phase 2 Objective 3 — Viewer Camera Integration — Complete
+
+Status: Complete.
+
+Connected the application-owned ViewportState to the ViewerWidget presentation layer so viewport changes deterministically change the synthetic 360° scene's camera/view:
+
+- `app/viewer/ViewerProjection`: stateless, deterministic camera/view transform mapping scene marker directions through camera yaw/pitch/roll/FOV (ViewportState-compatible semantics; positive roll rotates projected content counter-clockwise; markers behind or on the sideways plane are not visible). QtWidgets-independent for headless unit testing.
+- `ViewerWidget` now renders the deterministic scene through the camera view read-only from the authoritative ViewportState supplied via `setViewportState()`; it owns no viewport state and never becomes a second source of yaw/pitch/roll/FOV. Identity defaults apply when no state is supplied.
+- `Application` remains the single owner of viewport state; wiring added in `main.cpp` supplies the state to the viewer (existing signal/slot boundary drives repaints).
+- `MainWindow` exposes `viewerWidget()` for this wiring.
+- Existing synthetic `ViewerScene` preserved unchanged.
+
+Verification:
+- Application build succeeded.
+- Offscreen launch smoke: event loop alive until timeout (SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 55 passed, 0 failed (48 prior, of which one presentation test updated for the intended camera-driven change, plus 7 new).
+- New tests: projection identity centering, yaw aiming at side markers, pitch aiming at poles, pitch mirror symmetry, roll content rotation about center, FOV scaling, and Application→ViewerWidget integration (adjust yaw +90 centers the RIGHT marker; reset restores FRONT).
+
+Boundaries preserved:
+- No real media, video decoding/playback, timeline, AI editing, export, audio, effects, reframing, virtual camera, or camera-specific logic introduced.
+- No schema changes; no new dependencies.
+- ViewerScene and all non-presentation behavior unchanged.

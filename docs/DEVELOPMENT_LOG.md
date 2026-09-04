@@ -572,4 +572,30 @@ Implement the first Objective 2 subtask: a minimal viewer presentation surface, 
 - No ViewportState→camera behavior, media, playback, timeline, AI, export, audio, effects, reframing, or camera-specific logic was introduced.
 - No new dependencies were added (QtWidgets/QtCore only, already in use).
 
+## 2026-09-04 — Phase 2 Objective 3: Viewer Camera Integration
+
+### Objective
+
+Connect the application-owned ViewportState to the ViewerWidget presentation layer so viewport changes deterministically change the synthetic 360° scene's camera/view, using the formal Objective 3 definition previously recorded in NEXT_TASK.md.
+
+### Work Completed
+
+- Added `app/viewer/ViewerProjection.{h,cpp}` — stateless deterministic camera/view transform (marker direction through camera yaw/pitch/roll + vertical FOV). Conventions documented: marker equal to camera direction centers; positive roll rotates projected content counter-clockwise; markers behind or effectively on the 90° sideways plane are not visible (fp guard); QtWidgets-independent.
+- `ViewerWidget` now presents the scene through the camera, reading yaw/pitch/roll/FOV read-only from the authoritative ViewportState supplied via `setViewportState()` (identity defaults when none). The widget owns no viewport state.
+- Added `MainWindow::viewerWidget()` accessor; `main.cpp` supplies the application-owned viewport state to the viewer (existing signal/slot boundary drives repaints).
+- Extended `reelcraft.pro` and `tests/tests.pro` with ViewerProjection.
+- `ViewerScene` preserved unchanged; no schema or dependency changes.
+
+### Verification
+
+- Application build succeeded; offscreen launch smoke event loop alive until timeout (SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 55 passed, 0 failed. Regression: all prior tests green; `viewerWidgetRenderIsDeterministic` updated to the intended camera-driven presentation (identity defaults center FRONT; former equirect side-marker positions are now plain background).
+- New tests: projection identity centering; yaw aims at side markers; pitch aims at poles; pitch mirror symmetry; roll rotates content about center; larger FOV brings markers closer; Application→ViewerWidget integration (yaw +90 centers RIGHT marker, reset restores FRONT).
+
+### Boundary Notes
+
+- No media, decoding/playback, timeline, AI, export, audio, effects, reframing, virtual camera, camera-specific logic, schema changes, or new dependencies introduced.
+
+
 

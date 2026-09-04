@@ -16,6 +16,10 @@ class MainWindow : public QMainWindow
 public:
     explicit MainWindow(QWidget *parent = nullptr);
 
+    // The embedded viewer presentation surface. UI code (e.g. main.cpp wiring)
+    // uses this to supply the authoritative viewport state to the viewer.
+    ViewerWidget *viewerWidget() const { return m_viewerWidget; }
+
 protected:
     virtual QString chooseSaveFilePath();
     virtual QString chooseOpenFilePath();

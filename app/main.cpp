@@ -2,6 +2,7 @@
 
 #include "application/Application.h"
 #include "ui/MainWindow.h"
+#include "ui/ViewerWidget.h"
 #include "viewer/ViewportState.h"
 
 int main(int argc, char *argv[])
@@ -32,6 +33,9 @@ int main(int argc, char *argv[])
 
     ViewportState *viewport = application.viewportState();
     if (viewport) {
+        // The viewer presentation follows the authoritative viewport state.
+        window.viewerWidget()->setViewportState(viewport);
+
         QObject::connect(viewport, &ViewportState::yawChanged,
                          &window, &MainWindow::showYaw);
         QObject::connect(viewport, &ViewportState::pitchChanged,

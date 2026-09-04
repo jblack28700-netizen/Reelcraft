@@ -5,6 +5,9 @@
 #include <QPen>
 #include <QPointF>
 
+#include "viewer/ViewerProjection.h"
+#include "viewer/ViewportState.h"
+
 namespace {
 
 const QColor kBackgroundColor(18, 20, 24);
@@ -12,7 +15,12 @@ const QColor kGridColor(66, 74, 86);
 const QColor kLabelColor(226, 228, 232);
 
 constexpr double kMarkerRadius = 4.0;
-constexpr int kGridStepDegrees = 30;
+constexpr int kReticleArmLength = 12;
+
+constexpr double kDefaultYaw = 0.0;
+constexpr double kDefaultPitch = 0.0;
+constexpr double kDefaultRoll = 0.0;
+constexpr double kDefaultFieldOfView = 90.0;
 
 // Deterministic marker palette; index 0 is the FRONT marker.
 const QColor kMarkerPalette[] = {
@@ -43,6 +51,26 @@ void ViewerWidget::setScene(const ViewerScene &scene)
     update();
 }
 
+void ViewerWidget::setViewportState(const ViewportState *viewportState)
+{
+    if (m_viewportState == viewportState) {
+        return;
+    }
+    m_viewportState = viewportState;
+
+    if (m_viewportState) {
+        connect(m_viewportState, &ViewportState::yawChanged, this,
+                [this](double) { update(); });
+        connect(m_viewportState, &ViewportState::pitchChanged, this,
+                [this](double) { update(); });
+        connect(m_viewportState, &ViewportState::rollChanged, this,
+                [this](double) { update(); });
+        connect(m_viewportState, &ViewportState::fieldOfViewChanged, this,
+                [this](double) { update(); });
+    }
+    update();
+}
+
 QSize ViewerWidget::sizeHint() const
 {
     return QSize(640, 320);
@@ -53,14 +81,20 @@ QSize ViewerWidget::minimumSizeHint() const
     return QSize(160, 80);
 }
 
-double ViewerWidget::pixelXForYaw(double yaw, double width)
+void ViewerWidget::cameraValues(double *yawDeg, double *pitchDeg, double *rollDeg,
+                                double *fieldOfViewDeg) const
 {
-    return width * (yaw + 180.0) / 360.0;
-}
-
-double ViewerWidget::pixelYForPitch(double pitch, double height)
-{
-    return height * (90.0 - pitch) / 180.0;
+    if (m_viewportState) {
+        *yawDeg = m_viewportState->yaw();
+        *pitchDeg = m_viewportState->pitch();
+        *rollDeg = m_viewportState->roll();
+        *fieldOfViewDeg = m_viewportState->fieldOfView();
+        return;
+    }
+    *yawDeg = kDefaultYaw;
+    *pitchDeg = kDefaultPitch;
+    *rollDeg = kDefaultRoll;
+    *fieldOfViewDeg = kDefaultFieldOfView;
 }
 
 void ViewerWidget::paintEvent(QPaintEvent *event)
@@ -71,7 +105,7 @@ void ViewerWidget::paintEvent(QPaintEvent *event)
     painter.setRenderHint(QPainter::Antialiasing, false);
 
     drawBackground(painter);
-    drawOrientationGrid(painter);
+    drawCenterReticle(painter);
     drawMarkers(painter);
 }
 
@@ -80,25 +114,27 @@ void ViewerWidget::drawBackground(QPainter &painter)
     painter.fillRect(rect(), kBackgroundColor);
 }
 
-void ViewerWidget::drawOrientationGrid(QPainter &painter)
+void ViewerWidget::drawCenterReticle(QPainter &painter)
 {
     painter.setPen(QPen(kGridColor, 1.0));
 
-    // Meridians (vertical) every 30 degrees of yaw across the whole sphere.
-    for (int yaw = -180; yaw <= 180; yaw += kGridStepDegrees) {
-        const double x = pixelXForYaw(yaw, width());
-        painter.drawLine(QPointF(x, 0.0), QPointF(x, height()));
-    }
+    const double centerX = width() / 2.0;
+    const double centerY = height() / 2.0;
 
-    // Parallels (horizontal) every 30 degrees of pitch across the whole sphere.
-    for (int pitch = -90; pitch <= 90; pitch += kGridStepDegrees) {
-        const double y = pixelYForPitch(pitch, height());
-        painter.drawLine(QPointF(0.0, y), QPointF(width(), y));
-    }
+    painter.drawLine(QPointF(centerX - kReticleArmLength, centerY),
+                     QPointF(centerX + kReticleArmLength, centerY));
+    painter.drawLine(QPointF(centerX, centerY - kReticleArmLength),
+                     QPointF(centerX, centerY + kReticleArmLength));
 }
 
 void ViewerWidget::drawMarkers(QPainter &painter)
 {
+    double cameraYaw = 0.0;
+    double cameraPitch = 0.0;
+    double cameraRoll = 0.0;
+    double fieldOfView = 90.0;
+    cameraValues(&cameraYaw, &cameraPitch, &cameraRoll, &fieldOfView);
+
     QFont labelFont = font();
     labelFont.setPointSize(8);
     painter.setFont(labelFont);
@@ -107,9 +143,16 @@ void ViewerWidget::drawMarkers(QPainter &painter)
     const QList<ViewerSceneMarker> markers = m_scene.markers();
     for (int i = 0; i < markers.size(); ++i) {
         const ViewerSceneMarker &marker = markers.at(i);
+        double x = 0.0;
+        double y = 0.0;
+        const bool visible = ViewerProjection::project(
+            marker.yaw, marker.pitch, cameraYaw, cameraPitch, cameraRoll,
+            fieldOfView, width(), height(), &x, &y);
+        if (!visible) {
+            continue;
+        }
+
         const QColor color = markerColor(i);
-        const double x = pixelXForYaw(marker.yaw, width());
-        const double y = pixelYForPitch(marker.pitch, height());
 
         painter.setPen(Qt::NoPen);
         painter.setBrush(color);

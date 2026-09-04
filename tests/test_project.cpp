@@ -16,6 +16,7 @@
 #include "core/Project.h"
 #include "ui/MainWindow.h"
 #include "ui/ViewerWidget.h"
+#include "viewer/ViewerProjection.h"
 #include "viewer/ViewerScene.h"
 #include "viewer/ViewportState.h"
 
@@ -81,6 +82,13 @@ private slots:
     void viewerWidgetPresentsDeterministicScene();
     void mainWindowContainsViewerSurface();
     void viewerWidgetRenderIsDeterministic();
+    void viewerProjectionCentersFrontMarkerAtIdentity();
+    void viewerProjectionYawAimsAtSideMarkers();
+    void viewerProjectionPitchAimsAtPoleMarkers();
+    void viewerProjectionPitchMirrorSymmetry();
+    void viewerProjectionRollRotatesViewContent();
+    void viewerProjectionLargerFieldOfViewBringsMarkersCloser();
+    void viewerWidgetCameraFollowsApplicationViewportState();
 };
 
 void ProjectTest::initTestCase()
@@ -983,17 +991,175 @@ void ProjectTest::viewerWidgetRenderIsDeterministic()
         QCOMPARE(color.blue(), blue);
     };
 
-    // Background sample away from grid lines and markers.
-    expectPixel(image, 399.0, 5.0, 18, 20, 24);
+    // Without a viewport state the camera is at identity defaults
+    // (yaw/pitch/roll 0, FOV 90), so FRONT is centered.
+
+    // Background samples away from markers, labels, and the center reticle.
+    expectPixel(image, 20.0, 180.0, 18, 20, 24);
+    expectPixel(image, 380.0, 30.0, 18, 20, 24);
 
     // FRONT marker (yaw 0, pitch 0) maps to the canvas center.
     expectPixel(image, 200.0, 100.0, 255, 213, 79);
 
-    // LEFT marker (yaw -90, pitch 0).
-    expectPixel(image, 100.0, 100.0, 129, 199, 132);
+    // Side markers are not visible at the identity camera view, so their
+    // former equirectangular positions are plain background now.
+    expectPixel(image, 100.0, 100.0, 18, 20, 24);
+    expectPixel(image, 300.0, 100.0, 18, 20, 24);
+}
 
-    // RIGHT marker (yaw 90, pitch 0).
-    expectPixel(image, 300.0, 100.0, 240, 98, 146);
+void ProjectTest::viewerProjectionCentersFrontMarkerAtIdentity()
+{
+    double x = 0.0;
+    double y = 0.0;
+    const bool visible = ViewerProjection::project(
+        0.0, 0.0, 0.0, 0.0, 0.0, 90.0, 400.0, 200.0, &x, &y);
+
+    QVERIFY(visible);
+    QVERIFY(qAbs(x - 200.0) < 1e-6);
+    QVERIFY(qAbs(y - 100.0) < 1e-6);
+}
+
+void ProjectTest::viewerProjectionYawAimsAtSideMarkers()
+{
+    // At identity, side and back markers are not in front of the camera.
+    double x = 0.0;
+    double y = 0.0;
+    QVERIFY(!ViewerProjection::project(90.0, 0.0, 0.0, 0.0, 0.0, 90.0, 400.0, 200.0, &x, &y));
+    QVERIFY(!ViewerProjection::project(-90.0, 0.0, 0.0, 0.0, 0.0, 90.0, 400.0, 200.0, &x, &y));
+    QVERIFY(!ViewerProjection::project(180.0, 0.0, 0.0, 0.0, 0.0, 90.0, 400.0, 200.0, &x, &y));
+
+    // Turning the camera +90 degrees of yaw centers the RIGHT marker.
+    QVERIFY(ViewerProjection::project(90.0, 0.0, 90.0, 0.0, 0.0, 90.0, 400.0, 200.0, &x, &y));
+    QVERIFY(qAbs(x - 200.0) < 1e-6);
+    QVERIFY(qAbs(y - 100.0) < 1e-6);
+
+    // Turning the camera -90 degrees of yaw centers the LEFT marker.
+    QVERIFY(ViewerProjection::project(-90.0, 0.0, -90.0, 0.0, 0.0, 90.0, 400.0, 200.0, &x, &y));
+    QVERIFY(qAbs(x - 200.0) < 1e-6);
+    QVERIFY(qAbs(y - 100.0) < 1e-6);
+}
+
+void ProjectTest::viewerProjectionPitchAimsAtPoleMarkers()
+{
+    double x = 0.0;
+    double y = 0.0;
+
+    // At identity the poles are overhead/underfoot, not in front.
+    QVERIFY(!ViewerProjection::project(0.0, 90.0, 0.0, 0.0, 0.0, 90.0, 400.0, 200.0, &x, &y));
+    QVERIFY(!ViewerProjection::project(0.0, -90.0, 0.0, 0.0, 0.0, 90.0, 400.0, 200.0, &x, &y));
+
+    // Tilting up +90 centers the UP marker; tilting down -90 centers DOWN.
+    QVERIFY(ViewerProjection::project(0.0, 90.0, 0.0, 90.0, 0.0, 90.0, 400.0, 200.0, &x, &y));
+    QVERIFY(qAbs(x - 200.0) < 1e-6);
+    QVERIFY(qAbs(y - 100.0) < 1e-6);
+
+    QVERIFY(ViewerProjection::project(0.0, -90.0, 0.0, -90.0, 0.0, 90.0, 400.0, 200.0, &x, &y));
+    QVERIFY(qAbs(x - 200.0) < 1e-6);
+    QVERIFY(qAbs(y - 100.0) < 1e-6);
+}
+
+void ProjectTest::viewerProjectionPitchMirrorSymmetry()
+{
+    double xAbove = 0.0;
+    double yAbove = 0.0;
+    double xBelow = 0.0;
+    double yBelow = 0.0;
+
+    QVERIFY(ViewerProjection::project(0.0, 20.0, 0.0, 0.0, 0.0, 90.0, 400.0, 200.0, &xAbove, &yAbove));
+    QVERIFY(ViewerProjection::project(0.0, -20.0, 0.0, 0.0, 0.0, 90.0, 400.0, 200.0, &xBelow, &yBelow));
+
+    QVERIFY(qAbs(xAbove - 200.0) < 1e-6);
+    QVERIFY(qAbs(xBelow - 200.0) < 1e-6);
+    QVERIFY(yAbove < 100.0);
+    QVERIFY(yBelow > 100.0);
+    QVERIFY(qAbs((yAbove + yBelow) / 2.0 - 100.0) < 1e-6);
+    QVERIFY(qAbs((100.0 - yAbove) - (yBelow - 100.0)) < 1e-6);
+}
+
+void ProjectTest::viewerProjectionRollRotatesViewContent()
+{
+    // FRONT stays centered for any roll.
+    for (double roll : { -90.0, -45.0, 0.0, 45.0, 90.0 }) {
+        double x = 0.0;
+        double y = 0.0;
+        QVERIFY(ViewerProjection::project(0.0, 0.0, 0.0, 0.0, roll, 90.0, 400.0, 200.0, &x, &y));
+        QVERIFY(qAbs(x - 200.0) < 1e-6);
+        QVERIFY(qAbs(y - 100.0) < 1e-6);
+    }
+
+    // A marker above center rotates counter-clockwise by the roll angle:
+    // roll +90 moves it to the left of center at the same height.
+    double x0 = 0.0;
+    double y0 = 0.0;
+    QVERIFY(ViewerProjection::project(0.0, 20.0, 0.0, 0.0, 0.0, 90.0, 400.0, 200.0, &x0, &y0));
+    const double radius = 100.0 - y0;
+    QVERIFY(radius > 0.0);
+
+    double xLeft = 0.0;
+    double yLeft = 0.0;
+    QVERIFY(ViewerProjection::project(0.0, 20.0, 0.0, 0.0, 90.0, 90.0, 400.0, 200.0, &xLeft, &yLeft));
+    QVERIFY(qAbs(xLeft - (200.0 - radius)) < 1e-6);
+    QVERIFY(qAbs(yLeft - 100.0) < 1e-6);
+
+    double xRight = 0.0;
+    double yRight = 0.0;
+    QVERIFY(ViewerProjection::project(0.0, 20.0, 0.0, 0.0, -90.0, 90.0, 400.0, 200.0, &xRight, &yRight));
+    QVERIFY(qAbs(xRight - (200.0 + radius)) < 1e-6);
+    QVERIFY(qAbs(yRight - 100.0) < 1e-6);
+}
+
+void ProjectTest::viewerProjectionLargerFieldOfViewBringsMarkersCloser()
+{
+    double xNarrow = 0.0;
+    double yNarrow = 0.0;
+    double xWide = 0.0;
+    double yWide = 0.0;
+
+    QVERIFY(ViewerProjection::project(0.0, 20.0, 0.0, 0.0, 0.0, 60.0, 400.0, 200.0, &xNarrow, &yNarrow));
+    QVERIFY(ViewerProjection::project(0.0, 20.0, 0.0, 0.0, 0.0, 120.0, 400.0, 200.0, &xWide, &yWide));
+
+    const double distanceNarrow = qAbs(yNarrow - 100.0);
+    const double distanceWide = qAbs(yWide - 100.0);
+    QVERIFY(distanceNarrow > distanceWide);
+    QVERIFY(distanceWide > 0.0);
+}
+
+void ProjectTest::viewerWidgetCameraFollowsApplicationViewportState()
+{
+    Application app;
+    TestMainWindow window;
+
+    ViewportState *state = app.viewportState();
+    QVERIFY(state);
+    ViewerWidget *viewer = window.viewerWidget();
+    QVERIFY(viewer);
+
+    // Same wiring as main.cpp: the presentation follows the authoritative
+    // application-owned viewport state.
+    viewer->setViewportState(state);
+    viewer->resize(400, 200);
+
+    auto centerColor = [viewer]() {
+        const QImage image = viewer->grab().toImage();
+        return image.pixelColor(image.width() / 2, image.height() / 2);
+    };
+    auto expectCenter = [&centerColor](int red, int green, int blue) {
+        const QColor color = centerColor();
+        QCOMPARE(color.red(), red);
+        QCOMPARE(color.green(), green);
+        QCOMPARE(color.blue(), blue);
+    };
+
+    // Identity defaults: FRONT (amber) centered.
+    expectCenter(255, 213, 79);
+
+    // Application yaw adjustment +90 -> camera faces RIGHT (pink) marker.
+    app.adjustViewportYaw(90.0);
+    expectCenter(240, 98, 146);
+
+    // Reset restores FRONT to center.
+    app.resetViewport();
+    expectCenter(255, 213, 79);
 }
 
 QTEST_MAIN(ProjectTest)
