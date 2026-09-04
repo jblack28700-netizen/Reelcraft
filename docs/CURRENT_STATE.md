@@ -252,3 +252,15 @@ Verified against a real Qt X11 desktop session using Termux:X11:
 Environment observations:
 - No window title/decorations visible because Termux:X11 lacks a window manager; not considered a Reelcraft defect.
 - Known Qt locale warning appears; no functional impact.
+
+## Phase 1 Clean-Checkout Workflow Verification — Complete
+
+Status: Complete.
+
+Verified that the existing build-and-test workflow works from a clean Git checkout:
+- Cloned current commit into a temporary directory
+- Ran scripts/build_and_test.sh
+- Application build succeeded
+- Test build succeeded
+- Automated tests: 15 passed, 0 failed
+- No application source changes

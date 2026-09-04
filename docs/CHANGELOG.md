@@ -147,3 +147,11 @@ Date: 2026-09-03
 - Verified UI render, new/save/open project lifecycle, background responsiveness.
 - Regression tests pass.
 - No application source changes.
+
+## v0.1.10 — Clean-Checkout Workflow Verification
+
+Date: 2026-09-03
+
+- Verified Phase 1 build/test workflow from clean checkout
+- 15 automated tests pass
+- No application source changes
