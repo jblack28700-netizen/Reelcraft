@@ -2,72 +2,58 @@
 
 ## Objective
 
-Perform and document the first real desktop smoke test of the Phase 1 Reelcraft application.
-
-## Status
-
-Not started — blocked by environment.
-
-Current development environment has no real graphical Qt session. Android/Termux/Ubuntu is development-only and cannot provide the real desktop windowing platform required for this objective.
+Verify that the existing Phase 1 build-and-test workflow works from a clean Git checkout.
 
 ## Why This Is the Next Task
 
-Phase 1 automated tests run offscreen. A real desktop smoke test is required to verify that the UI shell renders reliably and background work does not freeze the UI.
+Phase 1 is complete and the current build/test workflow has only been verified inside the existing working tree. A clean-checkout verification ensures the documented workflow is reproducible without relying on untracked or generated artifacts that were not committed.
 
 ## In Scope
 
-- Launch reelcraft with a real Qt platform plugin
-- Verify the main window appears and remains open
-- Exercise New Project, Save Project, Open Project, Run Background Demo through the visible UI
-- Verify project lifecycle and UI responsiveness
-- Document the result and create a Git checkpoint
+- Create a temporary clone/copy of the repository at the current commit
+- Run scripts/build_and_test.sh from the clean checkout
+- Confirm application build succeeds
+- Confirm test build succeeds
+- Confirm all 15 automated tests pass
+- Document the verified result
+- Create a Git checkpoint if any documentation changes are required
 
 ## Explicitly Out of Scope
 
-- Android support, SDK/NDK, Termux:X11 configuration
-- Application source changes unless a defect is confirmed
-- New product features
+- New application features
 - Production media/AI/editor work
-- Offscreen-only verification
+- Android support
+- Apple support
+- CI/CD infrastructure
+- Packaging or distribution
+- Refactoring existing source
 
 ## Definition of Done
 
-- Application launches successfully against a real desktop/windowing platform
-- Main window renders and remains open
-- UI controls behave correctly
-- Background demo completes without visibly freezing the UI
-- Smoke test documented and checkpointed
-- Working tree clean
+1. A clean checkout exists at the current commit
+2. scripts/build_and_test.sh completes with exit code 0
+3. Application build succeeds
+4. Test build succeeds
+5. Automated test suite reports 15 passed, 0 failed
+6. No application source changes are made
+7. Result is documented
+8. Working tree remains clean at the original repository
 
 ## Verification Plan
 
-- Establish real graphical Qt session
-- Run ./reelcraft without QT_QPA_PLATFORM override
-- Perform visible UI verification
-- Record exact environment, commands, observed behavior, and warnings
-- Commit documentation and verify clean status
+- Create a temporary clean checkout using git archive or git clone
+- Run the existing build-and-test script there
+- Inspect final test summary
+- Compare git status of the original repository
+- Document the result and create a checkpoint only if documentation changes were made
 
 ## Stop Conditions
 
-- No real graphical Qt display available
-- Launch fails or UI cannot be verified visually
-- Scope expands beyond smoke test
+- Clean checkout fails to build
+- Tests fail
+- A missing committed file or required configuration is discovered
+- Scope expands beyond clean-checkout verification
 
 ## Next Task After Completion
 
-Define the next smallest development objective from the verified Phase 1 foundation.
-
-
-## Platform Strategy Documentation
-
-Status: Complete — 2026-09-03.
-
-The platform classification was extended to Apple platforms as documentation only. The next active objective remains the real desktop smoke test, still blocked until a real graphical Qt session is available.
-
-## Status
-
-Complete — 2026-09-03.
-
-## Next Logical State
-
-Define the next smallest development objective from the verified Phase 1 foundation. Do not begin automatically.
+Define the next smallest development objective from the evidence produced by this verification. Do not begin automatically.
