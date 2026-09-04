@@ -138,3 +138,12 @@ Date: 2026-09-03
 - Classified macOS, iOS, and iPadOS as future portability targets
 - Recorded platform-neutral architectural constraints
 - No application source changes
+
+## v0.1.9 — Real Desktop Smoke Test
+
+Date: 2026-09-03
+
+- Completed real desktop smoke test via Termux:X11.
+- Verified UI render, new/save/open project lifecycle, background responsiveness.
+- Regression tests pass.
+- No application source changes.

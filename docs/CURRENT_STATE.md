@@ -236,3 +236,19 @@ Status: Documented.
 - Termux/Ubuntu: development environment only
 
 No Apple or Android implementation has been started. No application source files were changed for this classification.
+
+## Phase 1 Real Desktop Smoke Test — Complete
+
+Status: Complete.
+
+Verified against a real Qt X11 desktop session using Termux:X11:
+- Reelcraft launched and rendered the main window.
+- New Project displayed generated project name and UUID.
+- Save Project persisted JSON project to /tmp/reelcraft-smoke.reel.
+- Open Project reopened the persisted project with matching name and UUID.
+- Run Background Demo updated status without freezing the UI.
+- Automated regression tests passed: 15 passed, 0 failed.
+
+Environment observations:
+- No window title/decorations visible because Termux:X11 lacks a window manager; not considered a Reelcraft defect.
+- Known Qt locale warning appears; no functional impact.

@@ -366,3 +366,15 @@ Define Next Objective
 - Extended platform strategy without creating a new decision
 - Recorded macOS/iOS/iPadOS classification and portability constraints
 - No application source files changed
+
+## 2026-09-03 — Real Desktop Smoke Test Completed
+
+- Established real graphical Qt X11 session using Termux:X11 and Ubuntu proot.
+- Verified Qt XCB platform plugin path.
+- Launched reelcraft against DISPLAY=:0.
+- New Project: label updated with UUID.
+- Save Project: saved /tmp/reelcraft-smoke.reel with correct JSON.
+- Open Project: reopened same project and label matched.
+- Run Background Demo: status updated, UI remained responsive.
+- Regression: 15 tests pass, git status clean.
+- No application source changes.
