@@ -507,3 +507,12 @@ Define Next Objective
 - Confirmed app/test builds and 38 passing tests.
 - Original repository remained clean.
 - No source changes.
+
+
+## 2026-09-04 — Project Schema Versioning
+
+- Added schemaVersion field to Project persistence.
+- New projects default to current schema version.
+- Legacy projects without version load as schema 1.
+- Added default and legacy-version tests.
+- Full suite: 40 passed, 0 failed.

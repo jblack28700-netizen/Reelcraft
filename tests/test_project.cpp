@@ -1,6 +1,7 @@
 #include <QtTest>
 #include <QFile>
 #include <QJsonObject>
+#include <QJsonDocument>
 #include <QCryptographicHash>
 #include <QLabel>
 #include <QPushButton>
@@ -65,6 +66,8 @@ private slots:
     void focusedButtonKeyPressEmitsViewportDelta();
     void invalidPersistedViewerStateFallsBackToDefaults();
     void applicationAdjustViewportSlots();
+    void projectDefaultsHaveSchemaVersion();
+    void legacyProjectWithoutVersionLoadsSchemaOne();
 };
 
 void ProjectTest::initTestCase()
@@ -767,6 +770,35 @@ void ProjectTest::applicationAdjustViewportSlots()
     QCOMPARE(app.viewportState()->pitch(), -5.0);
     QCOMPARE(app.viewportState()->roll(), 7.0);
     QCOMPARE(app.viewportState()->fieldOfView(), 80.0);
+}
+
+void ProjectTest::projectDefaultsHaveSchemaVersion()
+{
+    Project project;
+    QCOMPARE(project.schemaVersion(), Project::CurrentSchemaVersion);
+}
+
+void ProjectTest::legacyProjectWithoutVersionLoadsSchemaOne()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    QJsonObject legacy;
+    legacy.insert(QStringLiteral("id"), QStringLiteral("legacy-id"));
+    legacy.insert(QStringLiteral("name"), QStringLiteral("Legacy Project"));
+    legacy.insert(QStringLiteral("created"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+
+    const QString filePath = tempDir.filePath(QStringLiteral("legacy.reel"));
+    QFile file(filePath);
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
+    file.write(QJsonDocument(legacy).toJson(QJsonDocument::Compact));
+    file.close();
+
+    bool ok = false;
+    Project loaded = Project::load(filePath, &ok);
+
+    QVERIFY(ok);
+    QCOMPARE(loaded.schemaVersion(), 1);
 }
 QTEST_MAIN(ProjectTest)
 #include "test_project.moc"

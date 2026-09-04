@@ -293,3 +293,12 @@ Date: 2026-09-04
 - Verified Phase 2 workflow from clean checkout.
 - 38 automated tests pass.
 - No application source changes.
+
+
+## v0.2.14 — Project Schema Versioning
+
+Date: 2026-09-04
+
+- Added project schema versioning.
+- Preserved backward compatibility with version-less project files.
+- Full test suite: 40 passed, 0 failed.

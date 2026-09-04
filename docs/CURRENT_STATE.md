@@ -434,3 +434,15 @@ Verified the Phase 2 build-and-test workflow from a clean Git checkout:
 - Test build succeeded.
 - Automated tests: 38 passed, 0 failed.
 - No application source changes.
+
+
+## Phase 2 Project Schema Versioning — Complete
+
+Status: Complete.
+
+Project JSON now includes a `schemaVersion` field.
+- New projects default to schema version 2.
+- Existing project files without `schemaVersion` load as version 1.
+- `schemaVersion()` exposes the loaded/default version.
+
+Automated tests: 40 passed, 0 failed.

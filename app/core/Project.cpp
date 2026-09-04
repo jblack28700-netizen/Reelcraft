@@ -48,12 +48,18 @@ void Project::setViewerState(const QJsonObject &viewerState)
     m_viewerState = viewerState;
 }
 
+int Project::schemaVersion() const
+{
+    return m_schemaVersion;
+}
+
 bool Project::save(const QString &filePath, QString *error) const
 {
     QJsonObject object;
     object.insert(QStringLiteral("id"), m_id);
     object.insert(QStringLiteral("name"), m_name);
     object.insert(QStringLiteral("created"), m_created.toString(Qt::ISODateWithMs));
+    object.insert(QStringLiteral("schemaVersion"), m_schemaVersion);
     if (!m_viewerState.isEmpty()) {
         object.insert(QStringLiteral("viewerState"), m_viewerState);
     }
@@ -122,6 +128,8 @@ Project Project::load(const QString &filePath, bool *ok, QString *error)
     project.m_id = id;
     project.m_name = name;
     project.m_created = created;
+    const int schemaVersion = object.value(QStringLiteral("schemaVersion")).toInt(1);
+    project.m_schemaVersion = schemaVersion > 0 ? schemaVersion : 1;
 
     const QJsonValue viewerStateValue = object.value(QStringLiteral("viewerState"));
     if (viewerStateValue.isObject()) {
