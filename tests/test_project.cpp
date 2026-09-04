@@ -48,6 +48,8 @@ private slots:
     void viewportStateSettersEmitSignalsOnlyOnChange();
     void applicationViewportStateIsValid();
     void applicationResetViewportRestoresDefaults();
+    void mainWindowViewerLabelsUpdate();
+    void mainWindowResetViewportButtonEmitsSignal();
 };
 
 void ProjectTest::initTestCase()
@@ -367,6 +369,43 @@ void ProjectTest::applicationResetViewportRestoresDefaults()
     QCOMPARE(state->pitch(), 0.0);
     QCOMPARE(state->roll(), 0.0);
     QCOMPARE(state->fieldOfView(), 90.0);
+}
+
+void ProjectTest::mainWindowViewerLabelsUpdate()
+{
+    TestMainWindow window;
+
+    window.showYaw(30.5);
+    window.showPitch(-15.25);
+    window.showRoll(45.0);
+    window.showFieldOfView(110.0);
+
+    auto *yaw = window.findChild<QLabel*>("yawLabel");
+    auto *pitch = window.findChild<QLabel*>("pitchLabel");
+    auto *roll = window.findChild<QLabel*>("rollLabel");
+    auto *fov = window.findChild<QLabel*>("fieldOfViewLabel");
+
+    QVERIFY(yaw);
+    QVERIFY(pitch);
+    QVERIFY(roll);
+    QVERIFY(fov);
+
+    QCOMPARE(yaw->text(), QStringLiteral("Yaw: 30.50"));
+    QCOMPARE(pitch->text(), QStringLiteral("Pitch: -15.25"));
+    QCOMPARE(roll->text(), QStringLiteral("Roll: 45.00"));
+    QCOMPARE(fov->text(), QStringLiteral("FOV: 110.00"));
+}
+
+void ProjectTest::mainWindowResetViewportButtonEmitsSignal()
+{
+    TestMainWindow window;
+    QSignalSpy spy(&window, &MainWindow::resetViewportRequested);
+
+    auto *button = window.findChild<QPushButton*>("resetViewportButton");
+    QVERIFY(button);
+
+    button->click();
+    QCOMPARE(spy.count(), 1);
 }
 QTEST_MAIN(ProjectTest)
 #include "test_project.moc"

@@ -2,6 +2,7 @@
 
 #include "application/Application.h"
 #include "ui/MainWindow.h"
+#include "viewer/ViewportState.h"
 
 int main(int argc, char *argv[])
 {
@@ -21,11 +22,25 @@ int main(int argc, char *argv[])
                      &application, &Application::openProject);
     QObject::connect(&window, &MainWindow::backgroundDemoRequested,
                      &application, &Application::runBackgroundDemo);
+    QObject::connect(&window, &MainWindow::resetViewportRequested,
+                     &application, &Application::resetViewport);
 
     QObject::connect(&application, &Application::projectChanged,
                      &window, &MainWindow::showProject);
     QObject::connect(&application, &Application::backgroundCompleted,
                      &window, &MainWindow::showStatus);
+
+    ViewportState *viewport = application.viewportState();
+    if (viewport) {
+        QObject::connect(viewport, &ViewportState::yawChanged,
+                         &window, &MainWindow::showYaw);
+        QObject::connect(viewport, &ViewportState::pitchChanged,
+                         &window, &MainWindow::showPitch);
+        QObject::connect(viewport, &ViewportState::rollChanged,
+                         &window, &MainWindow::showRoll);
+        QObject::connect(viewport, &ViewportState::fieldOfViewChanged,
+                         &window, &MainWindow::showFieldOfView);
+    }
 
     return app.exec();
 }

@@ -190,3 +190,12 @@ Date: 2026-09-03
 - Added resetViewport behavior.
 - Added automated application-level viewer state tests.
 - Full test suite: 23 passed, 0 failed.
+
+## v0.2.2 — UI Viewer Readout
+
+Date: 2026-09-03
+
+- Added viewer yaw/pitch/roll/FOV readout.
+- Added Reset Viewport UI action.
+- Added UI-level viewer state tests.
+- Full test suite: 25 passed, 0 failed.

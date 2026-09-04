@@ -418,3 +418,11 @@ Define Next Objective
 - Added resetViewport slot.
 - Added tests for application-level viewer state and reset behavior.
 - Full suite: 23 passed, 0 failed.
+
+## 2026-09-03 — UI Viewer Readout
+
+- Added yaw/pitch/roll/FOV readout labels to MainWindow.
+- Added Reset Viewport button and resetViewportRequested signal.
+- Wired ViewerState signals in main.cpp.
+- Added UI tests for viewer labels and reset button.
+- Full suite: 25 passed, 0 failed.

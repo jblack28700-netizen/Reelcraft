@@ -2,8 +2,8 @@
 
 ## Phase 2 Status
 
-Application-level viewport state integration complete — 2026-09-03.
+UI viewer readout complete — 2026-09-03.
 
 ## Next Logical State
 
-Define the next smallest Phase 2 development objective from the verified application-level viewer state. Do not begin automatically.
+Define the next smallest Phase 2 development objective from the verified UI viewer readout. Do not begin automatically.

@@ -18,28 +18,45 @@ MainWindow::MainWindow(QWidget *parent)
     m_projectLabel = new QLabel(QStringLiteral("No project"), central);
     m_statusLabel = new QLabel(QStringLiteral("Ready"), central);
 
+    m_yawLabel = new QLabel(QStringLiteral("Yaw: 0.0"), central);
+    m_pitchLabel = new QLabel(QStringLiteral("Pitch: 0.0"), central);
+    m_rollLabel = new QLabel(QStringLiteral("Roll: 0.0"), central);
+    m_fieldOfViewLabel = new QLabel(QStringLiteral("FOV: 90.0"), central);
+
     m_newProjectButton = new QPushButton(QStringLiteral("New Project"), central);
     m_saveButton = new QPushButton(QStringLiteral("Save Project"), central);
     m_openButton = new QPushButton(QStringLiteral("Open Project"), central);
     m_backgroundButton = new QPushButton(QStringLiteral("Run Background Demo"), central);
+    m_resetViewportButton = new QPushButton(QStringLiteral("Reset Viewport"), central);
 
     m_projectLabel->setObjectName("projectLabel");
     m_statusLabel->setObjectName("statusLabel");
+    m_yawLabel->setObjectName("yawLabel");
+    m_pitchLabel->setObjectName("pitchLabel");
+    m_rollLabel->setObjectName("rollLabel");
+    m_fieldOfViewLabel->setObjectName("fieldOfViewLabel");
     m_newProjectButton->setObjectName("newProjectButton");
     m_saveButton->setObjectName("saveProjectButton");
     m_openButton->setObjectName("openProjectButton");
     m_backgroundButton->setObjectName("backgroundDemoButton");
+    m_resetViewportButton->setObjectName("resetViewportButton");
 
     layout->addWidget(m_projectLabel);
+    layout->addWidget(m_yawLabel);
+    layout->addWidget(m_pitchLabel);
+    layout->addWidget(m_rollLabel);
+    layout->addWidget(m_fieldOfViewLabel);
     layout->addWidget(m_newProjectButton);
     layout->addWidget(m_saveButton);
     layout->addWidget(m_openButton);
     layout->addWidget(m_backgroundButton);
+    layout->addWidget(m_resetViewportButton);
     layout->addWidget(m_statusLabel);
 
     setCentralWidget(central);
 
     connect(m_newProjectButton, &QPushButton::clicked, this, &MainWindow::newProjectRequested);
+    connect(m_resetViewportButton, &QPushButton::clicked, this, &MainWindow::resetViewportRequested);
 
     connect(m_saveButton, &QPushButton::clicked, this, [this]() {
         const QString filePath = chooseSaveFilePath();
@@ -79,4 +96,24 @@ void MainWindow::showProject(const Project &project)
 void MainWindow::showStatus(const QString &message)
 {
     m_statusLabel->setText(message);
+}
+
+void MainWindow::showYaw(double value)
+{
+    m_yawLabel->setText(QStringLiteral("Yaw: %1").arg(value, 0, 'f', 2));
+}
+
+void MainWindow::showPitch(double value)
+{
+    m_pitchLabel->setText(QStringLiteral("Pitch: %1").arg(value, 0, 'f', 2));
+}
+
+void MainWindow::showRoll(double value)
+{
+    m_rollLabel->setText(QStringLiteral("Roll: %1").arg(value, 0, 'f', 2));
+}
+
+void MainWindow::showFieldOfView(double value)
+{
+    m_fieldOfViewLabel->setText(QStringLiteral("FOV: %1").arg(value, 0, 'f', 2));
 }
