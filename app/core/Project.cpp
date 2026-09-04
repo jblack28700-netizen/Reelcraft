@@ -129,6 +129,14 @@ Project Project::load(const QString &filePath, bool *ok, QString *error)
     project.m_name = name;
     project.m_created = created;
     const int schemaVersion = object.value(QStringLiteral("schemaVersion")).toInt(1);
+
+    if (schemaVersion > Project::CurrentSchemaVersion) {
+        if (error) {
+            *error = QStringLiteral("Project file was created with a newer unsupported schema version.");
+        }
+        return invalid;
+    }
+
     project.m_schemaVersion = schemaVersion > 0 ? schemaVersion : 1;
 
     const QJsonValue viewerStateValue = object.value(QStringLiteral("viewerState"));

@@ -69,6 +69,7 @@ private slots:
     void projectDefaultsHaveSchemaVersion();
     void legacyProjectWithoutVersionLoadsSchemaOne();
     void projectSchemaVersionRoundTrip();
+    void futureProjectSchemaVersionIsRejected();
 };
 
 void ProjectTest::initTestCase()
@@ -819,6 +820,32 @@ void ProjectTest::projectSchemaVersionRoundTrip()
 
     QVERIFY(ok);
     QCOMPARE(loaded.schemaVersion(), Project::CurrentSchemaVersion);
+}
+
+void ProjectTest::futureProjectSchemaVersionIsRejected()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    QJsonObject future;
+    future.insert(QStringLiteral("id"), QStringLiteral("future-id"));
+    future.insert(QStringLiteral("name"), QStringLiteral("Future Project"));
+    future.insert(QStringLiteral("created"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+    future.insert(QStringLiteral("schemaVersion"), Project::CurrentSchemaVersion + 1);
+
+    const QString filePath = tempDir.filePath(QStringLiteral("future_schema.reel"));
+    QFile file(filePath);
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
+    file.write(QJsonDocument(future).toJson(QJsonDocument::Compact));
+    file.close();
+
+    bool ok = true;
+    QString error;
+    Project loaded = Project::load(filePath, &ok, &error);
+
+    QVERIFY(!ok);
+    QVERIFY(!loaded.isValid());
+    QVERIFY(error.contains(QStringLiteral("newer unsupported schema version")));
 }
 QTEST_MAIN(ProjectTest)
 #include "test_project.moc"
