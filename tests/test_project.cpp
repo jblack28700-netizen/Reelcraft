@@ -9,6 +9,7 @@
 #include "application/Application.h"
 #include "core/Project.h"
 #include "ui/MainWindow.h"
+#include "viewer/ViewportState.h"
 
 class TestMainWindow : public MainWindow
 {
@@ -39,6 +40,12 @@ private slots:
     void applicationSaveInvalidPathEmitsError();
     void applicationOpenMissingFileEmitsError();
     void projectLifecycleDoesNotModifyOriginalMedia();
+    void viewportStateDefaultsAreValid();
+    void viewportStateYawNormalizes();
+    void viewportStatePitchClamps();
+    void viewportStateRollNormalizes();
+    void viewportStateFieldOfViewClamps();
+    void viewportStateSettersEmitSignalsOnlyOnChange();
 };
 
 void ProjectTest::initTestCase()
@@ -248,5 +255,86 @@ void ProjectTest::projectLifecycleDoesNotModifyOriginalMedia()
     QCOMPARE(QCryptographicHash::hash(afterBytes, QCryptographicHash::Sha256), originalHash);
 }
 
+
+void ProjectTest::viewportStateDefaultsAreValid()
+{
+    ViewportState state;
+
+    QCOMPARE(state.yaw(), 0.0);
+    QCOMPARE(state.pitch(), 0.0);
+    QCOMPARE(state.roll(), 0.0);
+    QCOMPARE(state.fieldOfView(), 90.0);
+}
+
+void ProjectTest::viewportStateYawNormalizes()
+{
+    ViewportState state;
+
+    state.setYaw(190.0);
+    QVERIFY(qAbs(state.yaw() - (-170.0)) < 0.000001);
+
+    state.setYaw(-190.0);
+    QVERIFY(qAbs(state.yaw() - 170.0) < 0.000001);
+}
+
+void ProjectTest::viewportStatePitchClamps()
+{
+    ViewportState state;
+
+    state.setPitch(95.0);
+    QCOMPARE(state.pitch(), 90.0);
+
+    state.setPitch(-95.0);
+    QCOMPARE(state.pitch(), -90.0);
+}
+
+void ProjectTest::viewportStateRollNormalizes()
+{
+    ViewportState state;
+
+    state.setRoll(200.0);
+    QVERIFY(qAbs(state.roll() - (-160.0)) < 0.000001);
+}
+
+void ProjectTest::viewportStateFieldOfViewClamps()
+{
+    ViewportState state;
+
+    state.setFieldOfView(10.0);
+    QCOMPARE(state.fieldOfView(), 20.0);
+
+    state.setFieldOfView(170.0);
+    QCOMPARE(state.fieldOfView(), 140.0);
+}
+
+void ProjectTest::viewportStateSettersEmitSignalsOnlyOnChange()
+{
+    ViewportState state;
+
+    QSignalSpy yawSpy(&state, &ViewportState::yawChanged);
+    QSignalSpy pitchSpy(&state, &ViewportState::pitchChanged);
+    QSignalSpy rollSpy(&state, &ViewportState::rollChanged);
+    QSignalSpy fovSpy(&state, &ViewportState::fieldOfViewChanged);
+
+    state.setYaw(0.0);
+    state.setPitch(0.0);
+    state.setRoll(0.0);
+    state.setFieldOfView(90.0);
+
+    QCOMPARE(yawSpy.count(), 0);
+    QCOMPARE(pitchSpy.count(), 0);
+    QCOMPARE(rollSpy.count(), 0);
+    QCOMPARE(fovSpy.count(), 0);
+
+    state.setYaw(45.0);
+    state.setPitch(-30.0);
+    state.setRoll(10.0);
+    state.setFieldOfView(75.0);
+
+    QCOMPARE(yawSpy.count(), 1);
+    QCOMPARE(pitchSpy.count(), 1);
+    QCOMPARE(rollSpy.count(), 1);
+    QCOMPARE(fovSpy.count(), 1);
+}
 QTEST_MAIN(ProjectTest)
 #include "test_project.moc"

@@ -401,3 +401,12 @@ Define Next Objective
 - Recorded verified Definition-of-Done evidence.
 - Set NEXT_TASK.md to Phase 2 planning state.
 - No application source changes.
+
+## 2026-09-03 — Phase 2 Viewer State Foundation
+
+- Added app/viewer/ViewportState.h and .cpp
+- Added yaw/pitch/roll/FOV model with clamping and normalization
+- Added signal emission only on actual value changes
+- Added viewer-state tests to existing test suite
+- Full suite: 21 passed, 0 failed
+- No Phase 1 implementation changes

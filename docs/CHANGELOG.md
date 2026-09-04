@@ -171,3 +171,13 @@ Date: 2026-09-03
 - Formally declared Phase 1 Desktop Application Foundation complete.
 - Consolidated verified Phase 1 evidence.
 - No application source changes.
+
+## v0.2.0 — Phase 2 Viewer State Foundation
+
+Date: 2026-09-03
+
+- Added platform-independent ViewportState model
+- Added viewer orientation/FOV validation
+- Added automated viewer-state tests
+- Existing Phase 1 tests continue to pass
+- No rendering, media, playback, or camera implementation introduced

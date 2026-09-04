@@ -285,3 +285,16 @@ Verified Definition-of-Done evidence:
 - Clean-checkout build-and-test workflow verified
 - Architecture boundaries preserved
 - Working tree clean
+
+## Phase 2 Viewer State Foundation — Complete
+
+Status: Complete.
+
+Implemented the platform-independent `ViewportState` model for the future 360 viewer:
+- Yaw and roll normalized to [-180, 180)
+- Pitch clamped to [-90, 90]
+- Field of view clamped to [20, 140]
+- Change signals emitted only on actual state changes
+- Independent of QtWidgets, rendering, playback, and camera/media code
+
+Automated tests: 21 passed, 0 failed.
