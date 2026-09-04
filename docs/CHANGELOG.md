@@ -155,3 +155,11 @@ Date: 2026-09-03
 - Verified Phase 1 build/test workflow from clean checkout
 - 15 automated tests pass
 - No application source changes
+
+## v0.1.11 — Environment Documentation Alignment
+
+Date: 2026-09-03
+
+- Corrected verified test count to 15 in DEVELOPMENT_ENVIRONMENT.md.
+- Documented manual desktop smoke path.
+- No application source changes.

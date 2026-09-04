@@ -387,3 +387,10 @@ Define Next Objective
 - Confirmed 15 automated tests pass
 - Original repository remained clean
 - No source changes
+
+## 2026-09-03 — Environment Documentation Alignment
+
+- Corrected verified automated test count from 14 to 15.
+- Corrected Qt Test suite count from 14 to 15.
+- Documented manual desktop smoke via Termux:X11/XCB.
+- No application source changes.
