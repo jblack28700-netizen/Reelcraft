@@ -250,3 +250,11 @@ Date: 2026-09-04
 - Restore viewer state on open.
 - Preserve backward compatibility for projects without viewer state.
 - Full test suite: 34 passed, 0 failed.
+
+
+## v0.2.9 — Restored Viewer State UI Integration Test
+
+Date: 2026-09-04
+
+- Added UI integration test for restored viewer state.
+- Full test suite: 35 passed, 0 failed.

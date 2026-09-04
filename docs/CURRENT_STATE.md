@@ -383,3 +383,12 @@ Viewer state is now persisted inside project JSON:
 - Existing projects without viewer state remain valid.
 
 Automated tests: 34 passed, 0 failed.
+
+
+## Phase 2 Restored Viewer State UI Integration Test — Complete
+
+Status: Complete.
+
+Added an automated UI integration test proving that viewer state restored by Application::openProject updates MainWindow yaw/pitch/roll/FOV labels through the existing signal wiring.
+
+Automated tests: 35 passed, 0 failed.

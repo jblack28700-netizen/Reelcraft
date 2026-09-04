@@ -469,3 +469,9 @@ Define Next Objective
 - Open restores viewer state if present.
 - Added save/open persistence integration test.
 - Full suite: 34 passed, 0 failed.
+
+
+## 2026-09-04 — Restored Viewer State UI Integration Test
+
+- Added test for restored viewer state updating MainWindow labels.
+- Full suite: 35 passed, 0 failed.
