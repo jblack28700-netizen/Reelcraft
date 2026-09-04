@@ -523,3 +523,10 @@ Define Next Objective
 - Added project schema version round-trip test.
 - Verified new projects preserve current schema version after save/load.
 - Full suite: 41 passed, 0 failed.
+
+
+## 2026-09-04 — Future Schema Version Rejection
+
+- Project::load now rejects newer unsupported schema versions.
+- Added future schema rejection test.
+- Full suite: 42 passed, 0 failed.

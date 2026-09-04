@@ -455,3 +455,12 @@ Status: Complete.
 Added an automated round-trip test verifying that a newly saved project preserves Project::CurrentSchemaVersion when loaded.
 
 Automated tests: 41 passed, 0 failed.
+
+
+## Phase 2 Future Schema Version Rejection — Complete
+
+Status: Complete.
+
+Project::load now rejects project files whose schemaVersion is newer than the current supported schema version.
+
+Automated tests: 42 passed, 0 failed.

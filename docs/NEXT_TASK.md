@@ -2,8 +2,8 @@
 
 ## Phase 2 Status
 
-Project schema version round trip complete — 2026-09-04.
+Future schema version rejection complete — 2026-09-04.
 
 ## Next Logical State
 
-Define the next smallest Phase 2 development objective from the verified project schema versioning. Do not begin automatically.
+Define the next smallest Phase 2 development objective from the verified schema compatibility behavior. Do not begin automatically.

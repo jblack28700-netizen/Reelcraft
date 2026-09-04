@@ -310,3 +310,11 @@ Date: 2026-09-04
 
 - Added automated schema version round-trip verification.
 - Full test suite: 41 passed, 0 failed.
+
+
+## v0.2.16 — Future Schema Version Rejection
+
+Date: 2026-09-04
+
+- Reject project files created with a newer unsupported schema version.
+- Full test suite: 42 passed, 0 failed.
