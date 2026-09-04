@@ -441,3 +441,9 @@ Define Next Objective
 - Wired keyboard deltas to Application-owned ViewportState in main.cpp.
 - Added tests for keyboard signal emission and state updates.
 - Full suite: 29 passed, 0 failed.
+
+## 2026-09-03 — New Project Resets Viewer State
+
+- Application::newProject now calls resetViewport.
+- Added test verifying viewer state resets on new project.
+- Full suite: 30 passed, 0 failed.

@@ -55,6 +55,7 @@ private slots:
     void applicationResetViewportUpdatesMainWindowLabels();
     void mainWindowKeyboardEmitsViewportDeltas();
     void applicationKeyboardUpdatesViewportState();
+    void newProjectResetsViewport();
 };
 
 void ProjectTest::initTestCase()
@@ -541,6 +542,25 @@ void ProjectTest::applicationKeyboardUpdatesViewportState()
     QCOMPARE(state->pitch(), -5.0);
     QCOMPARE(state->roll(), 5.0);
     QCOMPARE(state->fieldOfView(), 95.0);
+}
+
+void ProjectTest::newProjectResetsViewport()
+{
+    Application app;
+    ViewportState *state = app.viewportState();
+    QVERIFY(state);
+
+    state->setYaw(30.0);
+    state->setPitch(-45.0);
+    state->setRoll(15.0);
+    state->setFieldOfView(120.0);
+
+    app.newProject();
+
+    QCOMPARE(state->yaw(), 0.0);
+    QCOMPARE(state->pitch(), 0.0);
+    QCOMPARE(state->roll(), 0.0);
+    QCOMPARE(state->fieldOfView(), 90.0);
 }
 QTEST_MAIN(ProjectTest)
 #include "test_project.moc"

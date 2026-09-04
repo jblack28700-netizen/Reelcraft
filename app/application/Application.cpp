@@ -34,6 +34,7 @@ void Application::newProject()
 {
     m_currentProject = Project();
     m_hasProject = true;
+    resetViewport();
     emit projectChanged(m_currentProject);
 }
 

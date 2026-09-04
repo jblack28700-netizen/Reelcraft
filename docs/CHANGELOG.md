@@ -215,3 +215,11 @@ Date: 2026-09-03
 - Added keyboard controls for viewer yaw/pitch/roll/FOV.
 - Added automated keyboard-control tests.
 - Full test suite: 29 passed, 0 failed.
+
+## v0.2.5 — New Project Viewer Reset
+
+Date: 2026-09-03
+
+- Added viewer-state reset on new project creation.
+- Added automated reset test.
+- Full test suite: 30 passed, 0 failed.
