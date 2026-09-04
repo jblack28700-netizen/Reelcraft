@@ -60,6 +60,7 @@ private slots:
     void openProjectResetsViewport();
     void viewportStateJsonRoundTrip();
     void viewportStateRejectsInvalidJson();
+    void applicationSaveAndOpenPersistsViewportState();
 };
 
 void ProjectTest::initTestCase()
@@ -624,6 +625,36 @@ void ProjectTest::viewportStateRejectsInvalidJson()
     QJsonObject empty;
     QVERIFY(!state.readFromJsonObject(empty, &error));
     QVERIFY(!error.isEmpty());
+}
+
+void ProjectTest::applicationSaveAndOpenPersistsViewportState()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    Application app;
+    ViewportState *state = app.viewportState();
+    QVERIFY(state);
+
+    app.newProject();
+    state->setYaw(33.0);
+    state->setPitch(-12.0);
+    state->setRoll(7.0);
+    state->setFieldOfView(100.0);
+
+    const QString filePath = tempDir.filePath(QStringLiteral("viewer_persist.reel"));
+    QVERIFY(app.saveProject(filePath));
+
+    Application reopened;
+    ViewportState *restored = reopened.viewportState();
+    QVERIFY(restored);
+
+    QVERIFY(reopened.openProject(filePath));
+
+    QCOMPARE(restored->yaw(), 33.0);
+    QCOMPARE(restored->pitch(), -12.0);
+    QCOMPARE(restored->roll(), 7.0);
+    QCOMPARE(restored->fieldOfView(), 100.0);
 }
 QTEST_MAIN(ProjectTest)
 #include "test_project.moc"

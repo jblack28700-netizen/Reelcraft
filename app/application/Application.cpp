@@ -45,6 +45,8 @@ bool Application::saveProject(const QString &filePath)
         return false;
     }
 
+    m_currentProject.setViewerState(m_viewportState ? m_viewportState->toJsonObject() : QJsonObject());
+
     QString error;
     const bool ok = m_currentProject.save(filePath, &error);
     if (!ok) {
@@ -67,6 +69,12 @@ bool Application::openProject(const QString &filePath)
     m_currentProject = loaded;
     m_hasProject = true;
     resetViewport();
+
+    if (m_viewportState && !m_currentProject.viewerState().isEmpty()) {
+        QString viewerError;
+        m_viewportState->readFromJsonObject(m_currentProject.viewerState(), &viewerError);
+    }
+
     emit projectChanged(m_currentProject);
     return true;
 }

@@ -370,3 +370,16 @@ ViewportState now supports JSON object serialization/deserialization:
 - Independent from Project persistence.
 
 Automated tests: 33 passed, 0 failed.
+
+
+## Phase 2 Viewer State Persistence — Complete
+
+Status: Complete.
+
+Viewer state is now persisted inside project JSON:
+- Project stores an optional `viewerState` object.
+- Application saves current viewer state before project save.
+- Application restores viewer state after project open.
+- Existing projects without viewer state remain valid.
+
+Automated tests: 34 passed, 0 failed.

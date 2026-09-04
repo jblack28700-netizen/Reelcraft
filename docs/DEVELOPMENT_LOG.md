@@ -460,3 +460,12 @@ Define Next Objective
 - Added toJsonObject and readFromJsonObject.
 - Added round-trip and invalid-JSON tests.
 - Full suite: 33 passed, 0 failed.
+
+
+## 2026-09-04 — Viewer State Persistence
+
+- Added viewerState object to Project model.
+- Save stores application viewer state.
+- Open restores viewer state if present.
+- Added save/open persistence integration test.
+- Full suite: 34 passed, 0 failed.

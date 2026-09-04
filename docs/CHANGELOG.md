@@ -240,3 +240,13 @@ Date: 2026-09-04
 - Added ViewportState JSON export/import.
 - Added automated serialization tests.
 - Full test suite: 33 passed, 0 failed.
+
+
+## v0.2.8 — Viewer State Persistence
+
+Date: 2026-09-04
+
+- Persist viewer state inside project JSON.
+- Restore viewer state on open.
+- Preserve backward compatibility for projects without viewer state.
+- Full test suite: 34 passed, 0 failed.

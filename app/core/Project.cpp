@@ -38,12 +38,25 @@ void Project::setName(const QString &name)
     m_name = name;
 }
 
+QJsonObject Project::viewerState() const
+{
+    return m_viewerState;
+}
+
+void Project::setViewerState(const QJsonObject &viewerState)
+{
+    m_viewerState = viewerState;
+}
+
 bool Project::save(const QString &filePath, QString *error) const
 {
     QJsonObject object;
     object.insert(QStringLiteral("id"), m_id);
     object.insert(QStringLiteral("name"), m_name);
     object.insert(QStringLiteral("created"), m_created.toString(Qt::ISODateWithMs));
+    if (!m_viewerState.isEmpty()) {
+        object.insert(QStringLiteral("viewerState"), m_viewerState);
+    }
 
     QFile file(filePath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
@@ -109,6 +122,11 @@ Project Project::load(const QString &filePath, bool *ok, QString *error)
     project.m_id = id;
     project.m_name = name;
     project.m_created = created;
+
+    const QJsonValue viewerStateValue = object.value(QStringLiteral("viewerState"));
+    if (viewerStateValue.isObject()) {
+        project.m_viewerState = viewerStateValue.toObject();
+    }
 
     if (ok) {
         *ok = true;
