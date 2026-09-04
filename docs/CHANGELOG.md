@@ -181,3 +181,12 @@ Date: 2026-09-03
 - Added automated viewer-state tests
 - Existing Phase 1 tests continue to pass
 - No rendering, media, playback, or camera implementation introduced
+
+## v0.2.1 — Application-Level Viewport State
+
+Date: 2026-09-03
+
+- Integrated ViewportState into Application.
+- Added resetViewport behavior.
+- Added automated application-level viewer state tests.
+- Full test suite: 23 passed, 0 failed.

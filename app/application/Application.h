@@ -4,6 +4,8 @@
 
 #include "core/Project.h"
 
+class ViewportState;
+
 class Application : public QObject
 {
     Q_OBJECT
@@ -15,12 +17,14 @@ public:
 
     Project currentProject() const;
     bool hasProject() const;
+    ViewportState *viewportState() const;
 
 public slots:
     void newProject();
     bool saveProject(const QString &filePath);
     bool openProject(const QString &filePath);
     void runBackgroundDemo();
+    void resetViewport();
 
 signals:
     void projectChanged(const Project &project);
@@ -29,4 +33,5 @@ signals:
 private:
     Project m_currentProject;
     bool m_hasProject = false;
+    ViewportState *m_viewportState = nullptr;
 };

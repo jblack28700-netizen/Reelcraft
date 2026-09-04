@@ -410,3 +410,11 @@ Define Next Objective
 - Added viewer-state tests to existing test suite
 - Full suite: 21 passed, 0 failed
 - No Phase 1 implementation changes
+
+## 2026-09-03 — Application-Level Viewport State Integration
+
+- Application now owns a ViewportState instance.
+- Added viewportState accessor.
+- Added resetViewport slot.
+- Added tests for application-level viewer state and reset behavior.
+- Full suite: 23 passed, 0 failed.

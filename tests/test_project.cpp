@@ -46,6 +46,8 @@ private slots:
     void viewportStateRollNormalizes();
     void viewportStateFieldOfViewClamps();
     void viewportStateSettersEmitSignalsOnlyOnChange();
+    void applicationViewportStateIsValid();
+    void applicationResetViewportRestoresDefaults();
 };
 
 void ProjectTest::initTestCase()
@@ -335,6 +337,36 @@ void ProjectTest::viewportStateSettersEmitSignalsOnlyOnChange()
     QCOMPARE(pitchSpy.count(), 1);
     QCOMPARE(rollSpy.count(), 1);
     QCOMPARE(fovSpy.count(), 1);
+}
+
+void ProjectTest::applicationViewportStateIsValid()
+{
+    Application app;
+
+    QVERIFY(app.viewportState() != nullptr);
+    QCOMPARE(app.viewportState()->yaw(), 0.0);
+    QCOMPARE(app.viewportState()->pitch(), 0.0);
+    QCOMPARE(app.viewportState()->roll(), 0.0);
+    QCOMPARE(app.viewportState()->fieldOfView(), 90.0);
+}
+
+void ProjectTest::applicationResetViewportRestoresDefaults()
+{
+    Application app;
+    ViewportState *state = app.viewportState();
+    QVERIFY(state != nullptr);
+
+    state->setYaw(30.0);
+    state->setPitch(-45.0);
+    state->setRoll(15.0);
+    state->setFieldOfView(120.0);
+
+    app.resetViewport();
+
+    QCOMPARE(state->yaw(), 0.0);
+    QCOMPARE(state->pitch(), 0.0);
+    QCOMPARE(state->roll(), 0.0);
+    QCOMPARE(state->fieldOfView(), 90.0);
 }
 QTEST_MAIN(ProjectTest)
 #include "test_project.moc"

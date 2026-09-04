@@ -3,8 +3,11 @@
 #include <QtConcurrent/QtConcurrent>
 #include <QThread>
 
+#include "viewer/ViewportState.h"
+
 Application::Application(QObject *parent)
-    : QObject(parent)
+    : QObject(parent),
+      m_viewportState(new ViewportState(this))
 {
 }
 
@@ -20,6 +23,11 @@ Project Application::currentProject() const
 bool Application::hasProject() const
 {
     return m_hasProject;
+}
+
+ViewportState *Application::viewportState() const
+{
+    return m_viewportState;
 }
 
 void Application::newProject()
@@ -67,4 +75,16 @@ void Application::runBackgroundDemo()
         QThread::msleep(200);
         emit backgroundCompleted(QStringLiteral("Background task completed successfully."));
     });
+}
+
+void Application::resetViewport()
+{
+    if (!m_viewportState) {
+        return;
+    }
+
+    m_viewportState->setYaw(0.0);
+    m_viewportState->setPitch(0.0);
+    m_viewportState->setRoll(0.0);
+    m_viewportState->setFieldOfView(90.0);
 }

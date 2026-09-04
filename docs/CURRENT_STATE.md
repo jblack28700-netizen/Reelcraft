@@ -298,3 +298,14 @@ Implemented the platform-independent `ViewportState` model for the future 360 vi
 - Independent of QtWidgets, rendering, playback, and camera/media code
 
 Automated tests: 21 passed, 0 failed.
+
+## Phase 2 Application-Level Viewport State — Complete
+
+Status: Complete.
+
+Integrated `ViewportState` into the `Application` layer:
+- `Application` now owns a viewer state object.
+- `Application::viewportState()` returns a valid non-null pointer.
+- `Application::resetViewport()` restores default yaw/pitch/roll/FOV.
+
+No rendering, playback, media, or camera-specific code was introduced.
