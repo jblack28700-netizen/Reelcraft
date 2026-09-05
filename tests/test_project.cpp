@@ -106,6 +106,11 @@ private slots:
     void legacyProjectOpensWithEmptyMedia();
     void invalidPersistedMediaFallsBackSafely();
     void mainWindowImportButtonEmitsSignal();
+    void reopenWithAvailableMediaIsSilentAndIdentical();
+    void reopenAfterDeletingMediaFileFlagsUnavailable();
+    void reopenAfterMovingMediaFileFlagsUnavailable();
+    void duplicatePersistedMediaNormalizedOnOpenAndResave();
+    void newProjectClearsUnavailableMediaState();
 };
 
 void ProjectTest::initTestCase()
@@ -1531,6 +1536,174 @@ void ProjectTest::mainWindowImportButtonEmitsSignal()
     button->click();
     QCOMPARE(spy.count(), 1);
     QCOMPARE(spy.first().first().toString(), QStringLiteral("/tmp/reelcraft_media_test.bin"));
+}
+
+void ProjectTest::reopenWithAvailableMediaIsSilentAndIdentical()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString mediaPath = tempDir.filePath(QStringLiteral("available.mp4"));
+    QFile mediaFile(mediaPath);
+    QVERIFY(mediaFile.open(QIODevice::WriteOnly));
+    mediaFile.write(QByteArray(64, 'v'));
+    mediaFile.close();
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(mediaPath));
+
+    const QString projectPath = tempDir.filePath(QStringLiteral("project.reel"));
+    QVERIFY(app.saveProject(projectPath));
+
+    Application reopened;
+    QSignalSpy spy(&reopened, &Application::backgroundCompleted);
+    QVERIFY(reopened.openProject(projectPath));
+
+    QCOMPARE(reopened.mediaItems().size(), 1);
+    QCOMPARE(reopened.mediaItems().at(0).id(), app.mediaItems().at(0).id());
+    QVERIFY(!reopened.hasUnavailableMedia());
+    QCOMPARE(reopened.unavailableMediaCount(), 0);
+    QCOMPARE(spy.count(), 0);
+}
+
+void ProjectTest::reopenAfterDeletingMediaFileFlagsUnavailable()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString mediaPath = tempDir.filePath(QStringLiteral("delete_me.mp4"));
+    QFile mediaFile(mediaPath);
+    QVERIFY(mediaFile.open(QIODevice::WriteOnly));
+    mediaFile.write(QByteArray(32, 'd'));
+    mediaFile.close();
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(mediaPath));
+
+    const QString projectPath = tempDir.filePath(QStringLiteral("project.reel"));
+    QVERIFY(app.saveProject(projectPath));
+
+    // The referenced media disappears before reopen.
+    QVERIFY(QFile::remove(mediaPath));
+
+    Application reopened;
+    QSignalSpy spy(&reopened, &Application::backgroundCompleted);
+    QVERIFY(reopened.openProject(projectPath));
+
+    // The record is retained but flagged unavailable.
+    QCOMPARE(reopened.mediaItems().size(), 1);
+    QCOMPARE(reopened.mediaItems().at(0).fileName(), QStringLiteral("delete_me.mp4"));
+    QVERIFY(reopened.hasUnavailableMedia());
+    QCOMPARE(reopened.unavailableMediaCount(), 1);
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(spy.first().first().toString().contains(QStringLiteral("unavailable")));
+}
+
+void ProjectTest::reopenAfterMovingMediaFileFlagsUnavailable()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString originalPath = tempDir.filePath(QStringLiteral("moved.mp4"));
+    QFile mediaFile(originalPath);
+    QVERIFY(mediaFile.open(QIODevice::WriteOnly));
+    mediaFile.write(QByteArray(24, 'm'));
+    mediaFile.close();
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(originalPath));
+
+    const QString projectPath = tempDir.filePath(QStringLiteral("project.reel"));
+    QVERIFY(app.saveProject(projectPath));
+
+    // The file moves to a new path before reopen; the recorded reference
+    // (path-based) no longer resolves.
+    const QString movedPath = tempDir.filePath(QStringLiteral("moved_away.mp4"));
+    QVERIFY(QFile::rename(originalPath, movedPath));
+
+    Application reopened;
+    QVERIFY(reopened.openProject(projectPath));
+    QCOMPARE(reopened.mediaItems().size(), 1);
+    QVERIFY(reopened.hasUnavailableMedia());
+    QCOMPARE(reopened.unavailableMediaCount(), 1);
+}
+
+void ProjectTest::duplicatePersistedMediaNormalizedOnOpenAndResave()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString mediaPath = tempDir.filePath(QStringLiteral("dup.mp4"));
+    QFile mediaFile(mediaPath);
+    QVERIFY(mediaFile.open(QIODevice::WriteOnly));
+    mediaFile.write(QByteArray(16, 'p'));
+    mediaFile.close();
+
+    // A project file that lists the same media record twice.
+    const MediaItem item = MediaItem::createFromFilePath(mediaPath);
+    QVERIFY(item.isValid());
+    QJsonArray duplicatedMedia;
+    duplicatedMedia.append(item.toJsonObject());
+    duplicatedMedia.append(item.toJsonObject());
+
+    QJsonObject project;
+    project.insert(QStringLiteral("id"), QStringLiteral("dup-project"));
+    project.insert(QStringLiteral("name"), QStringLiteral("Duplicate Media"));
+    project.insert(QStringLiteral("created"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+    project.insert(QStringLiteral("schemaVersion"), Project::CurrentSchemaVersion);
+    project.insert(QStringLiteral("media"), duplicatedMedia);
+
+    const QString projectPath = tempDir.filePath(QStringLiteral("dups.reel"));
+    QFile projectFile(projectPath);
+    QVERIFY(projectFile.open(QIODevice::WriteOnly | QIODevice::Text));
+    projectFile.write(QJsonDocument(project).toJson(QJsonDocument::Compact));
+    projectFile.close();
+
+    Application app;
+    QVERIFY(app.openProject(projectPath));
+    QCOMPARE(app.mediaItems().size(), 1);
+
+    // Re-saving normalizes the persisted section deterministically.
+    const QString resavedPath = tempDir.filePath(QStringLiteral("dups_resaved.reel"));
+    QVERIFY(app.saveProject(resavedPath));
+
+    Application reopened;
+    QVERIFY(reopened.openProject(resavedPath));
+    QCOMPARE(reopened.mediaItems().size(), 1);
+    QCOMPARE(reopened.mediaItems().at(0).id(), item.id());
+    QVERIFY(!reopened.hasUnavailableMedia());
+}
+
+void ProjectTest::newProjectClearsUnavailableMediaState()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString mediaPath = tempDir.filePath(QStringLiteral("gone.mp4"));
+    QFile mediaFile(mediaPath);
+    QVERIFY(mediaFile.open(QIODevice::WriteOnly));
+    mediaFile.write(QByteArray(8, 'g'));
+    mediaFile.close();
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(mediaPath));
+
+    const QString projectPath = tempDir.filePath(QStringLiteral("project.reel"));
+    QVERIFY(app.saveProject(projectPath));
+    QVERIFY(QFile::remove(mediaPath));
+
+    Application appOpen;
+    QVERIFY(appOpen.openProject(projectPath));
+    QVERIFY(appOpen.hasUnavailableMedia());
+
+    appOpen.newProject();
+    QVERIFY(!appOpen.hasUnavailableMedia());
+    QCOMPARE(appOpen.unavailableMediaCount(), 0);
+    QVERIFY(appOpen.mediaItems().isEmpty());
 }
 
 QTEST_MAIN(ProjectTest)

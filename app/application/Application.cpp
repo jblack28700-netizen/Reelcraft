@@ -1,6 +1,7 @@
 #include "Application.h"
 
 #include <QtConcurrent/QtConcurrent>
+#include <QSet>
 #include <QThread>
 
 #include "viewer/ViewportState.h"
@@ -81,6 +82,13 @@ bool Application::openProject(const QString &filePath)
     if (m_viewportState && !m_currentProject.viewerState().isEmpty()) {
         QString viewerError;
         m_viewportState->readFromJsonObject(m_currentProject.viewerState(), &viewerError);
+    }
+
+    const int unavailable = unavailableMediaCount();
+    if (unavailable > 0) {
+        emit backgroundCompleted(QStringLiteral("Media references unavailable: %1 of %2.")
+                                     .arg(unavailable)
+                                     .arg(m_mediaItems.size()));
     }
 
     emit projectChanged(m_currentProject);
@@ -174,14 +182,38 @@ QJsonArray Application::mediaJson() const
 void Application::restoreMediaFromJson(const QJsonArray &media)
 {
     m_mediaItems.clear();
+    QSet<QString> seenIds;
     for (const QJsonValue &value : media) {
         if (!value.isObject()) {
             continue;
         }
         MediaItem item;
         QString error;
-        if (item.readFromJsonObject(value.toObject(), &error)) {
-            m_mediaItems.append(item);
+        if (!item.readFromJsonObject(value.toObject(), &error)) {
+            continue;
+        }
+        // Deterministic normalization: keep the first occurrence of each media
+        // id and drop later duplicates, preserving overall order.
+        if (seenIds.contains(item.id())) {
+            continue;
+        }
+        seenIds.insert(item.id());
+        m_mediaItems.append(item);
+    }
+}
+
+int Application::unavailableMediaCount() const
+{
+    int count = 0;
+    for (const MediaItem &item : m_mediaItems) {
+        if (!item.referenceExists()) {
+            ++count;
         }
     }
+    return count;
+}
+
+bool Application::hasUnavailableMedia() const
+{
+    return unavailableMediaCount() > 0;
 }

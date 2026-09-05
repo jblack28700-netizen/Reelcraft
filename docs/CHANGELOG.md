@@ -368,3 +368,13 @@ Date: 2026-09-04
 - Added media validation, integrity, and persistence/reopen tests.
 - Full test suite: 68 passed, 0 failed.
 - No decoding, playback, timeline, AI, export, audio, effects, reframing, or camera-specific logic yet.
+
+## v0.2.22 — Media Reference Availability and Open-Time Integrity
+
+Date: 2026-09-04
+
+- Projects reopened with unavailable media references now report them deterministically (media is never removed because its file is missing).
+- Duplicate media records in a project file are normalized on open; re-saving stays normalized.
+- Added availability and normalization tests.
+- Full test suite: 73 passed, 0 failed.
+- No decoding, playback, timeline, AI, export, effects, or camera-specific logic yet.

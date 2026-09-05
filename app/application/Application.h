@@ -24,6 +24,12 @@ public:
     // The authoritative, deterministic media list (import order preserved).
     QList<MediaItem> mediaItems() const;
 
+    // Point-in-time filesystem availability of the current media list. Media
+    // records are never removed when their file becomes unavailable; they are
+    // surfaced through these helpers instead.
+    bool hasUnavailableMedia() const;
+    int unavailableMediaCount() const;
+
 public slots:
     void newProject();
     bool saveProject(const QString &filePath);

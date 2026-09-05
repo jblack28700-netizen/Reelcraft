@@ -623,6 +623,27 @@ Implement the formal Objective 4 definition (NEXT_TASK.md): import/reference rea
 - No decoding, playback, timeline, editing, AI, export, audio, effects, camera-specific logic, viewer/presentation changes, schema migration, or new dependencies.
 - 360° remains conceptually first-class via the attributes placeholder; no camera-specific implementation.
 
+## 2026-09-04 — Phase 2 Objective 5: Media Reference Availability and Open-Time Integrity
+
+### Objective
+
+Complete the media-validation lifecycle: revalidate media references on project open, normalize the restored list deterministically, and surface unavailable references — no decode, viewer, schema, or persistence-format changes.
+
+### Work Completed
+
+- `Application::openProject()` now emits exactly one deterministic `backgroundCompleted` status message when the reopened project contains unavailable media (`Media references unavailable: N of M.`).
+- `Application::restoreMediaFromJson()` normalizes deterministically: invalid records dropped; duplicate media ids keep only the first occurrence, preserving order.
+- Added `Application::hasUnavailableMedia()` and `unavailableMediaCount()` (point-in-time filesystem availability via the existing `MediaItem::referenceExists()`).
+- No changes to `MediaItem`, `Project`, the viewer layer, `.pro` files, or the schema.
+
+### Verification
+
+- Application build succeeded; offscreen launch smoke event loop alive until timeout (SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 73 passed, 0 failed (68 prior + 5 new).
+- New tests: silent identical reopen when media available; unavailable flag + single status message after deleting a referenced file; unavailable after moving a referenced file; duplicate persisted media entries normalized on open and re-save; new project clears unavailable state.
+
+
 
 
 

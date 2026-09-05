@@ -558,3 +558,23 @@ Verification:
 Boundaries preserved:
 - No decoding/playback, timeline, editing, AI, export, audio, effects, camera-specific logic, viewer/presentation changes, schema migration, or new dependencies.
 - Media management is separate from the viewer/playback layers; 360° remains first-class conceptually (attributes placeholder) without camera-specific implementation.
+
+
+## Phase 2 Objective 5 — Media Reference Availability and Open-Time Integrity — Complete
+
+Status: Complete.
+
+Completed the media-validation lifecycle from Objective 4:
+
+- Project open now revalidates each restored media reference using the existing `MediaItem::referenceExists()` (point-in-time availability).
+- `Application::restoreMediaFromJson()` normalizes deterministically: invalid records are dropped and duplicate media ids keep only the first occurrence, preserving order.
+- New `Application` helpers: `hasUnavailableMedia()` and `unavailableMediaCount()`.
+- `openProject()` emits exactly one deterministic `backgroundCompleted` status message only when a reopened project contains unavailable media.
+- No `MediaItem`, `Project`, viewer/presentation, schema, or persistence-format changes; no new dependencies.
+
+Verification:
+- Application build succeeded.
+- Offscreen launch smoke: event loop alive until timeout (SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 73 passed, 0 failed (68 prior + 5 new).
+- New tests: silent identical reopen when all media available; unavailable flag + single status message after deleting a referenced file; unavailable after moving a referenced file; duplicate persisted media entries normalized on open and re-save; new project clears unavailable state.
