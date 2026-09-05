@@ -806,6 +806,34 @@ Complete Phase-2 orientation control with the primary 360-viewer pointer gesture
 - The viewer never owns or mutates viewport state; it only emits delta requests (Application remains the single state owner).
 - No rendering, media/decode, time-navigation, schema, persistence, or dependency changes; no Objective 12 work.
 
+## 2026-09-06 — Phase 2 Objective 12: Projection Declaration & Flat-Media Preview Path
+
+### Objective
+
+Make source projection an explicit, creator-declared per-media property and add a correct undistorted flat preview — leaving the equirectangular path unchanged and routing unknown projection to it (status quo).
+
+### Work Completed
+
+- `MediaItem::Projection { Unknown, Equirectangular, Flat }` + `projectionToString/FromString`; optional additive `projection` JSON key serialized only when declared; absent/unrecognized values read as Unknown; `isValid`/dedupe/normalization unchanged (no schemaVersion change/migration).
+- `Application::declareMediaProjection(mediaId, projectionValue)`: guards (no project / media not found / unknown projection value); updates the record; re-emits `mediaListChanged`.
+- `ViewerWidget::setFlatSourceMode(bool)` (default false) + `drawFlatSourceImage`: aspect-preserving fit, centered, letterboxed on the existing background, no camera/equirectangular transform; equirect and marker-scene paths unchanged.
+- `MainWindow`: projection stored per media row (role data); `showFramePreview` routes by the active row's projection (flat ⇒ flat mode; otherwise equirectangular); Mark Flat / Mark Equirect controls on the selected row; `setMediaProjectionRequested` signal; wired in `main.cpp`.
+- Files: `app/core/MediaItem.{h,cpp}`, `app/application/Application.{h,cpp}`, `app/ui/ViewerWidget.{h,cpp}`, `app/ui/MainWindow.{h,cpp}`, `app/main.cpp`, `tests/test_project.cpp`.
+
+### Verification
+
+- Application build succeeded; offscreen launch smoke event loop alive until timeout (SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 128 passed, 0 failed (120 prior + 8 new; 0 skipped).
+- New tests: projection default/parse semantics; JSON round trip incl. unknown fallback; Application declaration guards/validation/emission; declared projection persists on reopen; flat mode letterbox/center; flat mode ignores camera transforms; projection buttons emit requests; preview routing honors declared projection (flat vs equirect center anchors).
+
+### Boundary Notes
+
+- Unknown projection intentionally routes to equirectangular (backward-compatible status quo).
+- Additive optional key consistent with `viewerState`/`media`/`activeMediaId` precedents — not a schema change.
+- Flat mode is opt-in (default off); equirect/marker tests unchanged; no ffprobe detection; no pan/zoom/reframing; no Objective 13 work.
+
+
 
 
 

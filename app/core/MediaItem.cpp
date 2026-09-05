@@ -62,6 +62,30 @@ MediaItem MediaItem::createFromFilePath(const QString &filePath, QString *error)
     return item;
 }
 
+QString MediaItem::projectionToString(Projection projection)
+{
+    switch (projection) {
+    case Projection::Equirectangular:
+        return QStringLiteral("equirectangular");
+    case Projection::Flat:
+        return QStringLiteral("flat");
+    case Projection::Unknown:
+    default:
+        return QString();
+    }
+}
+
+MediaItem::Projection MediaItem::projectionFromString(const QString &value)
+{
+    if (value == QStringLiteral("equirectangular")) {
+        return Projection::Equirectangular;
+    }
+    if (value == QStringLiteral("flat")) {
+        return Projection::Flat;
+    }
+    return Projection::Unknown;
+}
+
 bool MediaItem::isValid() const
 {
     return !m_id.isEmpty() && !m_path.isEmpty() && !m_fileName.isEmpty()
@@ -82,6 +106,9 @@ QJsonObject MediaItem::toJsonObject() const
     object.insert(QStringLiteral("formatTag"), m_formatTag);
     object.insert(QStringLiteral("sizeBytes"), QString::number(m_sizeBytes));
     object.insert(QStringLiteral("lastModifiedUtc"), m_lastModifiedUtc.toString(Qt::ISODateWithMs));
+    if (m_projection != Projection::Unknown) {
+        object.insert(QStringLiteral("projection"), projectionToString(m_projection));
+    }
     if (!m_attributes.isEmpty()) {
         object.insert(QStringLiteral("attributes"), m_attributes);
     }
@@ -122,6 +149,8 @@ bool MediaItem::readFromJsonObject(const QJsonObject &object, QString *error)
     m_formatTag = formatTag;
     m_sizeBytes = sizeBytes;
     m_lastModifiedUtc = lastModifiedUtc;
+    m_projection =
+        projectionFromString(object.value(QStringLiteral("projection")).toString());
 
     const QJsonValue attributesValue = object.value(QStringLiteral("attributes"));
     if (attributesValue.isObject()) {

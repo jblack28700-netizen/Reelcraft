@@ -14,46 +14,57 @@
 - Phase 2 Objective 9 — Active-Media Frame Presentation (FFmpeg-CLI single-frame decode) — complete and verified (isolated `FrameExtractor` seam invoking the external ffmpeg CLI to decode one frame to PNG→QImage; `Application::previewActiveMediaFrame` → `framePreviewReady(QImage)` → viewer pixel path; Preview Active Frame action in the shell).
 - Phase 2 Objective 10 — Active-Media Time Navigation (single-frame stepping/seek) — complete and verified (`FrameExtractor::extractFrameAt` with `-ss` seek; Application preview-position state + `previewActiveMediaFrameAt`/`stepActiveMediaPreview`/`previewTimeChanged`; Step −1 s / +1 s controls and time readout; position resets on new/open/active-change/active-removal).
 - Phase 2 Objective 11 — Pointer-Based Viewer Orientation Control — complete and verified (left-drag yaw/pitch deltas: drag right = yaw increases, drag up = pitch increases; wheel FOV: up = decrease = zoom in, down = increase = zoom out; routed through the existing Application adjust slots; viewer remains presentation-only).
-- Automated suite: 120 passed, 0 failed. Working tree clean at the Objective 11 checkpoint commit.
+- Phase 2 Objective 12 — Projection Declaration & Flat-Media Preview Path — complete and verified (optional additive `projection` on `MediaItem` — equirectangular | flat | Unknown; declared via shell controls; Unknown routes to equirectangular; opt-in flat fit/letterbox presentation with no camera transform; equirect/marker paths unchanged).
+- Automated suite: 128 passed, 0 failed. Working tree clean at the Objective 12 checkpoint commit.
 
 See `CURRENT_STATE.md` and `DEVELOPMENT_LOG.md` for the verified record.
 
-## Active Objective — Phase 2, Objective 11: Pointer-Based Viewer Orientation Control
+## Active Objective — Phase 2, Objective 12: Projection Declaration & Flat-Media Preview Path
 
-Status: **Complete — implemented and verified (2026-09-06; automated suite 120 passed, 0 failed).**
+Status: **Complete — implemented and verified (2026-09-06; automated suite 128 passed, 0 failed).**
 
 ### Objective
 
-Complete Phase-2 orientation control with the primary 360-viewer gestures: drag-to-look and wheel FOV, routed through the existing authoritative ViewportState and Application adjust slots. The viewer remains presentation-only.
+Make source projection an explicit, creator-declared per-media property and add a correct undistorted flat preview mode — while leaving the equirectangular presentation path byte-for-byte unchanged and routing unknown projection to it (status quo).
 
 ### Scope (implemented)
 
-- `ViewerWidget` pointer handling: left-button drag emits `viewportYawDeltaRequested` (drag right = yaw increases) and `viewportPitchDeltaRequested` (drag up = pitch increases) at a deterministic sensitivity (0.25 °/px); mouse wheel emits `viewportFovDeltaRequested` (wheel up = −5° = zoom in; wheel down = +5° = zoom out, per 120-unit wheel step); non-left drags ignored; no modifiers/inertia/multi-touch.
-- New `ViewerWidget` delta signals wired in `main.cpp` to the existing Application adjust slots (same receivers as keyboard controls).
-- Sensitivity constants documented as deterministic defaults (revisitable without contract change).
+- `MediaItem::Projection { Unknown, Equirectangular, Flat }`: optional additive `projection` JSON key (`"equirectangular"` | `"flat"`; absent/unrecognized ⇒ Unknown; serialized only when declared; no schemaVersion change/migration).
+- `Application::declareMediaProjection(mediaId, projectionValue)`: guards (project/media id/value), updates the record, re-emits `mediaListChanged`.
+- `ViewerWidget`: `setFlatSourceMode(bool)` (default false). Flat mode draws the source aspect-preserving, centered, letterboxed on the existing background, with NO equirectangular/camera transformation; drag/wheel may still run but do not transform flat presentation. Equirect and marker-scene paths unchanged.
+- `MainWindow`: projection stored per media row (role data); `showFramePreview` routes by the active row's projection (flat ⇒ flat mode; else equirectangular); Mark Flat / Mark Equirect controls on the selected row.
+- `main.cpp`: wires the projection request signal to the Application slot.
 
 ### Explicit Non-Goals
 
-- Continuous playback/auto-advance/audio/streaming; time-navigation changes (Obj 10 preserved)
-- Rendering changes; flat-vs-equirect routing; media/decode/schema/persistence changes
-- Multi-touch/pinch/inertia/modifier gestures; roll via pointer; double-click zoom
-- Camera-specific logic; UI redesign; new dependencies; Objective 12 work
+- ffprobe/probing auto-detection (deferred decision); other projections (fisheye/cylindrical); flat pan/zoom/reframing
+- Continuous playback/audio/streaming; time-navigation changes (Obj 10 preserved)
+- Media-engine/timeline/clips/tracks/AI/export/effects; camera-specific logic; UI redesign
+- schemaVersion bump/migration; new dependencies; changes to equirectangular/marker rendering
 
 ### Definition of Done
 
-- Pointer deltas emitted with the approved semantics and deterministic sensitivity; Application-owned ViewportState updated through existing slots with clamping honored.
-- New focused tests pass; the 116-test regression suite remains green (suite now 120).
-- Build + offscreen smoke pass; docs updated; one Git checkpoint; clean tree; no schema/dependency/render changes.
+- Projection concept persisted additively and round-tripped; unknown fallback routing to equirectangular.
+- Flat preview is deterministic (fit, centered, letterboxed, camera-independent); equirect/marker paths unchanged.
+- Focused tests pass; the 120-test regression suite remains green (suite now 128).
+- Build + offscreen smoke pass; docs updated; one Git checkpoint; clean tree; no dependency/schemaVersion changes.
 
 ### Verification Strategy
 
-- New tests: drag emits expected yaw/pitch deltas; non-left drags and release-without-move emit nothing; wheel-up decreases FOV / wheel-down increases FOV; wired drags update Application ViewportState deterministically (incl. pitch clamp and FOV change).
+- New tests: projection default/parse; JSON round trip incl. unknown fallback; Application declaration guards/validation/emission; persistence across reopen; flat mode letterbox/center; flat mode ignores camera transforms; projection buttons emit requests; preview routing honors declared projection (flat vs equirect center anchors).
 - Regression: full suite offscreen via the existing build-and-test script.
+
+### Architectural Boundaries / Risks
+
+- Unknown projection intentionally routes to equirectangular (backward-compatible status quo), documented and tested.
+- Additive optional key consistent with the `viewerState`/`media`/`activeMediaId` precedents — not a schema change.
+- Flat mode is opt-in and off by default; equirect pixel/marker tests unchanged.
+- Viewer remains presentation-only; Application owns media/projection state.
 
 ### Implementation Gate
 
-This objective is complete at its checkpoint. The implementing agent for the next objective must re-read the project state, confirm one active objective, preserve the verified checkpoint (Objective 11 commit, parent `00f57ec`), and stop-and-ask on any conflict with the recorded architecture.
+This objective is complete at its checkpoint. The implementing agent for the next objective must re-read the project state, confirm one active objective, preserve the verified checkpoint (Objective 12 commit, parent `e73f2cc`), and stop-and-ask on any conflict with the recorded architecture.
 
 ## Next Logical State
 
-Define the next smallest Phase 2 development objective from the verified Phase 2 Objective 11 state. Do not begin automatically.
+Define the next smallest Phase 2 development objective from the verified Phase 2 Objective 12 state. Do not begin automatically.

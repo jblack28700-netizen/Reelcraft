@@ -328,6 +328,14 @@ private slots:
     void viewerWidgetIgnoresNonLeftDragAndReleaseWithoutMove();
     void viewerWidgetWheelUpDecreasesFovWheelDownIncreases();
     void viewerWidgetDragUpdatesApplicationViewport();
+    void mediaItemProjectionDefaultsUnknown();
+    void mediaItemProjectionJsonRoundTrip();
+    void applicationDeclareProjectionGuardsValidateAndEmit();
+    void applicationDeclaredProjectionPersistsOnReopen();
+    void viewerWidgetFlatModeLetterboxesAndCenters();
+    void viewerWidgetFlatModeIgnoresCameraTransforms();
+    void mainWindowProjectionButtonsEmitRequests();
+    void previewRoutingHonorsDeclaredProjection();
 };
 
 void ProjectTest::initTestCase()
@@ -3377,6 +3385,270 @@ void ProjectTest::viewerWidgetDragUpdatesApplicationViewport()
     // Wheel up one step: FOV 90 -> 85.
     sendWheelEvent(widget, 120);
     QVERIFY(nearDouble(state->fieldOfView(), 85.0));
+}
+
+void ProjectTest::mediaItemProjectionDefaultsUnknown()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    const QString mediaPath = tempDir.filePath(QStringLiteral("proj.bin"));
+    QFile file(mediaPath);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write("X");
+    file.close();
+
+    const MediaItem item = MediaItem::createFromFilePath(mediaPath);
+    QVERIFY(item.isValid());
+    QCOMPARE(item.projection(), MediaItem::Projection::Unknown);
+
+    QCOMPARE(MediaItem::projectionToString(MediaItem::Projection::Unknown), QString());
+    QCOMPARE(MediaItem::projectionToString(MediaItem::Projection::Equirectangular),
+             QStringLiteral("equirectangular"));
+    QCOMPARE(MediaItem::projectionToString(MediaItem::Projection::Flat),
+             QStringLiteral("flat"));
+    QCOMPARE(MediaItem::projectionFromString(QString()), MediaItem::Projection::Unknown);
+    QCOMPARE(MediaItem::projectionFromString(QStringLiteral("garbage")),
+             MediaItem::Projection::Unknown);
+    QCOMPARE(MediaItem::projectionFromString(QStringLiteral("flat")),
+             MediaItem::Projection::Flat);
+    QCOMPARE(MediaItem::projectionFromString(QStringLiteral("equirectangular")),
+             MediaItem::Projection::Equirectangular);
+}
+
+void ProjectTest::mediaItemProjectionJsonRoundTrip()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    const QString mediaPath = tempDir.filePath(QStringLiteral("proj.bin"));
+    QFile file(mediaPath);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write("Y");
+    file.close();
+
+    // Flat round trip.
+    MediaItem flatItem = MediaItem::createFromFilePath(mediaPath);
+    flatItem.setProjection(MediaItem::Projection::Flat);
+    const QJsonObject flatObject = flatItem.toJsonObject();
+    QCOMPARE(flatObject.value(QStringLiteral("projection")).toString(),
+             QStringLiteral("flat"));
+
+    MediaItem flatRestored;
+    QString error;
+    QVERIFY(flatRestored.readFromJsonObject(flatObject, &error));
+    QCOMPARE(flatRestored.projection(), MediaItem::Projection::Flat);
+
+    // Equirectangular round trip.
+    flatItem.setProjection(MediaItem::Projection::Equirectangular);
+    const QJsonObject equirectObject = flatItem.toJsonObject();
+    MediaItem equirectRestored;
+    QVERIFY(equirectRestored.readFromJsonObject(equirectObject, &error));
+    QCOMPARE(equirectRestored.projection(), MediaItem::Projection::Equirectangular);
+
+    // Unknown is not serialized; absent/unrecognized values read as Unknown.
+    flatItem.setProjection(MediaItem::Projection::Unknown);
+    QVERIFY(!flatItem.toJsonObject().contains(QStringLiteral("projection")));
+
+    QJsonObject withBadProjection = flatObject;
+    withBadProjection.insert(QStringLiteral("projection"), QStringLiteral("fisheye"));
+    MediaItem badRestored;
+    QVERIFY(badRestored.readFromJsonObject(withBadProjection, &error));
+    QCOMPARE(badRestored.projection(), MediaItem::Projection::Unknown);
+}
+
+void ProjectTest::applicationDeclareProjectionGuardsValidateAndEmit()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    const QString mediaPath = tempDir.filePath(QStringLiteral("decl.bin"));
+    QFile file(mediaPath);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write("Z");
+    file.close();
+
+    Application app;
+    QSignalSpy messageSpy(&app, &Application::backgroundCompleted);
+
+    // No project.
+    QVERIFY(!app.declareMediaProjection(QStringLiteral("x"), QStringLiteral("flat")));
+    QCOMPARE(messageSpy.count(), 1);
+    QVERIFY(messageSpy.first().first().toString().contains(QStringLiteral("No project")));
+
+    app.newProject();
+    QVERIFY(app.importMediaFile(mediaPath));
+    const QString mediaId = app.mediaItems().at(0).id();
+
+    // Unknown media id.
+    QVERIFY(!app.declareMediaProjection(QStringLiteral("no-such-id"),
+                                        QStringLiteral("flat")));
+    QVERIFY(messageSpy.last().first().toString().contains(QStringLiteral("not found")));
+
+    // Invalid projection value.
+    QVERIFY(!app.declareMediaProjection(mediaId, QStringLiteral("fisheye")));
+    QVERIFY(messageSpy.last().first().toString().contains(QStringLiteral("unknown projection")));
+
+    // Valid declarations update the record and emit the list change.
+    QSignalSpy listSpy(&app, &Application::mediaListChanged);
+    QVERIFY(app.declareMediaProjection(mediaId, QStringLiteral("flat")));
+    QCOMPARE(app.mediaItems().at(0).projection(), MediaItem::Projection::Flat);
+    QCOMPARE(listSpy.count(), 1);
+    QVERIFY(messageSpy.last().first().toString().contains(QStringLiteral("projection")));
+
+    QVERIFY(app.declareMediaProjection(mediaId, QStringLiteral("equirectangular")));
+    QCOMPARE(app.mediaItems().at(0).projection(), MediaItem::Projection::Equirectangular);
+    QCOMPARE(listSpy.count(), 2);
+}
+
+void ProjectTest::applicationDeclaredProjectionPersistsOnReopen()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString flatPath = tempDir.filePath(QStringLiteral("flat.bin"));
+    const QString unknownPath = tempDir.filePath(QStringLiteral("unknown.mov"));
+    for (const QString &path : { flatPath, unknownPath }) {
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(QByteArray(8, 'p'));
+        file.close();
+    }
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(flatPath));
+    QVERIFY(app.importMediaFile(unknownPath));
+    const QString flatId = app.mediaItems().at(0).id();
+    QVERIFY(app.declareMediaProjection(flatId, QStringLiteral("flat")));
+
+    const QString projectPath = tempDir.filePath(QStringLiteral("proj.reel"));
+    QVERIFY(app.saveProject(projectPath));
+
+    Application reopened;
+    QVERIFY(reopened.openProject(projectPath));
+    QCOMPARE(reopened.mediaItems().size(), 2);
+    QCOMPARE(reopened.mediaItems().at(0).projection(), MediaItem::Projection::Flat);
+    QCOMPARE(reopened.mediaItems().at(1).projection(), MediaItem::Projection::Unknown);
+}
+
+void ProjectTest::viewerWidgetFlatModeLetterboxesAndCenters()
+{
+    ViewerWidget widget;
+    widget.resize(400, 200);
+
+    // 4:3 solid source inside a 2:1 widget => vertical fit, side letterbox.
+    QImage source(200, 150, QImage::Format_RGB32);
+    source.fill(QColor(0, 255, 255));
+    widget.setFlatSourceMode(true);
+    widget.setSourceImage(source);
+    QVERIFY(widget.isFlatSourceMode());
+
+    const QImage view = widget.grab().toImage();
+    expectColor(view, 200, 100, QColor(0, 255, 255)); // content center
+    expectColor(view, 5, 100, QColor(18, 20, 24));    // left letterbox bar
+    expectColor(view, 395, 100, QColor(18, 20, 24));  // right letterbox bar
+}
+
+void ProjectTest::viewerWidgetFlatModeIgnoresCameraTransforms()
+{
+    ViewportState state;
+    ViewerWidget widget;
+    widget.setViewportState(&state);
+    widget.resize(300, 300);
+
+    QImage source(150, 150, QImage::Format_RGB32);
+    source.fill(QColor(255, 0, 255));
+    widget.setFlatSourceMode(true);
+    widget.setSourceImage(source);
+
+    const QImage before = widget.grab().toImage();
+    state.setYaw(90.0);
+    state.setPitch(45.0);
+    state.setFieldOfView(40.0);
+    const QImage after = widget.grab().toImage();
+    QVERIFY(imagesIdentical(before, after));
+}
+
+void ProjectTest::mainWindowProjectionButtonsEmitRequests()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    QList<MediaItem> items;
+    const QStringList names = { QStringLiteral("a.bin"), QStringLiteral("b.bin") };
+    for (const QString &name : names) {
+        const QString path = tempDir.filePath(name);
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("M");
+        file.close();
+        items.append(MediaItem::createFromFilePath(path));
+    }
+
+    TestMainWindow window;
+    window.showMediaList(items);
+
+    auto *list = window.findChild<QListWidget *>(QStringLiteral("mediaListWidget"));
+    QVERIFY(list);
+    QCOMPARE(list->count(), 2);
+
+    auto *markFlat = window.findChild<QPushButton *>(QStringLiteral("markFlatButton"));
+    auto *markEquirect = window.findChild<QPushButton *>(QStringLiteral("markEquirectButton"));
+    QVERIFY(markFlat);
+    QVERIFY(markEquirect);
+
+    QSignalSpy spy(&window, &MainWindow::setMediaProjectionRequested);
+    list->setCurrentRow(0);
+    markFlat->click();
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.first().first().toString(), items.at(0).id());
+    QCOMPARE(spy.first().at(1).toString(), QStringLiteral("flat"));
+
+    markEquirect->click();
+    QCOMPARE(spy.count(), 2);
+    QCOMPARE(spy.last().first().toString(), items.at(0).id());
+    QCOMPARE(spy.last().at(1).toString(), QStringLiteral("equirectangular"));
+}
+
+void ProjectTest::previewRoutingHonorsDeclaredProjection()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString mediaPath = tempDir.filePath(QStringLiteral("media.bin"));
+    QFile file(mediaPath);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write("P");
+    file.close();
+
+    Application app;
+    TestMainWindow window;
+    QObject::connect(&app, &Application::mediaListChanged,
+                     &window, &MainWindow::showMediaList);
+    QObject::connect(&app, &Application::activeMediaChanged,
+                     &window, &MainWindow::showActiveMedia);
+
+    app.newProject();
+    QVERIFY(app.importMediaFile(mediaPath));
+    const QString mediaId = app.mediaItems().at(0).id();
+    QVERIFY(app.setActiveMedia(mediaId));
+
+    ViewerWidget *viewer = window.viewerWidget();
+    QVERIFY(viewer);
+
+    // Flat solid frame presented in flat mode (no camera transform).
+    QVERIFY(app.declareMediaProjection(mediaId, QStringLiteral("flat")));
+    QImage flatFrame(200, 100, QImage::Format_RGB32);
+    flatFrame.fill(QColor(0, 255, 255));
+    window.showFramePreview(flatFrame);
+    QVERIFY(viewer->isFlatSourceMode());
+    QImage view = viewer->grab().toImage();
+    expectColor(view, view.width() / 2, view.height() / 2, QColor(0, 255, 255));
+
+    // Equirectangular routing: equirectangular pixel path (FRONT centered).
+    QVERIFY(app.declareMediaProjection(mediaId, QStringLiteral("equirectangular")));
+    window.showFramePreview(buildTestPattern());
+    QVERIFY(!viewer->isFlatSourceMode());
+    view = viewer->grab().toImage();
+    expectColor(view, view.width() / 2, view.height() / 2, kFrontColor);
 }
 
 QTEST_MAIN(ProjectTest)

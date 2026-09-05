@@ -31,6 +31,8 @@ int main(int argc, char *argv[])
                      &application, &Application::previewActiveMediaFrame);
     QObject::connect(&window, &MainWindow::previewStepRequested,
                      &application, &Application::stepActiveMediaPreview);
+    QObject::connect(&window, &MainWindow::setMediaProjectionRequested,
+                     &application, &Application::declareMediaProjection);
     QObject::connect(&window, &MainWindow::backgroundDemoRequested,
                      &application, &Application::runBackgroundDemo);
     QObject::connect(&window, &MainWindow::resetViewportRequested,

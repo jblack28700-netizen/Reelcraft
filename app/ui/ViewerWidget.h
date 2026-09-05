@@ -50,6 +50,14 @@ public:
     void setSourceImage(const QImage &sourceImage);
     bool hasSourceImage() const { return !m_sourceImage.isNull(); }
 
+    // Selects flat vs equirectangular presentation for the source image
+    // (Objective 12). Flat mode (opt-in, default false) draws the source
+    // aspect-preserving, centered, and letterboxed with NO equirectangular or
+    // camera transformation. Pointer/keyboard camera controls may still run,
+    // but they do not transform flat presentation.
+    void setFlatSourceMode(bool flat);
+    bool isFlatSourceMode() const { return m_flatSourceMode; }
+
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override;
 
@@ -83,6 +91,7 @@ private:
     QColor markerColor(int index) const;
 
     void drawSourceImage(QPainter &painter);
+    void drawFlatSourceImage(QPainter &painter);
 
     bool m_dragging = false;
     QPoint m_lastDragPosition;
@@ -90,4 +99,5 @@ private:
     ViewerScene m_scene;
     const ViewportState *m_viewportState = nullptr;
     QImage m_sourceImage;
+    bool m_flatSourceMode = false;
 };

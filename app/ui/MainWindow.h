@@ -59,6 +59,7 @@ signals:
     void setActiveRequested(const QString &mediaId);
     void previewFrameRequested();
     void previewStepRequested(double deltaSeconds);
+    void setMediaProjectionRequested(const QString &mediaId, const QString &projectionValue);
     void backgroundDemoRequested();
     void resetViewportRequested();
     void viewportYawDeltaRequested(double delta);
@@ -85,6 +86,8 @@ private:
     QPushButton *m_previewFrameButton = nullptr;
     QPushButton *m_stepBackButton = nullptr;
     QPushButton *m_stepForwardButton = nullptr;
+    QPushButton *m_markFlatButton = nullptr;
+    QPushButton *m_markEquirectButton = nullptr;
     QPushButton *m_backgroundButton = nullptr;
     QPushButton *m_resetViewportButton = nullptr;
 

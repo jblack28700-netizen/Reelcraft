@@ -17,6 +17,7 @@ namespace {
 constexpr int kMediaIdRole = Qt::UserRole;
 constexpr int kMediaNameRole = Qt::UserRole + 1;
 constexpr int kMediaTagRole = Qt::UserRole + 2;
+constexpr int kMediaProjectionRole = Qt::UserRole + 3;
 const QString kActivePrefix = QStringLiteral("▶ ");
 
 } // namespace
@@ -48,6 +49,8 @@ MainWindow::MainWindow(QWidget *parent)
     m_previewFrameButton = new QPushButton(QStringLiteral("Preview Active Frame"), central);
     m_stepBackButton = new QPushButton(QStringLiteral("Step -1 s"), central);
     m_stepForwardButton = new QPushButton(QStringLiteral("Step +1 s"), central);
+    m_markFlatButton = new QPushButton(QStringLiteral("Mark Flat"), central);
+    m_markEquirectButton = new QPushButton(QStringLiteral("Mark Equirect"), central);
     m_backgroundButton = new QPushButton(QStringLiteral("Run Background Demo"), central);
     m_resetViewportButton = new QPushButton(QStringLiteral("Reset Viewport"), central);
 
@@ -74,6 +77,8 @@ MainWindow::MainWindow(QWidget *parent)
     m_previewFrameButton->setObjectName("previewFrameButton");
     m_stepBackButton->setObjectName("stepBackButton");
     m_stepForwardButton->setObjectName("stepForwardButton");
+    m_markFlatButton->setObjectName("markFlatButton");
+    m_markEquirectButton->setObjectName("markEquirectButton");
     m_previewTimeLabel->setObjectName("previewTimeLabel");
     m_backgroundButton->setObjectName("backgroundDemoButton");
     m_resetViewportButton->setObjectName("resetViewportButton");
@@ -98,6 +103,8 @@ MainWindow::MainWindow(QWidget *parent)
     layout->addWidget(m_previewFrameButton);
     layout->addWidget(m_stepBackButton);
     layout->addWidget(m_stepForwardButton);
+    layout->addWidget(m_markFlatButton);
+    layout->addWidget(m_markEquirectButton);
     layout->addWidget(m_previewTimeLabel);
     layout->addWidget(m_activeMediaLabel);
     layout->addWidget(m_backgroundButton);
@@ -160,6 +167,22 @@ MainWindow::MainWindow(QWidget *parent)
         emit previewStepRequested(1.0);
     });
 
+    auto markProjection = [this](const QString &projectionValue) {
+        QListWidgetItem *current = m_mediaListWidget->currentItem();
+        if (!current) {
+            m_statusLabel->setText(QStringLiteral("No media selected to mark."));
+            return;
+        }
+        emit setMediaProjectionRequested(current->data(kMediaIdRole).toString(),
+                                         projectionValue);
+    };
+    connect(m_markFlatButton, &QPushButton::clicked, this,
+            [this, markProjection]() { markProjection(QStringLiteral("flat")); });
+    connect(m_markEquirectButton, &QPushButton::clicked, this,
+            [this, markProjection]() {
+                markProjection(QStringLiteral("equirectangular"));
+            });
+
     connect(m_backgroundButton, &QPushButton::clicked, this, &MainWindow::backgroundDemoRequested);
 
     m_newProjectButton->installEventFilter(this);
@@ -171,6 +194,8 @@ MainWindow::MainWindow(QWidget *parent)
     m_previewFrameButton->installEventFilter(this);
     m_stepBackButton->installEventFilter(this);
     m_stepForwardButton->installEventFilter(this);
+    m_markFlatButton->installEventFilter(this);
+    m_markEquirectButton->installEventFilter(this);
     m_backgroundButton->installEventFilter(this);
     m_resetViewportButton->installEventFilter(this);
 }
@@ -239,6 +264,8 @@ void MainWindow::showMediaList(const QList<MediaItem> &items)
         listItem->setData(kMediaIdRole, item.id());
         listItem->setData(kMediaNameRole, item.fileName());
         listItem->setData(kMediaTagRole, item.formatTag());
+        listItem->setData(kMediaProjectionRole,
+                          MediaItem::projectionToString(item.projection()));
     }
     refreshActiveMarking();
 }
@@ -264,9 +291,23 @@ void MainWindow::showActiveMedia(const QString &mediaId)
 
 void MainWindow::showFramePreview(const QImage &image)
 {
-    if (m_viewerWidget) {
-        m_viewerWidget->setSourceImage(image);
+    if (!m_viewerWidget) {
+        return;
     }
+    // Route presentation by the active row's declared projection (Objective
+    // 12): flat => flat (no camera transform); unknown/equirectangular =>
+    // equirectangular pixel path.
+    bool flat = false;
+    for (int i = 0; i < m_mediaListWidget->count(); ++i) {
+        QListWidgetItem *row = m_mediaListWidget->item(i);
+        if (row && row->data(kMediaIdRole).toString() == m_activeMediaIdText
+            && row->data(kMediaProjectionRole).toString() == QStringLiteral("flat")) {
+            flat = true;
+            break;
+        }
+    }
+    m_viewerWidget->setFlatSourceMode(flat);
+    m_viewerWidget->setSourceImage(image);
 }
 
 void MainWindow::showPreviewTime(double seconds)

@@ -8,17 +8,23 @@
 // MediaItem is a deterministic record of one imported real media file.
 //
 // It records only factual, file-system-derived metadata (id, stored path,
-// file name, size, last-modified time, extension-derived format tag). It never
-// decodes, probes, or reads media content, and it never modifies the original
-// file. The optional attributes object is the future home for content/360°
-// classification metadata; no classification logic exists here and no
-// camera-specific behavior is introduced.
+// file name, size, last-modified time, extension-derived format tag) plus an
+// optional creator-declared projection. It never decodes, probes, or reads
+// media content, and it never modifies the original file. The optional
+// attributes object is the future home for content/360° classification
+// metadata; no classification logic exists here and no camera-specific
+// behavior is introduced.
 //
 // MediaItem is QtCore-only so media/project logic stays headless-testable and
 // independent of any viewer or playback code.
 class MediaItem
 {
 public:
+    // Source projection (Objective 12). Unknown = not declared / legacy /
+    // unrecognized persisted value; equirectangular and flat are the only
+    // recognized values.
+    enum class Projection { Unknown, Equirectangular, Flat };
+
     MediaItem() = default;
 
     // Creates a record for an existing, readable, regular file. Fails with a
@@ -40,6 +46,15 @@ public:
     qint64 sizeBytes() const { return m_sizeBytes; }
     QDateTime lastModifiedUtc() const { return m_lastModifiedUtc; }
 
+    // Optional creator-declared projection. Serialized additively only when
+    // declared (not Unknown); recognized JSON values are "equirectangular" and
+    // "flat"; absent or unrecognized values read back as Unknown.
+    Projection projection() const { return m_projection; }
+    void setProjection(Projection projection) { m_projection = projection; }
+
+    static QString projectionToString(Projection projection);
+    static Projection projectionFromString(const QString &value);
+
     QJsonObject attributes() const { return m_attributes; }
     void setAttributes(const QJsonObject &attributes) { m_attributes = attributes; }
 
@@ -55,6 +70,7 @@ private:
     QString m_formatTag;
     qint64 m_sizeBytes = -1;
     QDateTime m_lastModifiedUtc;
+    Projection m_projection = Projection::Unknown;
     QJsonObject m_attributes;
 };
 

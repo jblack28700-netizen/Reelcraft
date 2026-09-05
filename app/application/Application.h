@@ -90,6 +90,12 @@ public slots:
     // change, and removal of the active media.
     double previewTimeSeconds() const;
 
+    // Declares the projection of the media record with the given id
+    // (projectionValue: "equirectangular" or "flat"; other values rejected).
+    // Additive record data only; requires an active project and an existing
+    // media id. Re-emits mediaListChanged so presentation routing updates.
+    bool declareMediaProjection(const QString &mediaId, const QString &projectionValue);
+
 signals:
     void projectChanged(const Project &project);
     void backgroundCompleted(const QString &message);

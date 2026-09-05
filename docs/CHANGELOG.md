@@ -442,3 +442,14 @@ Date: 2026-09-06
 - Added deterministic pointer-interaction tests.
 - Full test suite: 120 passed, 0 failed.
 - No continuous playback, audio, streaming, timeline, AI, export, or effects yet; original media is never modified.
+
+## v0.2.29 — Projection Declaration & Flat Preview
+
+Date: 2026-09-06
+
+- Media records can be marked as flat or 360 equirectangular; the declared projection persists with the media record.
+- Flat media now previews correctly: fitted, centered, letterboxed, with no 360 wrap distortion.
+- Undeclared media keeps the existing equirectangular preview behavior.
+- Added projection, routing, and flat-presentation tests.
+- Full test suite: 128 passed, 0 failed.
+- No continuous playback, audio, streaming, timeline, AI, export, or effects yet; original media is never modified.

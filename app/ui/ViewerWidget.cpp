@@ -87,6 +87,15 @@ void ViewerWidget::setSourceImage(const QImage &sourceImage)
     update();
 }
 
+void ViewerWidget::setFlatSourceMode(bool flat)
+{
+    if (m_flatSourceMode == flat) {
+        return;
+    }
+    m_flatSourceMode = flat;
+    update();
+}
+
 QSize ViewerWidget::sizeHint() const
 {
     return QSize(640, 320);
@@ -197,6 +206,11 @@ void ViewerWidget::drawSourceImage(QPainter &painter)
         return;
     }
 
+    if (m_flatSourceMode) {
+        drawFlatSourceImage(painter);
+        return;
+    }
+
     double cameraYaw = 0.0;
     double cameraPitch = 0.0;
     double cameraRoll = 0.0;
@@ -219,6 +233,32 @@ void ViewerWidget::drawSourceImage(QPainter &painter)
 
     painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
     painter.drawImage(QRect(0, 0, width(), height()), view);
+}
+
+void ViewerWidget::drawFlatSourceImage(QPainter &painter)
+{
+    if (m_sourceImage.isNull()) {
+        return;
+    }
+    const int widgetWidth = width();
+    const int widgetHeight = height();
+    const int imageWidth = m_sourceImage.width();
+    const int imageHeight = m_sourceImage.height();
+    if (widgetWidth <= 0 || widgetHeight <= 0 || imageWidth <= 0 || imageHeight <= 0) {
+        return;
+    }
+
+    // Fit and center, preserving aspect ratio; the background (already drawn)
+    // letterboxes any unused space. No camera/equirectangular transformation.
+    const double scale = qMin(static_cast<double>(widgetWidth) / imageWidth,
+                              static_cast<double>(widgetHeight) / imageHeight);
+    const int contentWidth = qMax(1, static_cast<int>(imageWidth * scale));
+    const int contentHeight = qMax(1, static_cast<int>(imageHeight * scale));
+    const int x = (widgetWidth - contentWidth) / 2;
+    const int y = (widgetHeight - contentHeight) / 2;
+
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+    painter.drawImage(QRect(x, y, contentWidth, contentHeight), m_sourceImage);
 }
 
 void ViewerWidget::mousePressEvent(QMouseEvent *event)

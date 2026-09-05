@@ -699,3 +699,23 @@ Verification:
 - Test build succeeded.
 - Automated tests: 120 passed, 0 failed (116 prior + 4 new; 0 skipped).
 - New tests: drag emits expected yaw/pitch deltas; non-left drags and release-without-move emit nothing; wheel-up decreases FOV / wheel-down increases FOV; wired drags update Application ViewportState deterministically (incl. pitch clamp).
+
+
+## Phase 2 Objective 12 — Projection Declaration & Flat-Media Preview Path — Complete
+
+Status: Complete.
+
+Made source projection an explicit, creator-declared per-media property with a correct undistorted flat preview; equirectangular path unchanged.
+
+- `MediaItem::Projection { Unknown, Equirectangular, Flat }`: optional additive `projection` JSON key (`"equirectangular"` | `"flat"`; absent/unrecognized ⇒ Unknown; serialized only when declared; no schemaVersion bump/migration).
+- `Application::declareMediaProjection(mediaId, projectionValue)`: project/id/value guards; updates the record; re-emits `mediaListChanged`.
+- `ViewerWidget::setFlatSourceMode(bool)` (default false): flat mode draws the source aspect-preserving, centered, letterboxed on the existing background with NO camera/equirectangular transformation (drag/wheel harmless); equirect and marker-scene paths unchanged.
+- `MainWindow`: projection role data per row; `showFramePreview` routes by active row projection (flat ⇒ flat mode; else equirectangular); Mark Flat / Mark Equirect controls on the selected row; wired in `main.cpp`.
+- Unknown projection routes to equirectangular (backward-compatible default), documented and tested.
+
+Verification:
+- Application build succeeded.
+- Offscreen launch smoke: event loop alive until timeout (SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 128 passed, 0 failed (120 prior + 8 new; 0 skipped).
+- New tests: projection default/parse semantics; projection JSON round trip incl. unknown fallback; Application declaration guards/validation/emission; declared projection persists across reopen; flat mode letterbox/center; flat mode ignores camera transforms; projection buttons emit requests; preview routing honors declared projection (flat vs equirect center anchors).

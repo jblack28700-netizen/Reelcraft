@@ -239,6 +239,36 @@ double Application::previewTimeSeconds() const
     return m_previewTimeSeconds;
 }
 
+bool Application::declareMediaProjection(const QString &mediaId, const QString &projectionValue)
+{
+    if (!m_hasProject) {
+        emit backgroundCompleted(QStringLiteral("No project to declare media projection in."));
+        return false;
+    }
+
+    const MediaItem::Projection projection =
+        MediaItem::projectionFromString(projectionValue);
+    if (projection == MediaItem::Projection::Unknown) {
+        emit backgroundCompleted(QStringLiteral("Projection failed: unknown projection value."));
+        return false;
+    }
+
+    for (int i = 0; i < m_mediaItems.size(); ++i) {
+        if (m_mediaItems.at(i).id() == mediaId) {
+            const QString fileName = m_mediaItems.at(i).fileName();
+            m_mediaItems[i].setProjection(projection);
+            emit backgroundCompleted(
+                QStringLiteral("Media projection: %1 = %2")
+                    .arg(fileName, MediaItem::projectionToString(projection)));
+            emit mediaListChanged(m_mediaItems);
+            return true;
+        }
+    }
+
+    emit backgroundCompleted(QStringLiteral("Projection failed: media not found."));
+    return false;
+}
+
 bool Application::previewActiveMediaFrame()
 {
     return decodePreviewFrameAt(m_previewTimeSeconds);
