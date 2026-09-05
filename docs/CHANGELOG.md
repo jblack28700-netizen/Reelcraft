@@ -420,3 +420,14 @@ Date: 2026-09-05
 - Added decode, preview, and end-to-end presentation tests (they skip cleanly if ffmpeg is unavailable).
 - Full test suite: 107 passed, 0 failed.
 - No playback/streaming/audio, timeline, AI, export, or effects yet; original media is never modified.
+
+## v0.2.27 — Active-Media Time Navigation
+
+Date: 2026-09-06
+
+- The active media preview can now be stepped or seeked through time: single-frame extraction at a requested position.
+- Added Step −1 s / +1 s controls and a preview-time readout in the shell.
+- Time navigation is on-demand and deterministic; beyond-end requests fail cleanly without moving the position.
+- Added seek, stepping, position-state, and reset tests (they skip cleanly if ffmpeg is unavailable).
+- Full test suite: 116 passed, 0 failed.
+- No continuous playback, audio, streaming, timeline, AI, export, or effects yet; original media is never modified.

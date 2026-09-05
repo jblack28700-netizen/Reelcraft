@@ -753,6 +753,35 @@ Close the final Phase-2 gap: decode a single real frame from the active media re
 - Decode is synchronous single-frame (foundation only); playback/streaming require a separate objective.
 - No schema, compiled-dependency, media-contract, or viewer changes; no Objective 10 work.
 
+## 2026-09-06 — Phase 2 Objective 10: Active-Media Time Navigation
+
+### Objective
+
+Add on-demand single-frame time navigation (stepping/seek) through the active media record via the approved FFmpeg-CLI Option A seam — no continuous playback.
+
+### Work Completed
+
+- `FrameExtractor::extractFrameAt(filePath, execPath, seconds, out, error)`: fast input seek (`-ss <seconds> -i <file> … -frames:v 1 … pipe:1` PNG); `extractFirstFrame` now delegates with 0.0 s (Obj 9 contract preserved); negative/non-finite times rejected deterministically (`invalid seek time`). Position is a requested seek/preview, not an exact frame/timestamp guarantee.
+- `Application`: session-only `m_previewTimeSeconds`; `previewTimeSeconds()`; `previewActiveMediaFrameAt` (negative→0 clamp); `stepActiveMediaPreview(delta)` (floor 0); private `decodePreviewFrameAt` centralizing the Obj 9 guards; position updates only on decode success; `previewTimeChanged(double)` emitted only on actual change; resets (with emission) on new project, project open, active-media change, and removal of the active media; beyond-end/undecodable requests fail deterministically (`Preview failed: …`) leaving position unchanged.
+- `MainWindow`: Step −1 s / +1 s buttons (`stepBackButton`/`stepForwardButton`) → `previewStepRequested`; `previewTimeLabel` + `showPreviewTime`; Preview Active Frame decodes at the current position.
+- `main.cpp`: wires `previewStepRequested` → `stepActiveMediaPreview` and `previewTimeChanged` → `showPreviewTime`.
+- Files: `app/media/FrameExtractor.{h,cpp}`, `app/application/Application.{h,cpp}`, `app/ui/MainWindow.{h,cpp}`, `app/main.cpp`, `tests/test_project.cpp`.
+
+### Verification
+
+- Application build succeeded; offscreen launch smoke event loop alive until timeout (SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 116 passed, 0 failed (107 prior + 9 new; 0 skipped — ffmpeg available; suite ~17 s including deterministic generated video fixtures).
+- New tests: invalid seek-time rejection; frame-at-time extraction (0 s red-dominant vs 2 s blue-dominant on an all-keyframe 1 fps fixture); seek determinism; Application guards; position update with single time emission; same-position re-request emits no time change; step advance and below-zero clamp; beyond-end failure deterministic with position unchanged; position resets (new project / active change / active removal); step buttons and time readout.
+
+### Boundary Notes
+
+- Preview position is session state only — intentionally not persisted; no schema surface.
+- Fast input seek is approximate (keyframe semantics); documented; fixture uses `-g 1` for deterministic tests.
+- One-shot subprocess per request; no timers/threads/loops; continuous playback/audio/streaming remain out of scope (future decision).
+- No ffprobe/duration probing (deferred by approval); Obj 1–9 contracts preserved.
+
+
 
 
 

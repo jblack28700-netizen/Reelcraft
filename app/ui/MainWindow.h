@@ -47,6 +47,9 @@ public slots:
     // Presents a decoded preview frame through the viewer pixel path.
     void showFramePreview(const QImage &image);
 
+    // Updates the preview time readout (seconds).
+    void showPreviewTime(double seconds);
+
 signals:
     void newProjectRequested();
     void saveProjectRequested(const QString &filePath);
@@ -55,6 +58,7 @@ signals:
     void removeMediaRequested(const QString &mediaId);
     void setActiveRequested(const QString &mediaId);
     void previewFrameRequested();
+    void previewStepRequested(double deltaSeconds);
     void backgroundDemoRequested();
     void resetViewportRequested();
     void viewportYawDeltaRequested(double delta);
@@ -79,9 +83,12 @@ private:
     QPushButton *m_removeMediaButton = nullptr;
     QPushButton *m_setActiveButton = nullptr;
     QPushButton *m_previewFrameButton = nullptr;
+    QPushButton *m_stepBackButton = nullptr;
+    QPushButton *m_stepForwardButton = nullptr;
     QPushButton *m_backgroundButton = nullptr;
     QPushButton *m_resetViewportButton = nullptr;
 
+    QLabel *m_previewTimeLabel = nullptr;
     QListWidget *m_mediaListWidget = nullptr;
 
     ViewerWidget *m_viewerWidget = nullptr;

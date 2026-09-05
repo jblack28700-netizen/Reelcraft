@@ -660,3 +660,23 @@ Verification:
 - Test build succeeded.
 - Automated tests: 107 passed, 0 failed (100 prior + 7 new; 0 skipped — ffmpeg available).
 - New tests: FrameExtractor invalid-input rejection; availability + single-frame decode of a real PNG (exact dims/colors); deterministic repeatability; Application guards (no project / no active media); preview emits correct frame; Preview button signal; end-to-end decode→viewer center (identity camera centers FRONT in the decoded equirect test pattern). Decode tests QSKIP gracefully when ffmpeg is absent.
+
+
+## Phase 2 Objective 10 — Active-Media Time Navigation — Complete
+
+Status: Complete.
+
+Added on-demand single-frame time navigation (stepping/seek) through the active media record.
+
+- `FrameExtractor::extractFrameAt(filePath, execPath, seconds, out, error)`: FFmpeg-CLI PNG-pipe decode with fast input seek (`-ss <seconds> -i …`); `extractFirstFrame` delegates at 0.0 s (contract preserved). Negative/non-finite times rejected deterministically. Requested position is a seek/preview request, not a guarantee of exact frame/presentation-timestamp accuracy.
+- `Application`: session-only `m_previewTimeSeconds` + `previewTimeSeconds()`; `previewActiveMediaFrameAt(seconds)` (negative→0); `stepActiveMediaPreview(delta)` (floor 0); private `decodePreviewFrameAt(target)` with the Objective 9 guards; position updates only on successful decode; `previewTimeChanged(double)` emitted only on actual change; position resets (with emission) on new project, open, active-media change, and active-media removal. Beyond-end/undecodable requests fail deterministically leaving the position unchanged.
+- `MainWindow`: Step −1 s / +1 s buttons → `previewStepRequested`; `previewTimeLabel` + `showPreviewTime`; existing Preview Active Frame decodes at the current position.
+- `main.cpp` wiring for the two new connections.
+- No schema, linked-dependency, viewer, media-contract, or ffprobe changes; original media never modified.
+
+Verification:
+- Application build succeeded.
+- Offscreen launch smoke: event loop alive until timeout (SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 116 passed, 0 failed (107 prior + 9 new; 0 skipped — ffmpeg available; suite ~17 s incl. generated video fixtures).
+- New tests: invalid seek-time rejection; frame-at-time extraction (0 s red-dominant vs 2 s blue-dominant on an all-keyframe 1 fps fixture); seek determinism; Application guards; position update + single time emission; same-position re-request emits no time change; step advance and below-zero clamp; beyond-end failure deterministic with position unchanged; position resets (new project / active change / active removal); step buttons and time readout.

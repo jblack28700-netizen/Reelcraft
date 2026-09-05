@@ -69,8 +69,26 @@ public slots:
     // adapter, Objective 9) and emits framePreviewReady() on success. Requires
     // an active project, an active media record, and an available file. The
     // media file is never modified. The frame is presented through the
-    // existing viewer pixel path; no viewer code changes.
+    // existing viewer pixel path; no viewer code changes. Decodes at the
+    // current preview time position.
     bool previewActiveMediaFrame();
+
+    // Requests a preview frame at the given time position (seconds) of the
+    // active media. Negative positions clamp to 0. Beyond-end/undecodable
+    // requests fail deterministically and leave the current preview position
+    // unchanged. The requested position is a seek/preview request, not a
+    // guarantee of exact frame or presentation-timestamp accuracy.
+    bool previewActiveMediaFrameAt(double seconds);
+
+    // Steps the current preview position by deltaSeconds and requests a frame
+    // there (floor of 0 when stepping below the start). Beyond-end steps fail
+    // deterministically and leave the position unchanged.
+    bool stepActiveMediaPreview(double deltaSeconds);
+
+    // The current preview time position (seconds; session state only, not
+    // persisted). Reset to 0 on new project, project open, active-media
+    // change, and removal of the active media.
+    double previewTimeSeconds() const;
 
 signals:
     void projectChanged(const Project &project);
@@ -87,7 +105,12 @@ signals:
     // Emitted after previewActiveMediaFrame() decodes a frame successfully.
     void framePreviewReady(const QImage &image);
 
+    // Emitted whenever the current preview time position changes.
+    void previewTimeChanged(double seconds);
+
 private:
+    bool decodePreviewFrameAt(double targetSeconds);
+
     QJsonArray mediaJson() const;
     void restoreMediaFromJson(const QJsonArray &media);
     // Restores the active id from a persisted value after the media list has
@@ -100,4 +123,5 @@ private:
     ViewportState *m_viewportState = nullptr;
     QList<MediaItem> m_mediaItems;
     QString m_activeMediaId;
+    double m_previewTimeSeconds = 0.0;
 };

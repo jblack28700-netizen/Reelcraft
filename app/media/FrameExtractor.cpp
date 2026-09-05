@@ -4,6 +4,8 @@
 #include <QProcess>
 #include <QStandardPaths>
 
+#include <cmath>
+
 namespace {
 
 constexpr int kProcessTimeoutMs = 15000;
@@ -35,6 +37,15 @@ bool FrameExtractor::extractFirstFrame(const QString &filePath,
                                        QImage *outImage,
                                        QString *error)
 {
+    return extractFrameAt(filePath, executablePath, 0.0, outImage, error);
+}
+
+bool FrameExtractor::extractFrameAt(const QString &filePath,
+                                    const QString &executablePath,
+                                    double seconds,
+                                    QImage *outImage,
+                                    QString *error)
+{
     if (error) {
         error->clear();
     }
@@ -48,6 +59,9 @@ bool FrameExtractor::extractFirstFrame(const QString &filePath,
     if (!outImage) {
         return fail(QStringLiteral("Frame extraction failed: null output."));
     }
+    if (!std::isfinite(seconds) || seconds < 0.0) {
+        return fail(QStringLiteral("Frame extraction failed: invalid seek time."));
+    }
     if (executablePath.isEmpty()) {
         return fail(QStringLiteral("Frame extraction unavailable: ffmpeg not found."));
     }
@@ -59,11 +73,14 @@ bool FrameExtractor::extractFirstFrame(const QString &filePath,
         return fail(QStringLiteral("Frame extraction failed: path is not a media file."));
     }
 
+    const QString seekTime = QString::number(seconds, 'f', 3);
+
     QProcess process;
     process.setProcessChannelMode(QProcess::SeparateChannels);
     process.start(executablePath, {
         QStringLiteral("-v"), QStringLiteral("error"),
         QStringLiteral("-nostdin"),
+        QStringLiteral("-ss"), seekTime,
         QStringLiteral("-i"), filePath,
         QStringLiteral("-frames:v"), QStringLiteral("1"),
         QStringLiteral("-an"),

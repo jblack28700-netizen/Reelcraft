@@ -12,6 +12,7 @@
 #include <QListWidget>
 #include <QPushButton>
 #include <QKeyEvent>
+#include <QProcess>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QtMath>
@@ -133,6 +134,59 @@ QuadrantCounts countQuadrants(const QImage &image, const QColor &color)
         }
     }
     return counts;
+}
+
+// Per-second solid-color frames (red, green, blue, magenta) encoded to a
+// keyframe-every-frame H.264 clip at 1 fps so seeks are accurate. Lossy codec
+// conversion is tolerated via channel-dominance assertions.
+bool createSteppedVideo(const QString &directory, const QString &ffmpegPath,
+                        QString *outVideoPath)
+{
+    const QColor frameColors[] = {
+        QColor(255, 0, 0), QColor(0, 255, 0), QColor(0, 0, 255), QColor(255, 0, 255)
+    };
+    for (int i = 0; i < 4; ++i) {
+        QImage frame(64, 32, QImage::Format_RGB32);
+        frame.fill(frameColors[i]);
+        if (!frame.save(directory + QStringLiteral("/p%1.png").arg(i), "PNG")) {
+            return false;
+        }
+    }
+
+    const QString videoPath = directory + QStringLiteral("/stepped.mp4");
+    QProcess process;
+    process.start(ffmpegPath, {
+        QStringLiteral("-y"),
+        QStringLiteral("-framerate"), QStringLiteral("1"),
+        QStringLiteral("-i"), directory + QStringLiteral("/p%d.png"),
+        QStringLiteral("-c:v"), QStringLiteral("libx264"),
+        QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"),
+        QStringLiteral("-g"), QStringLiteral("1"),
+        QStringLiteral("-r"), QStringLiteral("1"),
+        videoPath
+    });
+    const bool started = process.waitForStarted(10000);
+    if (started) {
+        process.waitForFinished(30000);
+    }
+    for (int i = 0; i < 4; ++i) {
+        QFile::remove(directory + QStringLiteral("/p%1.png").arg(i));
+    }
+    if (!started || process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+        return false;
+    }
+    *outVideoPath = videoPath;
+    return true;
+}
+
+bool redDominant(const QColor &color)
+{
+    return color.red() > color.green() + 80 && color.red() > color.blue() + 80;
+}
+
+bool blueDominant(const QColor &color)
+{
+    return color.blue() > color.red() + 80 && color.blue() > color.green() + 80;
 }
 
 } // namespace
@@ -259,6 +313,15 @@ private slots:
     void applicationPreviewEmitsFramePreview();
     void mainWindowPreviewButtonEmitsSignal();
     void previewEndToEndShowsActiveFrameInViewer();
+    void frameExtractorRejectsInvalidSeekTime();
+    void frameExtractorExtractsFrameAtSeekTime();
+    void frameExtractorSeekDeterministicRepeatability();
+    void applicationTimeNavigationGuards();
+    void applicationPreviewAtUpdatesPositionAndEmits();
+    void applicationStepAdvancesAndClampsBelowZero();
+    void applicationSeekBeyondEndFailsDeterministically();
+    void applicationTimeResetsOnProjectActiveAndRemoval();
+    void mainWindowStepButtonsAndTimeLabel();
 };
 
 void ProjectTest::initTestCase()
@@ -2891,6 +2954,279 @@ void ProjectTest::previewEndToEndShowsActiveFrameInViewer()
     // sits inside a layout, so its actual geometry may exceed the requested
     // resize).
     expectColor(view, view.width() / 2, view.height() / 2, kFrontColor);
+}
+
+void ProjectTest::frameExtractorRejectsInvalidSeekTime()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString mediaPath = tempDir.filePath(QStringLiteral("frame.png"));
+    QImage source(16, 16, QImage::Format_RGB32);
+    source.fill(QColor(255, 255, 255));
+    QVERIFY(source.save(mediaPath, "PNG"));
+
+    QString error;
+    QImage out;
+    QVERIFY(!FrameExtractor::extractFrameAt(
+        mediaPath, QStringLiteral("/no/ffmpeg"), -5.0, &out, &error));
+    QVERIFY(error.contains(QStringLiteral("invalid seek time")));
+
+    error.clear();
+    QVERIFY(!FrameExtractor::extractFrameAt(
+        mediaPath, QStringLiteral("/no/ffmpeg"), qQNaN(), &out, &error));
+    QVERIFY(error.contains(QStringLiteral("invalid seek time")));
+
+    error.clear();
+    QVERIFY(!FrameExtractor::extractFrameAt(
+        mediaPath, QString(), 0.0, &out, &error));
+    QVERIFY(error.contains(QStringLiteral("ffmpeg not found")));
+}
+
+void ProjectTest::frameExtractorExtractsFrameAtSeekTime()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg not available; skipping decode-dependent test.");
+    }
+
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    QString videoPath;
+    QVERIFY(createSteppedVideo(tempDir.path(), FrameExtractor::defaultExecutablePath(),
+                               &videoPath));
+
+    QImage atZero;
+    QImage atTwo;
+    QVERIFY(FrameExtractor::extractFrameAt(
+        videoPath, FrameExtractor::defaultExecutablePath(), 0.0, &atZero));
+    QVERIFY(FrameExtractor::extractFrameAt(
+        videoPath, FrameExtractor::defaultExecutablePath(), 2.0, &atTwo));
+
+    QVERIFY(!atZero.isNull());
+    QVERIFY(!atTwo.isNull());
+    QVERIFY(redDominant(atZero.pixelColor(atZero.width() / 2, atZero.height() / 2)));
+    QVERIFY(blueDominant(atTwo.pixelColor(atTwo.width() / 2, atTwo.height() / 2)));
+    QVERIFY(!imagesIdentical(atZero, atTwo));
+}
+
+void ProjectTest::frameExtractorSeekDeterministicRepeatability()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg not available; skipping decode-dependent test.");
+    }
+
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    QString videoPath;
+    QVERIFY(createSteppedVideo(tempDir.path(), FrameExtractor::defaultExecutablePath(),
+                               &videoPath));
+
+    QImage first;
+    QImage second;
+    QVERIFY(FrameExtractor::extractFrameAt(
+        videoPath, FrameExtractor::defaultExecutablePath(), 1.5, &first));
+    QVERIFY(FrameExtractor::extractFrameAt(
+        videoPath, FrameExtractor::defaultExecutablePath(), 1.5, &second));
+    QVERIFY(imagesIdentical(first, second));
+}
+
+void ProjectTest::applicationTimeNavigationGuards()
+{
+    Application app;
+    QSignalSpy timeSpy(&app, &Application::previewTimeChanged);
+    QSignalSpy frameSpy(&app, &Application::framePreviewReady);
+
+    // No project.
+    QVERIFY(!app.previewActiveMediaFrameAt(1.0));
+    QVERIFY(!app.stepActiveMediaPreview(1.0));
+    QCOMPARE(timeSpy.count(), 0);
+    QCOMPARE(frameSpy.count(), 0);
+
+    // Project but no active media.
+    app.newProject();
+    QSignalSpy messageSpy(&app, &Application::backgroundCompleted);
+    QVERIFY(!app.previewActiveMediaFrameAt(1.0));
+    QVERIFY(!app.stepActiveMediaPreview(1.0));
+    QCOMPARE(timeSpy.count(), 0);
+    QCOMPARE(frameSpy.count(), 0);
+    QVERIFY(messageSpy.first().first().toString().contains(QStringLiteral("No active media")));
+}
+
+void ProjectTest::applicationPreviewAtUpdatesPositionAndEmits()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg not available; skipping decode-dependent test.");
+    }
+
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    QString videoPath;
+    QVERIFY(createSteppedVideo(tempDir.path(), FrameExtractor::defaultExecutablePath(),
+                               &videoPath));
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(videoPath));
+    const QString mediaId = app.mediaItems().at(0).id();
+    QVERIFY(app.setActiveMedia(mediaId));
+
+    QSignalSpy timeSpy(&app, &Application::previewTimeChanged);
+    QSignalSpy frameSpy(&app, &Application::framePreviewReady);
+
+    QVERIFY(app.previewActiveMediaFrameAt(2.0));
+    QCOMPARE(app.previewTimeSeconds(), 2.0);
+    QCOMPARE(timeSpy.count(), 1);
+    QCOMPARE(timeSpy.first().first().toDouble(), 2.0);
+    QCOMPARE(frameSpy.count(), 1);
+    const QImage frame = frameSpy.first().first().value<QImage>();
+    QVERIFY(!frame.isNull());
+    QVERIFY(blueDominant(frame.pixelColor(frame.width() / 2, frame.height() / 2)));
+
+    // Re-requesting the same position does not re-emit the time change.
+    QVERIFY(app.previewActiveMediaFrameAt(2.0));
+    QCOMPARE(timeSpy.count(), 1);
+    QCOMPARE(frameSpy.count(), 2);
+}
+
+void ProjectTest::applicationStepAdvancesAndClampsBelowZero()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg not available; skipping decode-dependent test.");
+    }
+
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    QString videoPath;
+    QVERIFY(createSteppedVideo(tempDir.path(), FrameExtractor::defaultExecutablePath(),
+                               &videoPath));
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(videoPath));
+    const QString mediaId = app.mediaItems().at(0).id();
+    QVERIFY(app.setActiveMedia(mediaId));
+
+    QSignalSpy timeSpy(&app, &Application::previewTimeChanged);
+
+    // +1 s from 0.
+    QVERIFY(app.stepActiveMediaPreview(1.0));
+    QCOMPARE(app.previewTimeSeconds(), 1.0);
+    QCOMPARE(timeSpy.count(), 1);
+
+    // Stepping below zero clamps to 0 and decodes there.
+    QVERIFY(app.stepActiveMediaPreview(-3.0));
+    QCOMPARE(app.previewTimeSeconds(), 0.0);
+    QCOMPARE(timeSpy.count(), 2);
+}
+
+void ProjectTest::applicationSeekBeyondEndFailsDeterministically()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg not available; skipping decode-dependent test.");
+    }
+
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    QString videoPath;
+    QVERIFY(createSteppedVideo(tempDir.path(), FrameExtractor::defaultExecutablePath(),
+                               &videoPath));
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(videoPath));
+    const QString mediaId = app.mediaItems().at(0).id();
+    QVERIFY(app.setActiveMedia(mediaId));
+
+    QVERIFY(app.previewActiveMediaFrameAt(0.5));
+    QCOMPARE(app.previewTimeSeconds(), 0.5);
+
+    QSignalSpy timeSpy(&app, &Application::previewTimeChanged);
+    QSignalSpy frameSpy(&app, &Application::framePreviewReady);
+    QSignalSpy messageSpy(&app, &Application::backgroundCompleted);
+    timeSpy.clear();
+    frameSpy.clear();
+    messageSpy.clear();
+
+    QVERIFY(!app.previewActiveMediaFrameAt(500.0));
+    QCOMPARE(app.previewTimeSeconds(), 0.5); // unchanged
+    QCOMPARE(timeSpy.count(), 0);
+    QCOMPARE(frameSpy.count(), 0);
+    QCOMPARE(messageSpy.count(), 1);
+    QVERIFY(messageSpy.first().first().toString().contains(QStringLiteral("Preview failed")));
+}
+
+void ProjectTest::applicationTimeResetsOnProjectActiveAndRemoval()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg not available; skipping decode-dependent test.");
+    }
+
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    QString firstVideo;
+    QVERIFY(createSteppedVideo(tempDir.path(), FrameExtractor::defaultExecutablePath(),
+                               &firstVideo));
+    const QString secondVideo = tempDir.filePath(QStringLiteral("second.mp4"));
+    QVERIFY(QFile::copy(firstVideo, secondVideo));
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(firstVideo));
+    const QString firstId = app.mediaItems().at(0).id();
+    QVERIFY(app.setActiveMedia(firstId));
+    QVERIFY(app.previewActiveMediaFrameAt(1.0));
+    QCOMPARE(app.previewTimeSeconds(), 1.0);
+
+    // New project resets the position.
+    QSignalSpy timeSpy(&app, &Application::previewTimeChanged);
+    app.newProject();
+    QCOMPARE(app.previewTimeSeconds(), 0.0);
+    QCOMPARE(timeSpy.count(), 1);
+
+    // Changing the active media resets the position.
+    QVERIFY(app.importMediaFile(firstVideo));
+    QVERIFY(app.importMediaFile(secondVideo));
+    const QString idA = app.mediaItems().at(0).id();
+    const QString idB = app.mediaItems().at(1).id();
+    QVERIFY(app.setActiveMedia(idA));
+    QVERIFY(app.previewActiveMediaFrameAt(2.0));
+    QCOMPARE(app.previewTimeSeconds(), 2.0);
+
+    timeSpy.clear();
+    QVERIFY(app.setActiveMedia(idB));
+    QCOMPARE(app.previewTimeSeconds(), 0.0);
+    QCOMPARE(timeSpy.count(), 1);
+
+    // Removing the active media resets the position.
+    QVERIFY(app.previewActiveMediaFrameAt(1.5));
+    QCOMPARE(app.previewTimeSeconds(), 1.5);
+    timeSpy.clear();
+    QVERIFY(app.removeMedia(idB));
+    QCOMPARE(app.previewTimeSeconds(), 0.0);
+    QCOMPARE(timeSpy.count(), 1);
+}
+
+void ProjectTest::mainWindowStepButtonsAndTimeLabel()
+{
+    TestMainWindow window;
+    QSignalSpy spy(&window, &MainWindow::previewStepRequested);
+
+    auto *backButton = window.findChild<QPushButton *>(QStringLiteral("stepBackButton"));
+    auto *forwardButton = window.findChild<QPushButton *>(QStringLiteral("stepForwardButton"));
+    auto *timeLabel = window.findChild<QLabel *>(QStringLiteral("previewTimeLabel"));
+    QVERIFY(backButton);
+    QVERIFY(forwardButton);
+    QVERIFY(timeLabel);
+    QCOMPARE(timeLabel->text(), QStringLiteral("Time: 0.0 s"));
+
+    backButton->click();
+    forwardButton->click();
+    QCOMPARE(spy.count(), 2);
+    QCOMPARE(spy.at(0).first().toDouble(), -1.0);
+    QCOMPARE(spy.at(1).first().toDouble(), 1.0);
+
+    window.showPreviewTime(3.5);
+    QCOMPARE(timeLabel->text(), QStringLiteral("Time: 3.5 s"));
 }
 
 QTEST_MAIN(ProjectTest)

@@ -34,6 +34,19 @@ public:
                                   QImage *outImage,
                                   QString *error = nullptr);
 
+    // Decodes the frame at the requested seek position (seconds) of filePath.
+    // This is a REQUESTED preview/seek position, not a guarantee of exact
+    // presentation-timestamp or frame accuracy (seek may land on a keyframe).
+    // Semantics and failure behavior match extractFirstFrame(); a negative or
+    // non-finite time is rejected deterministically. The media file is never
+    // modified. Beyond-end/beyond-available positions fail deterministically
+    // with the current preview position left unchanged by callers.
+    static bool extractFrameAt(const QString &filePath,
+                               const QString &executablePath,
+                               double seconds,
+                               QImage *outImage,
+                               QString *error = nullptr);
+
 private:
     FrameExtractor() = delete;
 };

@@ -29,6 +29,8 @@ int main(int argc, char *argv[])
                      &application, &Application::setActiveMedia);
     QObject::connect(&window, &MainWindow::previewFrameRequested,
                      &application, &Application::previewActiveMediaFrame);
+    QObject::connect(&window, &MainWindow::previewStepRequested,
+                     &application, &Application::stepActiveMediaPreview);
     QObject::connect(&window, &MainWindow::backgroundDemoRequested,
                      &application, &Application::runBackgroundDemo);
     QObject::connect(&window, &MainWindow::resetViewportRequested,
@@ -44,6 +46,8 @@ int main(int argc, char *argv[])
                      &window, &MainWindow::showActiveMedia);
     QObject::connect(&application, &Application::framePreviewReady,
                      &window, &MainWindow::showFramePreview);
+    QObject::connect(&application, &Application::previewTimeChanged,
+                     &window, &MainWindow::showPreviewTime);
 
     ViewportState *viewport = application.viewportState();
     if (viewport) {

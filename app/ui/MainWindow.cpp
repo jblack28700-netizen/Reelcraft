@@ -46,8 +46,12 @@ MainWindow::MainWindow(QWidget *parent)
     m_removeMediaButton = new QPushButton(QStringLiteral("Remove Media"), central);
     m_setActiveButton = new QPushButton(QStringLiteral("Set Active"), central);
     m_previewFrameButton = new QPushButton(QStringLiteral("Preview Active Frame"), central);
+    m_stepBackButton = new QPushButton(QStringLiteral("Step -1 s"), central);
+    m_stepForwardButton = new QPushButton(QStringLiteral("Step +1 s"), central);
     m_backgroundButton = new QPushButton(QStringLiteral("Run Background Demo"), central);
     m_resetViewportButton = new QPushButton(QStringLiteral("Reset Viewport"), central);
+
+    m_previewTimeLabel = new QLabel(QStringLiteral("Time: 0.0 s"), central);
 
     m_mediaListWidget = new QListWidget(central);
     m_mediaListWidget->setObjectName("mediaListWidget");
@@ -68,6 +72,9 @@ MainWindow::MainWindow(QWidget *parent)
     m_removeMediaButton->setObjectName("removeMediaButton");
     m_setActiveButton->setObjectName("setActiveButton");
     m_previewFrameButton->setObjectName("previewFrameButton");
+    m_stepBackButton->setObjectName("stepBackButton");
+    m_stepForwardButton->setObjectName("stepForwardButton");
+    m_previewTimeLabel->setObjectName("previewTimeLabel");
     m_backgroundButton->setObjectName("backgroundDemoButton");
     m_resetViewportButton->setObjectName("resetViewportButton");
 
@@ -89,6 +96,9 @@ MainWindow::MainWindow(QWidget *parent)
     layout->addWidget(m_removeMediaButton);
     layout->addWidget(m_setActiveButton);
     layout->addWidget(m_previewFrameButton);
+    layout->addWidget(m_stepBackButton);
+    layout->addWidget(m_stepForwardButton);
+    layout->addWidget(m_previewTimeLabel);
     layout->addWidget(m_activeMediaLabel);
     layout->addWidget(m_backgroundButton);
     layout->addWidget(m_resetViewportButton);
@@ -142,6 +152,14 @@ MainWindow::MainWindow(QWidget *parent)
         emit previewFrameRequested();
     });
 
+    connect(m_stepBackButton, &QPushButton::clicked, this, [this]() {
+        emit previewStepRequested(-1.0);
+    });
+
+    connect(m_stepForwardButton, &QPushButton::clicked, this, [this]() {
+        emit previewStepRequested(1.0);
+    });
+
     connect(m_backgroundButton, &QPushButton::clicked, this, &MainWindow::backgroundDemoRequested);
 
     m_newProjectButton->installEventFilter(this);
@@ -151,6 +169,8 @@ MainWindow::MainWindow(QWidget *parent)
     m_removeMediaButton->installEventFilter(this);
     m_setActiveButton->installEventFilter(this);
     m_previewFrameButton->installEventFilter(this);
+    m_stepBackButton->installEventFilter(this);
+    m_stepForwardButton->installEventFilter(this);
     m_backgroundButton->installEventFilter(this);
     m_resetViewportButton->installEventFilter(this);
 }
@@ -247,6 +267,11 @@ void MainWindow::showFramePreview(const QImage &image)
     if (m_viewerWidget) {
         m_viewerWidget->setSourceImage(image);
     }
+}
+
+void MainWindow::showPreviewTime(double seconds)
+{
+    m_previewTimeLabel->setText(QStringLiteral("Time: %1 s").arg(seconds, 0, 'f', 1));
 }
 
 void MainWindow::refreshActiveMarking()

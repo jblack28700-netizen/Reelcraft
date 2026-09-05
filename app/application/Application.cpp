@@ -60,12 +60,17 @@ void Application::newProject()
     m_currentProject = Project();
     m_hasProject = true;
     const bool hadActiveMedia = !m_activeMediaId.isEmpty();
+    const bool hadPreviewTime = m_previewTimeSeconds != 0.0;
     m_mediaItems.clear();
     m_activeMediaId.clear();
+    m_previewTimeSeconds = 0.0;
     resetViewport();
     emit mediaListChanged(m_mediaItems);
     if (hadActiveMedia) {
         emit activeMediaChanged(m_activeMediaId);
+    }
+    if (hadPreviewTime) {
+        emit previewTimeChanged(m_previewTimeSeconds);
     }
     emit projectChanged(m_currentProject);
 }
@@ -119,8 +124,13 @@ bool Application::openProject(const QString &filePath)
 
     // The media list is normalized first; the active id is then restored only
     // when it resolves to a current, available media record.
+    const bool hadPreviewTime = m_previewTimeSeconds != 0.0;
+    m_previewTimeSeconds = 0.0;
     emit mediaListChanged(m_mediaItems);
     restoreActiveMediaFromProject(m_currentProject.activeMediaId());
+    if (hadPreviewTime) {
+        emit previewTimeChanged(m_previewTimeSeconds);
+    }
     emit projectChanged(m_currentProject);
     return true;
 }
@@ -167,11 +177,15 @@ bool Application::removeMedia(const QString &mediaId)
             m_mediaItems.removeAt(i);
             if (removedActive) {
                 m_activeMediaId.clear();
+                if (m_previewTimeSeconds != 0.0) {
+                    m_previewTimeSeconds = 0.0;
+                }
             }
             emit backgroundCompleted(QStringLiteral("Removed media: %1").arg(fileName));
             emit mediaListChanged(m_mediaItems);
             if (removedActive) {
                 emit activeMediaChanged(m_activeMediaId);
+                emit previewTimeChanged(m_previewTimeSeconds);
             }
             return true;
         }
@@ -210,12 +224,38 @@ bool Application::setActiveMedia(const QString &mediaId)
     }
 
     m_activeMediaId = mediaId;
+    // Changing the active media starts time navigation from the beginning.
+    if (m_previewTimeSeconds != 0.0) {
+        m_previewTimeSeconds = 0.0;
+    }
     emit backgroundCompleted(QStringLiteral("Active media: %1").arg(item->fileName()));
     emit activeMediaChanged(m_activeMediaId);
+    emit previewTimeChanged(m_previewTimeSeconds);
     return true;
 }
 
+double Application::previewTimeSeconds() const
+{
+    return m_previewTimeSeconds;
+}
+
 bool Application::previewActiveMediaFrame()
+{
+    return decodePreviewFrameAt(m_previewTimeSeconds);
+}
+
+bool Application::previewActiveMediaFrameAt(double seconds)
+{
+    return decodePreviewFrameAt(seconds < 0.0 ? 0.0 : seconds);
+}
+
+bool Application::stepActiveMediaPreview(double deltaSeconds)
+{
+    const double target = m_previewTimeSeconds + deltaSeconds;
+    return decodePreviewFrameAt(target < 0.0 ? 0.0 : target);
+}
+
+bool Application::decodePreviewFrameAt(double targetSeconds)
 {
     if (!m_hasProject) {
         emit backgroundCompleted(QStringLiteral("No project to preview media in."));
@@ -238,13 +278,19 @@ bool Application::previewActiveMediaFrame()
 
     QImage frame;
     QString error;
-    if (!FrameExtractor::extractFirstFrame(active->path(),
-                                           FrameExtractor::defaultExecutablePath(),
-                                           &frame, &error)) {
+    if (!FrameExtractor::extractFrameAt(active->path(),
+                                        FrameExtractor::defaultExecutablePath(),
+                                        targetSeconds, &frame, &error)) {
+        // Beyond-end / undecodable requests fail deterministically; the
+        // current preview position is left unchanged.
         emit backgroundCompleted(QStringLiteral("Preview failed: %1").arg(error));
         return false;
     }
 
+    if (m_previewTimeSeconds != targetSeconds) {
+        m_previewTimeSeconds = targetSeconds;
+        emit previewTimeChanged(m_previewTimeSeconds);
+    }
     emit backgroundCompleted(QStringLiteral("Frame extracted: %1").arg(active->fileName()));
     emit framePreviewReady(frame);
     return true;
