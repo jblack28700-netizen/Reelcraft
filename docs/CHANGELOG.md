@@ -400,3 +400,13 @@ Date: 2026-09-05
 - Added selection, consistency, and persistence tests.
 - Full test suite: 90 passed, 0 failed.
 - No decoding, playback, timeline, AI, export, effects, or camera-specific logic yet.
+
+## v0.2.25 — Equirectangular Frame Presentation Foundation
+
+Date: 2026-09-05
+
+- Added a deterministic CPU renderer that views an equirectangular image through the existing viewer camera (yaw/pitch/roll/FOV), consistent with the established viewer conventions.
+- The viewer presentation surface now accepts an optional in-memory equirectangular source image and renders it through the camera; clearing the source returns to the synthetic test scene.
+- Added camera-anchor, roll-direction, FOV, invalid-input, determinism, and viewer-integration tests plus a CPU performance sanity measurement (~14 ms/frame at 640×320).
+- Full test suite: 100 passed, 0 failed.
+- No real media decoding/playback yet — this is the decode-free pixel presentation foundation.

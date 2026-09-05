@@ -697,6 +697,34 @@ Define the minimal deterministic contract for which imported media record is act
 - No decoding, playback, timeline, editing, AI, export, audio, effects, camera-specific logic, viewer/presentation changes, schema migration, or new dependencies.
 - Original media files never touched; active selection requires an available reference at selection/restore time (point-in-time snapshot; no watchers).
 
+## 2026-09-05 — Phase 2 Objective 8: Equirectangular Frame Presentation Foundation
+
+### Objective
+
+Establish the smallest safe, deterministic, decode-free pixel presentation path: render an equirectangular image through the existing authoritative ViewportState camera, consistent with the verified ViewerProjection conventions. No real decoding/playback.
+
+### Work Completed
+
+- Added `app/viewer/EquirectView.{h,cpp}` — deterministic CPU equirectangular→camera renderer. Uses exactly the ViewportState/ViewerProjection conventions (identity → FRONT; +90° yaw → RIGHT; −90° → LEFT; ±90° pitch → UP/DOWN; positive roll rotates content counter-clockwise; vertical FOV [20,140]); camera basis built identically to ViewerProjection; nearest-neighbor equirect sampling; output Format_ARGB32.
+- Deterministic input rejection: null/empty source, non-positive output dimensions, non-finite camera values, |pitch|>90, FOV outside [20,140]; failures never partially mutate `*outImage`; `MaxOutputWidth = 640` documented as an implementation/performance safeguard (not an architectural limit).
+- `ViewerWidget` optional source-image path: `setSourceImage(QImage)` / `hasSourceImage()`; paintEvent renders a valid source through the current ViewportState camera (aspect-preserving capped resolution); when no/cleared source exists the existing synthetic marker-scene path is unchanged (protected regression contract). Widget remains presentation-only with no camera-state ownership.
+- Registered EquirectView in `reelcraft.pro` and `tests/tests.pro`.
+
+### Verification
+
+- Application build succeeded; offscreen launch smoke event loop alive until timeout (SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 100 passed, 0 failed (90 prior + 10 new, all green on the first full run).
+- New tests: identity/yaw/pitch anchors; positive-roll direction verified against the ViewerProjection convention via quadrant analysis; FOV coverage change; invalid-input rejection incl. no-partial-mutation sentinel; pixel-for-pixel determinism; ViewerWidget source-image integration; clearing source restores marker-scene rendering; CPU performance sanity.
+- Performance sanity: EquirectView CPU render ≈ 14.11 ms/frame at 640×320 (recorded from the suite; generous bound asserted).
+
+### Boundary Notes
+
+- No decoding/probing/playback/streaming/audio, FFmpeg/GStreamer/QtMultimedia/OpenCV, active-media-to-viewer binding, timeline/editing/AI/export/effects, reframing/keyframes, camera-specific logic, schema migration, or new dependencies.
+- Marker-scene rendering is a protected regression contract; the source-image path is opt-in.
+- Resolution cap is a documented safeguard; later objectives may raise it or add optimized/GPU rendering without redesigning the camera contract.
+
+
 
 
 

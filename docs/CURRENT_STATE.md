@@ -621,3 +621,22 @@ Verification:
 - Test build succeeded.
 - Automated tests: 90 passed, 0 failed (81 prior + 9 new).
 - New tests: set/clear semantics + idempotency; import never auto-selects; removal rules; new-project clearing; save→reopen round trip; open-time normalization (dangling/legacy/duplicate persisted ids); unavailable media cannot become active; MainWindow Set Active/label/marking.
+
+
+## Phase 2 Objective 8 — Equirectangular Frame Presentation Foundation — Complete
+
+Status: Complete.
+
+Established the smallest safe, deterministic, decode-free pixel presentation path: equirectangular image viewed through the existing authoritative ViewportState camera, consistent with ViewerProjection conventions.
+
+- `app/viewer/EquirectView.{h,cpp}`: deterministic CPU renderer `render(source, yaw, pitch, roll, fov, outW, outH, out) -> bool`. Same conventions as ViewportState/ViewerProjection (identity → FRONT centered; +90° yaw → RIGHT; −90° → LEFT; ±90° pitch → UP/DOWN; positive roll rotates content counter-clockwise; vertical FOV [20,140]); nearest-neighbor sampling; rejects invalid input (empty source, non-positive output, non-finite camera values, |pitch| > 90, FOV outside [20,140]) without partial output mutation. `MaxOutputWidth = 640` is a documented implementation/performance safeguard, not an architectural limit.
+- `ViewerWidget` optional source-image path: `setSourceImage`/`hasSourceImage`; valid source renders through the current `ViewportState` camera (capped, aspect-preserving); absent/cleared source falls back to the existing marker-scene path (protected regression contract, opt-in only). Widget stays presentation-only and camera-state-free.
+- No Application, Project, MediaItem, activeMediaId, media-library, or schema changes; no decoder/media-engine contract; no dependencies.
+
+Verification:
+- Application build succeeded.
+- Offscreen launch smoke: event loop alive until timeout (SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 100 passed, 0 failed (90 prior + 10 new).
+- New tests: identity/yaw/pitch anchors; positive-roll direction verified against the ViewerProjection convention (quadrant analysis); FOV coverage change; invalid-input rejection incl. no-partial-mutation; pixel-for-pixel determinism; ViewerWidget source-image integration; clearing source restores scene rendering; CPU performance sanity.
+- Performance sanity: EquirectView CPU render ~14 ms/frame at 640×320 (recorded).

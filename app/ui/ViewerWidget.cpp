@@ -4,7 +4,9 @@
 #include <QPaintEvent>
 #include <QPen>
 #include <QPointF>
+#include <QRect>
 
+#include "viewer/EquirectView.h"
 #include "viewer/ViewerProjection.h"
 #include "viewer/ViewportState.h"
 
@@ -71,6 +73,12 @@ void ViewerWidget::setViewportState(const ViewportState *viewportState)
     update();
 }
 
+void ViewerWidget::setSourceImage(const QImage &sourceImage)
+{
+    m_sourceImage = sourceImage;
+    update();
+}
+
 QSize ViewerWidget::sizeHint() const
 {
     return QSize(640, 320);
@@ -105,6 +113,13 @@ void ViewerWidget::paintEvent(QPaintEvent *event)
     painter.setRenderHint(QPainter::Antialiasing, false);
 
     drawBackground(painter);
+
+    if (hasSourceImage()) {
+        drawSourceImage(painter);
+        return;
+    }
+
+    // Synthetic marker-scene path (protected regression contract).
     drawCenterReticle(painter);
     drawMarkers(painter);
 }
@@ -166,4 +181,34 @@ void ViewerWidget::drawMarkers(QPainter &painter)
 QColor ViewerWidget::markerColor(int index) const
 {
     return kMarkerPalette[index % kMarkerPaletteSize];
+}
+
+void ViewerWidget::drawSourceImage(QPainter &painter)
+{
+    if (width() <= 0 || height() <= 0) {
+        return;
+    }
+
+    double cameraYaw = 0.0;
+    double cameraPitch = 0.0;
+    double cameraRoll = 0.0;
+    double fieldOfView = 90.0;
+    cameraValues(&cameraYaw, &cameraPitch, &cameraRoll, &fieldOfView);
+
+    // Capped CPU rendering resolution (implementation/performance safeguard;
+    // not an architectural limit). Aspect is preserved from the widget.
+    const int renderWidth = qMin(width(), EquirectView::MaxOutputWidth);
+    const int renderHeight =
+        qMax(1, static_cast<int>(renderWidth * static_cast<double>(height()) / width()));
+
+    QImage view;
+    if (!EquirectView::render(m_sourceImage, cameraYaw, cameraPitch, cameraRoll,
+                              fieldOfView, renderWidth, renderHeight, &view)) {
+        // Deterministic fallback: the background is already painted; no
+        // partial frame is drawn.
+        return;
+    }
+
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+    painter.drawImage(QRect(0, 0, width(), height()), view);
 }

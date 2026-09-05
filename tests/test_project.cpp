@@ -1,4 +1,5 @@
 #include <QtTest>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QImage>
@@ -14,15 +15,126 @@
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QtMath>
+#include <cmath>
+#include <cstring>
 
 #include "application/Application.h"
 #include "core/MediaItem.h"
 #include "core/Project.h"
 #include "ui/MainWindow.h"
 #include "ui/ViewerWidget.h"
+#include "viewer/EquirectView.h"
 #include "viewer/ViewerProjection.h"
 #include "viewer/ViewerScene.h"
 #include "viewer/ViewportState.h"
+
+namespace {
+
+// Deterministic synthetic equirectangular test pattern.
+// Region colors are distinct so camera-view behavior is verifiable by color.
+const QColor kPatternBackground(10, 10, 12);
+const QColor kFrontColor(255, 213, 79);
+const QColor kRightColor(240, 98, 146);
+const QColor kLeftColor(129, 199, 132);
+const QColor kUpColor(186, 104, 200);
+const QColor kDownColor(255, 138, 101);
+const QColor kUp20Color(0, 200, 200);
+const QColor kUp30Color(255, 255, 255);
+
+struct Region
+{
+    double yawDeg = 0.0;
+    double pitchDeg = 0.0;
+    double halfYawDeg = 0.0;
+    double halfPitchDeg = 0.0;
+    QColor color;
+};
+
+QColor patternColorAt(double yawDeg, double pitchDeg)
+{
+    // Pole bands (whole top/bottom rows).
+    if (pitchDeg >= 86.0) {
+        return kUpColor;
+    }
+    if (pitchDeg <= -86.0) {
+        return kDownColor;
+    }
+
+    const Region regions[] = {
+        { 0.0, 0.0, 6.0, 6.0, kFrontColor },
+        { 90.0, 0.0, 6.0, 6.0, kRightColor },
+        { -90.0, 0.0, 6.0, 6.0, kLeftColor },
+        { 0.0, 20.0, 6.0, 4.0, kUp20Color },
+        { 0.0, 30.0, 6.0, 4.0, kUp30Color },
+    };
+    for (const Region &region : regions) {
+        if (qAbs(yawDeg - region.yawDeg) <= region.halfYawDeg
+            && qAbs(pitchDeg - region.pitchDeg) <= region.halfPitchDeg) {
+            return region.color;
+        }
+    }
+    return kPatternBackground;
+}
+
+QImage buildTestPattern(int width = 720, int height = 360)
+{
+    QImage pattern(width, height, QImage::Format_ARGB32);
+    for (int sy = 0; sy < height; ++sy) {
+        const double pitch = 90.0 - (sy + 0.5) * 180.0 / height;
+        for (int sx = 0; sx < width; ++sx) {
+            const double yaw = (sx + 0.5) * 360.0 / width - 180.0;
+            pattern.setPixel(sx, sy, patternColorAt(yaw, pitch).rgb());
+        }
+    }
+    return pattern;
+}
+
+bool imagesIdentical(const QImage &a, const QImage &b)
+{
+    if (a.size() != b.size() || a.format() != b.format()) {
+        return false;
+    }
+    if (a.isNull() || b.isNull()) {
+        return a.isNull() && b.isNull();
+    }
+    return std::memcmp(a.constBits(), b.constBits(), a.sizeInBytes()) == 0;
+}
+
+// Counts pixels of a color in the four screen quadrants around the center.
+struct QuadrantCounts
+{
+    int above = 0;
+    int below = 0;
+    int left = 0;
+    int right = 0;
+};
+
+QuadrantCounts countQuadrants(const QImage &image, const QColor &color)
+{
+    QuadrantCounts counts;
+    const int centerX = image.width() / 2;
+    const int centerY = image.height() / 2;
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            if (image.pixelColor(x, y) != color) {
+                continue;
+            }
+            if (y < centerY) {
+                ++counts.above;
+            } else if (y > centerY) {
+                ++counts.below;
+            }
+            if (x < centerX) {
+                ++counts.left;
+            } else if (x > centerX) {
+                ++counts.right;
+            }
+        }
+    }
+    return counts;
+}
+
+} // namespace
 
 class TestMainWindow : public MainWindow
 {
@@ -129,6 +241,16 @@ private slots:
     void activeMediaOpenClearsDanglingOrLegacy();
     void activeMediaUnavailableCannotBeActive();
     void mainWindowSetActiveAndLabelWork();
+    void equirectViewIdentityCentersFront();
+    void equirectViewYawCentersRightAndLeft();
+    void equirectViewPitchReachesUpAndDown();
+    void equirectViewPositiveRollRotatesContentCorrectly();
+    void equirectViewFieldOfViewChangesCoverage();
+    void equirectViewRejectsInvalidInput();
+    void equirectViewDeterministicRepeatability();
+    void viewerWidgetSourceImageRendersThroughCamera();
+    void viewerWidgetClearingSourceRestoresSceneRendering();
+    void equirectViewPerformanceSanity();
 };
 
 void ProjectTest::initTestCase()
@@ -2345,6 +2467,236 @@ void ProjectTest::mainWindowSetActiveAndLabelWork()
     QVERIFY(app.activeMediaId().isEmpty());
     QCOMPARE(activeLabel->text(), QStringLiteral("Active media: None"));
     QCOMPARE(list->count(), 0);
+}
+
+namespace {
+
+void expectColor(const QImage &image, int x, int y, const QColor &expected)
+{
+    const QColor color = image.pixelColor(x, y);
+    QCOMPARE(color.red(), expected.red());
+    QCOMPARE(color.green(), expected.green());
+    QCOMPARE(color.blue(), expected.blue());
+}
+
+double nearestPatchDistance(const QImage &image, const QColor &color,
+                            int centerX, int centerY)
+{
+    double best = -1.0;
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            if (image.pixelColor(x, y) != color) {
+                continue;
+            }
+            const double dx = x - centerX;
+            const double dy = y - centerY;
+            const double distance = std::sqrt(dx * dx + dy * dy);
+            if (best < 0.0 || distance < best) {
+                best = distance;
+            }
+        }
+    }
+    return best;
+}
+
+} // namespace
+
+void ProjectTest::equirectViewIdentityCentersFront()
+{
+    const QImage pattern = buildTestPattern();
+    QImage view;
+    QVERIFY(EquirectView::render(pattern, 0.0, 0.0, 0.0, 90.0, 200, 100, &view));
+    QCOMPARE(view.width(), 200);
+    QCOMPARE(view.height(), 100);
+
+    expectColor(view, 100, 50, kFrontColor);
+    expectColor(view, 2, 2, kPatternBackground);
+}
+
+void ProjectTest::equirectViewYawCentersRightAndLeft()
+{
+    const QImage pattern = buildTestPattern();
+
+    QImage viewRight;
+    QVERIFY(EquirectView::render(pattern, 90.0, 0.0, 0.0, 90.0, 200, 100, &viewRight));
+    expectColor(viewRight, 100, 50, kRightColor);
+
+    QImage viewLeft;
+    QVERIFY(EquirectView::render(pattern, -90.0, 0.0, 0.0, 90.0, 200, 100, &viewLeft));
+    expectColor(viewLeft, 100, 50, kLeftColor);
+}
+
+void ProjectTest::equirectViewPitchReachesUpAndDown()
+{
+    const QImage pattern = buildTestPattern();
+
+    QImage viewUp;
+    QVERIFY(EquirectView::render(pattern, 0.0, 90.0, 0.0, 90.0, 200, 100, &viewUp));
+    expectColor(viewUp, 100, 50, kUpColor);
+
+    QImage viewDown;
+    QVERIFY(EquirectView::render(pattern, 0.0, -90.0, 0.0, 90.0, 200, 100, &viewDown));
+    expectColor(viewDown, 100, 50, kDownColor);
+}
+
+void ProjectTest::equirectViewPositiveRollRotatesContentCorrectly()
+{
+    const QImage pattern = buildTestPattern();
+
+    // A stripe above FRONT (world yaw 0, pitch 20). At zero roll it must sit
+    // above center; positive roll must move it to the left, negative roll to
+    // the right (matching the ViewerProjection convention that positive roll
+    // rotates projected content counter-clockwise on screen).
+    QImage viewZero;
+    QVERIFY(EquirectView::render(pattern, 0.0, 0.0, 0.0, 90.0, 200, 100, &viewZero));
+    const QuadrantCounts zeroCounts = countQuadrants(viewZero, kUp20Color);
+    QVERIFY(zeroCounts.above > 0);
+    QVERIFY(zeroCounts.above > zeroCounts.below);
+
+    QImage viewRolled;
+    QVERIFY(EquirectView::render(pattern, 0.0, 0.0, 90.0, 90.0, 200, 100, &viewRolled));
+    const QuadrantCounts rolledCounts = countQuadrants(viewRolled, kUp20Color);
+    QVERIFY(rolledCounts.left > 0);
+    QVERIFY(rolledCounts.left > rolledCounts.right);
+    QVERIFY(rolledCounts.left > rolledCounts.above);
+
+    QImage viewRolledBack;
+    QVERIFY(EquirectView::render(pattern, 0.0, 0.0, -90.0, 90.0, 200, 100, &viewRolledBack));
+    const QuadrantCounts backCounts = countQuadrants(viewRolledBack, kUp20Color);
+    QVERIFY(backCounts.right > 0);
+    QVERIFY(backCounts.right > backCounts.left);
+    QVERIFY(backCounts.right > backCounts.above);
+}
+
+void ProjectTest::equirectViewFieldOfViewChangesCoverage()
+{
+    const QImage pattern = buildTestPattern();
+
+    QImage viewNarrow;
+    QVERIFY(EquirectView::render(pattern, 0.0, 0.0, 0.0, 60.0, 200, 100, &viewNarrow));
+    QImage viewWide;
+    QVERIFY(EquirectView::render(pattern, 0.0, 0.0, 0.0, 120.0, 200, 100, &viewWide));
+
+    const double distanceNarrow = nearestPatchDistance(viewNarrow, kUp20Color, 100, 50);
+    const double distanceWide = nearestPatchDistance(viewWide, kUp20Color, 100, 50);
+    QVERIFY(distanceNarrow > 0.0);
+    QVERIFY(distanceWide > 0.0);
+    // A larger vertical FOV brings the same direction closer to center.
+    QVERIFY(distanceNarrow > distanceWide);
+}
+
+void ProjectTest::equirectViewRejectsInvalidInput()
+{
+    const QImage pattern = buildTestPattern();
+    QImage out(4, 4, QImage::Format_ARGB32);
+    out.fill(QColor(255, 0, 0));
+
+    const QColor sentinel(255, 0, 0);
+    auto expectUnchanged = [&out, &sentinel]() {
+        expectColor(out, 0, 0, sentinel);
+        expectColor(out, 3, 3, sentinel);
+    };
+
+    // Empty source.
+    QVERIFY(!EquirectView::render(QImage(), 0.0, 0.0, 0.0, 90.0, 200, 100, &out));
+    expectUnchanged();
+
+    // Invalid output dimensions.
+    QVERIFY(!EquirectView::render(pattern, 0.0, 0.0, 0.0, 90.0, 0, 100, &out));
+    QVERIFY(!EquirectView::render(pattern, 0.0, 0.0, 0.0, 90.0, 200, -5, &out));
+    expectUnchanged();
+
+    // Invalid FOV (outside ViewportState clamp semantics [20, 140]).
+    QVERIFY(!EquirectView::render(pattern, 0.0, 0.0, 0.0, 10.0, 200, 100, &out));
+    QVERIFY(!EquirectView::render(pattern, 0.0, 0.0, 0.0, 150.0, 200, 100, &out));
+    expectUnchanged();
+
+    // Invalid camera values.
+    QVERIFY(!EquirectView::render(pattern, 0.0, 91.0, 0.0, 90.0, 200, 100, &out));
+    QVERIFY(!EquirectView::render(pattern, 0.0, -91.0, 0.0, 90.0, 200, 100, &out));
+    QVERIFY(!EquirectView::render(pattern, qQNaN(), 0.0, 0.0, 90.0, 200, 100, &out));
+    expectUnchanged();
+
+    // Null output pointer.
+    QVERIFY(!EquirectView::render(pattern, 0.0, 0.0, 0.0, 90.0, 200, 100, nullptr));
+}
+
+void ProjectTest::equirectViewDeterministicRepeatability()
+{
+    const QImage pattern = buildTestPattern();
+
+    QImage first;
+    QImage second;
+    QVERIFY(EquirectView::render(pattern, 30.0, 15.0, 45.0, 95.0, 200, 100, &first));
+    QVERIFY(EquirectView::render(pattern, 30.0, 15.0, 45.0, 95.0, 200, 100, &second));
+
+    QVERIFY(imagesIdentical(first, second));
+}
+
+void ProjectTest::viewerWidgetSourceImageRendersThroughCamera()
+{
+    ViewportState state;
+    ViewerWidget widget;
+    widget.setViewportState(&state);
+    widget.resize(200, 100);
+
+    widget.setSourceImage(buildTestPattern());
+    QVERIFY(widget.hasSourceImage());
+
+    QImage view = widget.grab().toImage();
+    expectColor(view, 100, 50, kFrontColor);
+
+    // The presentation follows the authoritative ViewportState: +90 yaw
+    // centers the RIGHT region.
+    state.setYaw(90.0);
+    view = widget.grab().toImage();
+    expectColor(view, 100, 50, kRightColor);
+}
+
+void ProjectTest::viewerWidgetClearingSourceRestoresSceneRendering()
+{
+    ViewportState state;
+    ViewerWidget widget;
+    widget.setViewportState(&state);
+    widget.resize(200, 100);
+
+    widget.setSourceImage(buildTestPattern());
+    QVERIFY(widget.hasSourceImage());
+    state.setYaw(0.0);
+
+    // Clearing the source returns to the deterministic marker scene.
+    widget.setSourceImage(QImage());
+    QVERIFY(!widget.hasSourceImage());
+
+    QImage view = widget.grab().toImage();
+    expectColor(view, 100, 50, QColor(255, 213, 79)); // FRONT marker dot
+    expectColor(view, 10, 10, QColor(18, 20, 24));    // scene background
+}
+
+void ProjectTest::equirectViewPerformanceSanity()
+{
+    const QImage pattern = buildTestPattern();
+
+    // Warm-up.
+    QImage warm;
+    QVERIFY(EquirectView::render(pattern, 0.0, 0.0, 0.0, 90.0,
+                                  EquirectView::MaxOutputWidth, 320, &warm));
+
+    constexpr int kIterations = 5;
+    QElapsedTimer timer;
+    timer.start();
+    QImage view;
+    for (int i = 0; i < kIterations; ++i) {
+        QVERIFY(EquirectView::render(pattern, 10.0, 5.0, 3.0, 90.0,
+                                     EquirectView::MaxOutputWidth, 320, &view));
+    }
+    const double averageMs = static_cast<double>(timer.nsecsElapsed()) / kIterations / 1e6;
+    qInfo("EquirectView CPU render: %.2f ms/frame at %dx%d (max width %d)",
+          averageMs, EquirectView::MaxOutputWidth, 320, EquirectView::MaxOutputWidth);
+
+    // Generous sanity bound; this is a CPU-cost measurement, not a
+    // performance regression gate.
+    QVERIFY(averageMs < 2000.0);
 }
 
 QTEST_MAIN(ProjectTest)
