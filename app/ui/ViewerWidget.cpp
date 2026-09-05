@@ -1,10 +1,12 @@
 #include "ViewerWidget.h"
 
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPaintEvent>
 #include <QPen>
 #include <QPointF>
 #include <QRect>
+#include <QWheelEvent>
 
 #include "viewer/EquirectView.h"
 #include "viewer/ViewerProjection.h"
@@ -23,6 +25,12 @@ constexpr double kDefaultYaw = 0.0;
 constexpr double kDefaultPitch = 0.0;
 constexpr double kDefaultRoll = 0.0;
 constexpr double kDefaultFieldOfView = 90.0;
+
+// Pointer-interaction sensitivity (Objective 11). Deterministic constants;
+// revisitable later without contract change.
+constexpr double kLookDegreesPerPixel = 0.25;
+constexpr double kFovDegreesPerWheelStep = 5.0;
+constexpr int kWheelStepDenominator = 120;
 
 // Deterministic marker palette; index 0 is the FRONT marker.
 const QColor kMarkerPalette[] = {
@@ -211,4 +219,60 @@ void ViewerWidget::drawSourceImage(QPainter &painter)
 
     painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
     painter.drawImage(QRect(0, 0, width(), height()), view);
+}
+
+void ViewerWidget::mousePressEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton) {
+        m_dragging = true;
+        m_lastDragPosition = event->pos();
+        event->accept();
+        return;
+    }
+    QWidget::mousePressEvent(event);
+}
+
+void ViewerWidget::mouseMoveEvent(QMouseEvent *event)
+{
+    if (m_dragging && (event->buttons() & Qt::LeftButton)) {
+        const QPoint position = event->pos();
+        const int deltaX = position.x() - m_lastDragPosition.x();
+        const int deltaY = position.y() - m_lastDragPosition.y();
+        m_lastDragPosition = position;
+
+        if (deltaX != 0) {
+            // Drag right => yaw increases.
+            emit viewportYawDeltaRequested(kLookDegreesPerPixel * deltaX);
+        }
+        if (deltaY != 0) {
+            // Drag up (negative deltaY) => pitch increases.
+            emit viewportPitchDeltaRequested(-kLookDegreesPerPixel * deltaY);
+        }
+        event->accept();
+        return;
+    }
+    QWidget::mouseMoveEvent(event);
+}
+
+void ViewerWidget::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton && m_dragging) {
+        m_dragging = false;
+        event->accept();
+        return;
+    }
+    QWidget::mouseReleaseEvent(event);
+}
+
+void ViewerWidget::wheelEvent(QWheelEvent *event)
+{
+    const int angleDelta = event->angleDelta().y();
+    if (angleDelta != 0) {
+        // Wheel up => FOV decreases (zoom in); wheel down => FOV increases.
+        const double steps = static_cast<double>(angleDelta) / kWheelStepDenominator;
+        emit viewportFovDeltaRequested(-kFovDegreesPerWheelStep * steps);
+        event->accept();
+        return;
+    }
+    QWidget::wheelEvent(event);
 }

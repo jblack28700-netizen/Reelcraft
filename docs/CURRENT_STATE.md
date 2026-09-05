@@ -680,3 +680,22 @@ Verification:
 - Test build succeeded.
 - Automated tests: 116 passed, 0 failed (107 prior + 9 new; 0 skipped — ffmpeg available; suite ~17 s incl. generated video fixtures).
 - New tests: invalid seek-time rejection; frame-at-time extraction (0 s red-dominant vs 2 s blue-dominant on an all-keyframe 1 fps fixture); seek determinism; Application guards; position update + single time emission; same-position re-request emits no time change; step advance and below-zero clamp; beyond-end failure deterministic with position unchanged; position resets (new project / active change / active removal); step buttons and time readout.
+
+
+## Phase 2 Objective 11 — Pointer-Based Viewer Orientation Control — Complete
+
+Status: Complete.
+
+Added the primary 360-viewer pointer gestures, routed through the existing authoritative ViewportState and Application adjust slots.
+
+- `ViewerWidget` pointer handling (Objective 11): left-button drag emits `viewportYawDeltaRequested` (drag right = yaw increases) and `viewportPitchDeltaRequested` (drag up = pitch increases) at a deterministic 0.25 °/px; mouse wheel emits `viewportFovDeltaRequested` (wheel up = −5° = zoom in; wheel down = +5° = zoom out per 120-unit step); non-left drags ignored; no modifiers/inertia/multi-touch gestures.
+- New `ViewerWidget` delta signals wired in `main.cpp` to the existing Application adjust slots (same receivers as keyboard controls).
+- Sensitivity constants documented as deterministic defaults; widget never owns or mutates viewport state.
+- No rendering, media, decode, time-navigation, schema, persistence, or dependency changes.
+
+Verification:
+- Application build succeeded.
+- Offscreen launch smoke: event loop alive until timeout (SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 120 passed, 0 failed (116 prior + 4 new; 0 skipped).
+- New tests: drag emits expected yaw/pitch deltas; non-left drags and release-without-move emit nothing; wheel-up decreases FOV / wheel-down increases FOV; wired drags update Application ViewportState deterministically (incl. pitch clamp).

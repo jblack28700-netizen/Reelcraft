@@ -781,6 +781,32 @@ Add on-demand single-frame time navigation (stepping/seek) through the active me
 - One-shot subprocess per request; no timers/threads/loops; continuous playback/audio/streaming remain out of scope (future decision).
 - No ffprobe/duration probing (deferred by approval); Obj 1–9 contracts preserved.
 
+## 2026-09-06 — Phase 2 Objective 11: Pointer-Based Viewer Orientation Control
+
+### Objective
+
+Complete Phase-2 orientation control with the primary 360-viewer pointer gestures (drag-to-look, wheel FOV), routed through the existing authoritative ViewportState and Application adjust slots; the viewer remains presentation-only.
+
+### Work Completed
+
+- `ViewerWidget` pointer handling: left-button drag emits `viewportYawDeltaRequested` (drag right = yaw increases) and `viewportPitchDeltaRequested` (drag up = pitch increases) at a deterministic 0.25 °/px; mouse wheel emits `viewportFovDeltaRequested` (wheel up = −5° per step = zoom in; wheel down = +5° = zoom out); non-left drags ignored; release-without-move emits nothing; no modifiers/inertia/multi-touch.
+- New `ViewerWidget` delta signals wired in `main.cpp` to the existing Application adjust slots (same receivers as the keyboard controls).
+- Sensitivity constants (`kLookDegreesPerPixel = 0.25`, `kFovDegreesPerWheelStep = 5.0`) documented as deterministic defaults.
+- Files: `app/ui/ViewerWidget.{h,cpp}`, `app/main.cpp`, `tests/test_project.cpp`.
+
+### Verification
+
+- Application build succeeded; offscreen launch smoke event loop alive until timeout (SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 120 passed, 0 failed (116 prior + 4 new; 0 skipped).
+- New tests: drag emits expected yaw/pitch deltas; non-left drags and release-without-move emit nothing; wheel-up decreases FOV / wheel-down increases FOV; wired drags update Application ViewportState deterministically (incl. pitch clamp at 90 and FOV change).
+
+### Boundary Notes
+
+- The viewer never owns or mutates viewport state; it only emits delta requests (Application remains the single state owner).
+- No rendering, media/decode, time-navigation, schema, persistence, or dependency changes; no Objective 12 work.
+
+
 
 
 

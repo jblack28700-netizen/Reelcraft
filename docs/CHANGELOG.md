@@ -431,3 +431,14 @@ Date: 2026-09-06
 - Added seek, stepping, position-state, and reset tests (they skip cleanly if ffmpeg is unavailable).
 - Full test suite: 116 passed, 0 failed.
 - No continuous playback, audio, streaming, timeline, AI, export, or effects yet; original media is never modified.
+
+## v0.2.28 — Pointer-Based Viewer Orientation Control
+
+Date: 2026-09-06
+
+- The 360 viewer now supports drag-to-look: drag right increases yaw, drag up increases pitch.
+- The mouse wheel adjusts field of view: wheel up zooms in (FOV decreases), wheel down zooms out.
+- Viewer gestures route through the same authoritative viewport state as the keyboard controls.
+- Added deterministic pointer-interaction tests.
+- Full test suite: 120 passed, 0 failed.
+- No continuous playback, audio, streaming, timeline, AI, export, or effects yet; original media is never modified.

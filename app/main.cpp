@@ -71,6 +71,14 @@ int main(int argc, char *argv[])
                          &application, &Application::adjustViewportRoll);
         QObject::connect(&window, &MainWindow::viewportFovDeltaRequested,
                          &application, &Application::adjustViewportFieldOfView);
+
+        // Pointer-based viewer orientation control (Objective 11).
+        QObject::connect(window.viewerWidget(), &ViewerWidget::viewportYawDeltaRequested,
+                         &application, &Application::adjustViewportYaw);
+        QObject::connect(window.viewerWidget(), &ViewerWidget::viewportPitchDeltaRequested,
+                         &application, &Application::adjustViewportPitch);
+        QObject::connect(window.viewerWidget(), &ViewerWidget::viewportFovDeltaRequested,
+                         &application, &Application::adjustViewportFieldOfView);
     }
 
     return app.exec();

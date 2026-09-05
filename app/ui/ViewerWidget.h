@@ -2,13 +2,16 @@
 
 #include <QColor>
 #include <QImage>
+#include <QPoint>
 #include <QSize>
 #include <QWidget>
 
 #include "viewer/ViewerScene.h"
 
+class QMouseEvent;
 class QPaintEvent;
 class QPainter;
+class QWheelEvent;
 class ViewportState;
 
 // ViewerWidget is the viewer presentation surface.
@@ -53,6 +56,23 @@ public:
 protected:
     void paintEvent(QPaintEvent *event) override;
 
+    // Pointer-based orientation control (Objective 11): left-drag emits yaw
+    // (drag right = yaw increases) and pitch (drag up = pitch increases)
+    // deltas; the mouse wheel adjusts FOV (wheel up = FOV decreases = zoom in,
+    // wheel down = FOV increases = zoom out). The widget only emits requests;
+    // it never owns or mutates viewport state.
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+    void wheelEvent(QWheelEvent *event) override;
+
+signals:
+    // Viewport orientation/FOV delta requests (consumed by Application's
+    // adjust slots through main.cpp wiring).
+    void viewportYawDeltaRequested(double delta);
+    void viewportPitchDeltaRequested(double delta);
+    void viewportFovDeltaRequested(double delta);
+
 private:
     void cameraValues(double *yawDeg, double *pitchDeg, double *rollDeg,
                       double *fieldOfViewDeg) const;
@@ -63,6 +83,9 @@ private:
     QColor markerColor(int index) const;
 
     void drawSourceImage(QPainter &painter);
+
+    bool m_dragging = false;
+    QPoint m_lastDragPosition;
 
     ViewerScene m_scene;
     const ViewportState *m_viewportState = nullptr;

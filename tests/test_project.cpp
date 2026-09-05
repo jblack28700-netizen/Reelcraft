@@ -10,12 +10,14 @@
 #include <QColor>
 #include <QLabel>
 #include <QListWidget>
+#include <QMouseEvent>
 #include <QPushButton>
 #include <QKeyEvent>
 #include <QProcess>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QtMath>
+#include <QWheelEvent>
 #include <cmath>
 #include <cstring>
 
@@ -322,6 +324,10 @@ private slots:
     void applicationSeekBeyondEndFailsDeterministically();
     void applicationTimeResetsOnProjectActiveAndRemoval();
     void mainWindowStepButtonsAndTimeLabel();
+    void viewerWidgetDragEmitsYawAndPitchDeltas();
+    void viewerWidgetIgnoresNonLeftDragAndReleaseWithoutMove();
+    void viewerWidgetWheelUpDecreasesFovWheelDownIncreases();
+    void viewerWidgetDragUpdatesApplicationViewport();
 };
 
 void ProjectTest::initTestCase()
@@ -3227,6 +3233,150 @@ void ProjectTest::mainWindowStepButtonsAndTimeLabel()
 
     window.showPreviewTime(3.5);
     QCOMPARE(timeLabel->text(), QStringLiteral("Time: 3.5 s"));
+}
+
+namespace {
+
+// Objective 11 pointer test helpers.
+constexpr double kLookDegreesPerPixelTest = 0.25;
+constexpr double kFovDegreesPerWheelStepTest = 5.0;
+
+void sendMouseEvent(ViewerWidget &widget, QEvent::Type type, const QPointF &position,
+                    Qt::MouseButton button, Qt::MouseButtons buttons,
+                    Qt::KeyboardModifiers modifiers = Qt::NoModifier)
+{
+    QMouseEvent event(type, position, button, buttons, modifiers);
+    QApplication::sendEvent(&widget, &event);
+}
+
+void sendWheelEvent(ViewerWidget &widget, int angleDeltaY)
+{
+    QWheelEvent event(QPointF(10, 10), QPointF(10, 10), QPoint(0, 0),
+                      QPoint(0, angleDeltaY), Qt::NoButton, Qt::NoModifier,
+                      Qt::NoScrollPhase, false);
+    QApplication::sendEvent(&widget, &event);
+}
+
+bool nearDouble(double actual, double expected)
+{
+    return qAbs(actual - expected) < 1e-9;
+}
+
+} // namespace
+
+void ProjectTest::viewerWidgetDragEmitsYawAndPitchDeltas()
+{
+    ViewerWidget widget;
+    widget.resize(400, 300);
+
+    QSignalSpy yawSpy(&widget, &ViewerWidget::viewportYawDeltaRequested);
+    QSignalSpy pitchSpy(&widget, &ViewerWidget::viewportPitchDeltaRequested);
+
+    sendMouseEvent(widget, QEvent::MouseButtonPress, QPointF(100, 100),
+                   Qt::LeftButton, Qt::LeftButton);
+    // Drag right by 80 px: yaw increases by 0.25 * 80 = 20.
+    sendMouseEvent(widget, QEvent::MouseMove, QPointF(180, 100),
+                   Qt::NoButton, Qt::LeftButton);
+    QCOMPARE(yawSpy.count(), 1);
+    QVERIFY(nearDouble(yawSpy.first().first().toDouble(), 20.0));
+    QCOMPARE(pitchSpy.count(), 0);
+
+    // Drag up by 40 px: pitch increases by 0.25 * 40 = 10.
+    sendMouseEvent(widget, QEvent::MouseMove, QPointF(180, 60),
+                   Qt::NoButton, Qt::LeftButton);
+    QCOMPARE(pitchSpy.count(), 1);
+    QVERIFY(nearDouble(pitchSpy.first().first().toDouble(), 10.0));
+
+    sendMouseEvent(widget, QEvent::MouseButtonRelease, QPointF(180, 60),
+                   Qt::LeftButton, Qt::NoButton);
+    QCOMPARE(yawSpy.count(), 1);
+    QCOMPARE(pitchSpy.count(), 1);
+    Q_UNUSED(kLookDegreesPerPixelTest);
+}
+
+void ProjectTest::viewerWidgetIgnoresNonLeftDragAndReleaseWithoutMove()
+{
+    ViewerWidget widget;
+    widget.resize(400, 300);
+
+    QSignalSpy yawSpy(&widget, &ViewerWidget::viewportYawDeltaRequested);
+    QSignalSpy pitchSpy(&widget, &ViewerWidget::viewportPitchDeltaRequested);
+
+    // Right-button drag is ignored.
+    sendMouseEvent(widget, QEvent::MouseButtonPress, QPointF(10, 10),
+                   Qt::RightButton, Qt::RightButton);
+    sendMouseEvent(widget, QEvent::MouseMove, QPointF(60, 10),
+                   Qt::NoButton, Qt::RightButton);
+    QCOMPARE(yawSpy.count(), 0);
+    QCOMPARE(pitchSpy.count(), 0);
+    sendMouseEvent(widget, QEvent::MouseButtonRelease, QPointF(60, 10),
+                   Qt::RightButton, Qt::NoButton);
+
+    // Press and release without any move emits nothing.
+    sendMouseEvent(widget, QEvent::MouseButtonPress, QPointF(20, 20),
+                   Qt::LeftButton, Qt::LeftButton);
+    sendMouseEvent(widget, QEvent::MouseButtonRelease, QPointF(20, 20),
+                   Qt::LeftButton, Qt::NoButton);
+    QCOMPARE(yawSpy.count(), 0);
+    QCOMPARE(pitchSpy.count(), 0);
+}
+
+void ProjectTest::viewerWidgetWheelUpDecreasesFovWheelDownIncreases()
+{
+    ViewerWidget widget;
+    widget.resize(400, 300);
+
+    QSignalSpy fovSpy(&widget, &ViewerWidget::viewportFovDeltaRequested);
+
+    // Wheel up one step: FOV decreases by 5 (zoom in).
+    sendWheelEvent(widget, 120);
+    QCOMPARE(fovSpy.count(), 1);
+    QVERIFY(nearDouble(fovSpy.first().first().toDouble(), -kFovDegreesPerWheelStepTest));
+
+    // Wheel down one step: FOV increases by 5 (zoom out).
+    sendWheelEvent(widget, -120);
+    QCOMPARE(fovSpy.count(), 2);
+    QVERIFY(nearDouble(fovSpy.last().first().toDouble(), kFovDegreesPerWheelStepTest));
+}
+
+void ProjectTest::viewerWidgetDragUpdatesApplicationViewport()
+{
+    ViewerWidget widget;
+    widget.resize(400, 300);
+
+    Application app;
+    ViewportState *state = app.viewportState();
+    QVERIFY(state);
+
+    QObject::connect(&widget, &ViewerWidget::viewportYawDeltaRequested,
+                     &app, &Application::adjustViewportYaw);
+    QObject::connect(&widget, &ViewerWidget::viewportPitchDeltaRequested,
+                     &app, &Application::adjustViewportPitch);
+    QObject::connect(&widget, &ViewerWidget::viewportFovDeltaRequested,
+                     &app, &Application::adjustViewportFieldOfView);
+
+    // Drag right 200 px: yaw 0 -> 50.
+    sendMouseEvent(widget, QEvent::MouseButtonPress, QPointF(100, 100),
+                   Qt::LeftButton, Qt::LeftButton);
+    sendMouseEvent(widget, QEvent::MouseMove, QPointF(300, 100),
+                   Qt::NoButton, Qt::LeftButton);
+    sendMouseEvent(widget, QEvent::MouseButtonRelease, QPointF(300, 100),
+                   Qt::LeftButton, Qt::NoButton);
+    QVERIFY(nearDouble(state->yaw(), 50.0));
+
+    // Drag up by 400 px on a taller widget: pitch 0 -> clamped at 90 (max).
+    widget.resize(400, 2000);
+    sendMouseEvent(widget, QEvent::MouseButtonPress, QPointF(150, 1500),
+                   Qt::LeftButton, Qt::LeftButton);
+    sendMouseEvent(widget, QEvent::MouseMove, QPointF(150, 300),
+                   Qt::NoButton, Qt::LeftButton);
+    sendMouseEvent(widget, QEvent::MouseButtonRelease, QPointF(150, 300),
+                   Qt::LeftButton, Qt::NoButton);
+    QVERIFY(nearDouble(state->pitch(), 90.0));
+
+    // Wheel up one step: FOV 90 -> 85.
+    sendWheelEvent(widget, 120);
+    QVERIFY(nearDouble(state->fieldOfView(), 85.0));
 }
 
 QTEST_MAIN(ProjectTest)
