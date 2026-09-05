@@ -99,4 +99,7 @@ private:
     // Active media id used to mark the active row in the list display.
     QString m_activeMediaIdText;
     void refreshActiveMarking();
+    // Returns the viewer to the marker-scene presentation (clears any decoded
+    // frame and resets flat mode) when the project/active-media context ends.
+    void clearViewerSource();
 };

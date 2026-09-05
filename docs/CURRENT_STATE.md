@@ -719,3 +719,22 @@ Verification:
 - Test build succeeded.
 - Automated tests: 128 passed, 0 failed (120 prior + 8 new; 0 skipped).
 - New tests: projection default/parse semantics; projection JSON round trip incl. unknown fallback; Application declaration guards/validation/emission; declared projection persists across reopen; flat mode letterbox/center; flat mode ignores camera transforms; projection buttons emit requests; preview routing honors declared projection (flat vs equirect center anchors).
+
+
+## Phase 2 Objective 13 — Viewer Presentation State Consistency — Complete
+
+Status: Complete.
+
+Made the viewer's on-screen content deterministic with Application context changes.
+
+- `MainWindow::showProject` (project changed: new/open) clears the viewer source and flat mode (stale decoded frame from the previous project removed).
+- `MainWindow::showActiveMedia` clears when the active media id changes (including cleared to none); same-id re-announcement does not clear.
+- `MainWindow::clearViewerSource()` returns the viewer to the deterministic marker scene (`setSourceImage(QImage())`, `setFlatSourceMode(false)`).
+- Preview/step and flat-vs-equirect routing are unchanged; Application/viewer contracts unchanged.
+
+Verification:
+- Application build succeeded.
+- Offscreen launch smoke: event loop alive until timeout (SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 131 passed, 0 failed (128 prior + 3 new; 0 skipped).
+- New tests: new project after a preview clears the frame and flat mode (marker scene visible); active-media switch and active-media removal clear; same-active re-announcement preserves the presented frame.

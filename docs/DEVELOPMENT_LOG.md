@@ -833,6 +833,33 @@ Make source projection an explicit, creator-declared per-media property and add 
 - Additive optional key consistent with `viewerState`/`media`/`activeMediaId` precedents — not a schema change.
 - Flat mode is opt-in (default off); equirect/marker tests unchanged; no ffprobe detection; no pan/zoom/reframing; no Objective 13 work.
 
+## 2026-09-06 — Phase 2 Objective 13: Viewer Presentation State Consistency
+
+### Objective
+
+Make the viewer's on-screen content and presentation mode deterministically consistent with Application state: clear stale decoded frames and flat mode when the project or active-media context changes.
+
+### Work Completed
+
+- `MainWindow::showProject` now clears the viewer source + flat mode (projectChanged: new/open).
+- `MainWindow::showActiveMedia` clears when the active id changes (including cleared to none); same-id re-announcement is a no-op.
+- New private `MainWindow::clearViewerSource()` — `viewerWidget()->setSourceImage(QImage())` + `setFlatSourceMode(false)` (returns to the deterministic marker scene).
+- Files: `app/ui/MainWindow.{h,cpp}`, `tests/test_project.cpp`.
+
+### Verification
+
+- Application build succeeded; offscreen launch smoke event loop alive until timeout (SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 131 passed, 0 failed (128 prior + 3 new; 0 skipped).
+- New tests: new project after a preview clears the frame and flat mode (marker scene visible at identity); active-media switch and active-media removal clear the frame; same-active re-announcement preserves the presented frame.
+
+### Boundary Notes
+
+- Clearing happens only on context-change signals; preview/step/save never clear.
+- Preview remains an explicit user action (no auto-present on active change).
+- No Application/media/decode/time-navigation/schema/render changes; no Objective 14 work.
+
+
 
 
 

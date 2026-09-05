@@ -336,6 +336,9 @@ private slots:
     void viewerWidgetFlatModeIgnoresCameraTransforms();
     void mainWindowProjectionButtonsEmitRequests();
     void previewRoutingHonorsDeclaredProjection();
+    void viewerClearedOnNewProjectAfterPreview();
+    void viewerClearedWhenActiveMediaChangesOrRemoved();
+    void viewerSourcePersistsWhileContextStable();
 };
 
 void ProjectTest::initTestCase()
@@ -3649,6 +3652,122 @@ void ProjectTest::previewRoutingHonorsDeclaredProjection()
     QVERIFY(!viewer->isFlatSourceMode());
     view = viewer->grab().toImage();
     expectColor(view, view.width() / 2, view.height() / 2, kFrontColor);
+}
+
+void ProjectTest::viewerClearedOnNewProjectAfterPreview()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    const QString mediaPath = tempDir.filePath(QStringLiteral("a.bin"));
+    QFile file(mediaPath);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write("A");
+    file.close();
+
+    Application app;
+    TestMainWindow window;
+    QObject::connect(&app, &Application::projectChanged,
+                     &window, &MainWindow::showProject);
+    QObject::connect(&app, &Application::activeMediaChanged,
+                     &window, &MainWindow::showActiveMedia);
+
+    app.newProject();
+    QVERIFY(app.importMediaFile(mediaPath));
+    const QString mediaId = app.mediaItems().at(0).id();
+    QVERIFY(app.setActiveMedia(mediaId));
+
+    ViewerWidget *viewer = window.viewerWidget();
+    QVERIFY(viewer);
+    window.showFramePreview(QImage(100, 50, QImage::Format_RGB32));
+    QVERIFY(viewer->hasSourceImage());
+
+    // Creating a new project must clear the stale frame (back to scene) and
+    // reset flat mode.
+    viewer->setFlatSourceMode(true);
+    app.newProject();
+    QVERIFY(!viewer->hasSourceImage());
+    QVERIFY(!viewer->isFlatSourceMode());
+
+    // The deterministic marker scene is visible again at identity.
+    const QImage view = viewer->grab().toImage();
+    expectColor(view, view.width() / 2, view.height() / 2, QColor(255, 213, 79));
+}
+
+void ProjectTest::viewerClearedWhenActiveMediaChangesOrRemoved()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString firstPath = tempDir.filePath(QStringLiteral("a.bin"));
+    const QString secondPath = tempDir.filePath(QStringLiteral("b.bin"));
+    for (const QString &path : { firstPath, secondPath }) {
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("M");
+        file.close();
+    }
+
+    Application app;
+    TestMainWindow window;
+    QObject::connect(&app, &Application::mediaListChanged,
+                     &window, &MainWindow::showMediaList);
+    QObject::connect(&app, &Application::activeMediaChanged,
+                     &window, &MainWindow::showActiveMedia);
+    QObject::connect(&app, &Application::projectChanged,
+                     &window, &MainWindow::showProject);
+
+    app.newProject();
+    QVERIFY(app.importMediaFile(firstPath));
+    QVERIFY(app.importMediaFile(secondPath));
+    const QString idA = app.mediaItems().at(0).id();
+    const QString idB = app.mediaItems().at(1).id();
+    QVERIFY(app.setActiveMedia(idA));
+
+    ViewerWidget *viewer = window.viewerWidget();
+    QVERIFY(viewer);
+    window.showFramePreview(QImage(50, 50, QImage::Format_RGB32));
+    QVERIFY(viewer->hasSourceImage());
+
+    // Switching to a different active media clears the stale frame.
+    QVERIFY(app.setActiveMedia(idB));
+    QVERIFY(!viewer->hasSourceImage());
+
+    window.showFramePreview(QImage(60, 40, QImage::Format_RGB32));
+    QVERIFY(viewer->hasSourceImage());
+
+    // Removing the active media clears it as well.
+    QVERIFY(app.removeMedia(idB));
+    QVERIFY(!viewer->hasSourceImage());
+}
+
+void ProjectTest::viewerSourcePersistsWhileContextStable()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    const QString mediaPath = tempDir.filePath(QStringLiteral("a.bin"));
+    QFile file(mediaPath);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write("S");
+    file.close();
+
+    Application app;
+    TestMainWindow window;
+    QObject::connect(&app, &Application::activeMediaChanged,
+                     &window, &MainWindow::showActiveMedia);
+
+    app.newProject();
+    QVERIFY(app.importMediaFile(mediaPath));
+    const QString mediaId = app.mediaItems().at(0).id();
+    QVERIFY(app.setActiveMedia(mediaId));
+
+    ViewerWidget *viewer = window.viewerWidget();
+    QVERIFY(viewer);
+    window.showFramePreview(QImage(80, 40, QImage::Format_RGB32));
+    QVERIFY(viewer->hasSourceImage());
+
+    // Re-announcing the same active id must not clear the presented frame.
+    window.showActiveMedia(mediaId);
+    QVERIFY(viewer->hasSourceImage());
 }
 
 QTEST_MAIN(ProjectTest)

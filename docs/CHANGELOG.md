@@ -453,3 +453,13 @@ Date: 2026-09-06
 - Added projection, routing, and flat-presentation tests.
 - Full test suite: 128 passed, 0 failed.
 - No continuous playback, audio, streaming, timeline, AI, export, or effects yet; original media is never modified.
+
+## v0.2.30 — Viewer State Consistency
+
+Date: 2026-09-06
+
+- Creating/opening a project or switching/removing the active media now clears any stale preview frame so the viewer never shows the previous media's content.
+- The viewer returns to its deterministic test scene until the next explicit preview.
+- Added viewer state-consistency tests.
+- Full test suite: 131 passed, 0 failed.
+- No continuous playback, audio, streaming, timeline, AI, export, or effects yet; original media is never modified.

@@ -249,6 +249,9 @@ void MainWindow::showProject(const Project &project)
 {
     m_projectLabel->setText(QStringLiteral("%1 (%2)")
                                 .arg(project.name(), project.id()));
+    // Project context changed (new/open): clear any stale decoded frame so the
+    // viewer does not keep showing the previous project's media.
+    clearViewerSource();
 }
 
 void MainWindow::showStatus(const QString &message)
@@ -272,6 +275,11 @@ void MainWindow::showMediaList(const QList<MediaItem> &items)
 
 void MainWindow::showActiveMedia(const QString &mediaId)
 {
+    if (mediaId != m_activeMediaIdText) {
+        // The active media context changed (including cleared): remove any
+        // stale decoded frame from the previous active media.
+        clearViewerSource();
+    }
     m_activeMediaIdText = mediaId;
     if (mediaId.isEmpty()) {
         m_activeMediaLabel->setText(QStringLiteral("Active media: None"));
@@ -287,6 +295,15 @@ void MainWindow::showActiveMedia(const QString &mediaId)
         m_activeMediaLabel->setText(QStringLiteral("Active media: %1").arg(name));
     }
     refreshActiveMarking();
+}
+
+void MainWindow::clearViewerSource()
+{
+    if (!m_viewerWidget) {
+        return;
+    }
+    m_viewerWidget->setSourceImage(QImage());
+    m_viewerWidget->setFlatSourceMode(false);
 }
 
 void MainWindow::showFramePreview(const QImage &image)
