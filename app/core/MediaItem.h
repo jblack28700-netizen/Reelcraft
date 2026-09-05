@@ -2,6 +2,7 @@
 
 #include <QDateTime>
 #include <QJsonObject>
+#include <QMetaType>
 #include <QString>
 
 // MediaItem is a deterministic record of one imported real media file.
@@ -56,3 +57,5 @@ private:
     QDateTime m_lastModifiedUtc;
     QJsonObject m_attributes;
 };
+
+Q_DECLARE_METATYPE(MediaItem)

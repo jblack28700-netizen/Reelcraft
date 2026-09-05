@@ -23,6 +23,8 @@ int main(int argc, char *argv[])
                      &application, &Application::openProject);
     QObject::connect(&window, &MainWindow::importMediaRequested,
                      &application, &Application::importMediaFile);
+    QObject::connect(&window, &MainWindow::removeMediaRequested,
+                     &application, &Application::removeMedia);
     QObject::connect(&window, &MainWindow::backgroundDemoRequested,
                      &application, &Application::runBackgroundDemo);
     QObject::connect(&window, &MainWindow::resetViewportRequested,
@@ -32,6 +34,8 @@ int main(int argc, char *argv[])
                      &window, &MainWindow::showProject);
     QObject::connect(&application, &Application::backgroundCompleted,
                      &window, &MainWindow::showStatus);
+    QObject::connect(&application, &Application::mediaListChanged,
+                     &window, &MainWindow::showMediaList);
 
     ViewportState *viewport = application.viewportState();
     if (viewport) {

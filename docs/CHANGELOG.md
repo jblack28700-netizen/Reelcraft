@@ -378,3 +378,13 @@ Date: 2026-09-04
 - Added availability and normalization tests.
 - Full test suite: 73 passed, 0 failed.
 - No decoding, playback, timeline, AI, export, effects, or camera-specific logic yet.
+
+## v0.2.23 — Project Media Library Management
+
+Date: 2026-09-05
+
+- Imported media is now listed in the shell (file name and format tag) and stays in sync with the project automatically.
+- Added a Remove Media action: media records can be removed from a project deterministically; referenced files are never touched.
+- Added media-list sync and removal tests.
+- Full test suite: 81 passed, 0 failed.
+- No decoding, playback, timeline, AI, export, effects, or camera-specific logic yet.

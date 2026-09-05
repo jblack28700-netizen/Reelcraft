@@ -2,9 +2,11 @@
 
 #include <QMainWindow>
 
+#include "core/MediaItem.h"
 #include "core/Project.h"
 
 class QLabel;
+class QListWidget;
 class QPushButton;
 class QKeyEvent;
 class ViewerWidget;
@@ -35,11 +37,15 @@ public slots:
     void showRoll(double value);
     void showFieldOfView(double value);
 
+    // Rebuilds the project media list display from the authoritative list.
+    void showMediaList(const QList<MediaItem> &items);
+
 signals:
     void newProjectRequested();
     void saveProjectRequested(const QString &filePath);
     void openProjectRequested(const QString &filePath);
     void importMediaRequested(const QString &filePath);
+    void removeMediaRequested(const QString &mediaId);
     void backgroundDemoRequested();
     void resetViewportRequested();
     void viewportYawDeltaRequested(double delta);
@@ -60,8 +66,11 @@ private:
     QPushButton *m_saveButton = nullptr;
     QPushButton *m_openButton = nullptr;
     QPushButton *m_importButton = nullptr;
+    QPushButton *m_removeMediaButton = nullptr;
     QPushButton *m_backgroundButton = nullptr;
     QPushButton *m_resetViewportButton = nullptr;
+
+    QListWidget *m_mediaListWidget = nullptr;
 
     ViewerWidget *m_viewerWidget = nullptr;
 };

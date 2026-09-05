@@ -578,3 +578,24 @@ Verification:
 - Test build succeeded.
 - Automated tests: 73 passed, 0 failed (68 prior + 5 new).
 - New tests: silent identical reopen when all media available; unavailable flag + single status message after deleting a referenced file; unavailable after moving a referenced file; duplicate persisted media entries normalized on open and re-save; new project clears unavailable state.
+
+
+## Phase 2 Objective 6 — Project Media Library Management (List & Remove) — Complete
+
+Status: Complete.
+
+Completed the media-management slice begun in Objectives 4–5:
+
+- `Application::removeMedia(mediaId)`: id-based removal of exactly the matching record (requires an active project; deterministic messages; original files never touched).
+- `Application::mediaListChanged(const QList<MediaItem> &)`: structured notification emitted when the authoritative list is determined — after a successful appending import, a successful removal, a project open, and a new project (empty). Duplicate imports and failed removals do not emit.
+- `MainWindow`: media list widget (`mediaListWidget`, file name + format tag, id carried in item data) and Remove Media action (`removeMediaButton`); Remove with no selection is a no-op with status feedback.
+- `main.cpp`: wires `mediaListChanged` → `MainWindow::showMediaList` and `removeMediaRequested` → `Application::removeMedia`.
+- `Q_DECLARE_METATYPE(MediaItem)` and meta-type registration support the custom-type signal in tests.
+- No schema, dependency, `Project`, `MediaItem`-logic, or viewer-layer changes.
+
+Verification:
+- Application build succeeded.
+- Offscreen launch smoke: event loop alive until timeout (SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 81 passed, 0 failed (73 prior + 8 new).
+- New tests: list emission on import/open/new/remove; removal correctness and persistence; unknown-id and no-project failure paths; removal of an unavailable entry clears unavailable state; MainWindow list population and Remove wiring (with and without selection).

@@ -42,6 +42,7 @@ void Application::newProject()
     m_hasProject = true;
     m_mediaItems.clear();
     resetViewport();
+    emit mediaListChanged(m_mediaItems);
     emit projectChanged(m_currentProject);
 }
 
@@ -91,6 +92,7 @@ bool Application::openProject(const QString &filePath)
                                      .arg(m_mediaItems.size()));
     }
 
+    emit mediaListChanged(m_mediaItems);
     emit projectChanged(m_currentProject);
     return true;
 }
@@ -119,7 +121,29 @@ bool Application::importMediaFile(const QString &filePath)
 
     m_mediaItems.append(item);
     emit backgroundCompleted(QStringLiteral("Imported media: %1").arg(item.fileName()));
+    emit mediaListChanged(m_mediaItems);
     return true;
+}
+
+bool Application::removeMedia(const QString &mediaId)
+{
+    if (!m_hasProject) {
+        emit backgroundCompleted(QStringLiteral("No project to remove media from."));
+        return false;
+    }
+
+    for (int i = 0; i < m_mediaItems.size(); ++i) {
+        if (m_mediaItems.at(i).id() == mediaId) {
+            const QString fileName = m_mediaItems.at(i).fileName();
+            m_mediaItems.removeAt(i);
+            emit backgroundCompleted(QStringLiteral("Removed media: %1").arg(fileName));
+            emit mediaListChanged(m_mediaItems);
+            return true;
+        }
+    }
+
+    emit backgroundCompleted(QStringLiteral("Remove failed: media not found."));
+    return false;
 }
 
 void Application::runBackgroundDemo()

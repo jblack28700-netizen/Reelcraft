@@ -46,9 +46,19 @@ public slots:
     // idempotent. The original media file is never modified.
     bool importMediaFile(const QString &filePath);
 
+    // Removes the media record with the given id from the current project.
+    // Requires an active project and an existing media id. Only the record is
+    // removed; the referenced file is never modified or deleted.
+    bool removeMedia(const QString &mediaId);
+
 signals:
     void projectChanged(const Project &project);
     void backgroundCompleted(const QString &message);
+
+    // Emitted whenever the authoritative media list changes: after a
+    // successful import that appends a record, after a successful removal,
+    // after a project is opened, and after a new project is created (empty).
+    void mediaListChanged(const QList<MediaItem> &items);
 
 private:
     QJsonArray mediaJson() const;

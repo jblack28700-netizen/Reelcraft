@@ -4,6 +4,8 @@
 #include <QEvent>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QListWidget>
+#include <QListWidgetItem>
 #include <QPushButton>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -31,8 +33,14 @@ MainWindow::MainWindow(QWidget *parent)
     m_saveButton = new QPushButton(QStringLiteral("Save Project"), central);
     m_openButton = new QPushButton(QStringLiteral("Open Project"), central);
     m_importButton = new QPushButton(QStringLiteral("Import Media"), central);
+    m_removeMediaButton = new QPushButton(QStringLiteral("Remove Media"), central);
     m_backgroundButton = new QPushButton(QStringLiteral("Run Background Demo"), central);
     m_resetViewportButton = new QPushButton(QStringLiteral("Reset Viewport"), central);
+
+    m_mediaListWidget = new QListWidget(central);
+    m_mediaListWidget->setObjectName("mediaListWidget");
+    m_mediaListWidget->setMinimumHeight(80);
+    m_mediaListWidget->setSelectionMode(QAbstractItemView::SingleSelection);
 
     m_projectLabel->setObjectName("projectLabel");
     m_statusLabel->setObjectName("statusLabel");
@@ -44,6 +52,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_saveButton->setObjectName("saveProjectButton");
     m_openButton->setObjectName("openProjectButton");
     m_importButton->setObjectName("importMediaButton");
+    m_removeMediaButton->setObjectName("removeMediaButton");
     m_backgroundButton->setObjectName("backgroundDemoButton");
     m_resetViewportButton->setObjectName("resetViewportButton");
 
@@ -61,6 +70,8 @@ MainWindow::MainWindow(QWidget *parent)
     layout->addWidget(m_saveButton);
     layout->addWidget(m_openButton);
     layout->addWidget(m_importButton);
+    layout->addWidget(m_mediaListWidget);
+    layout->addWidget(m_removeMediaButton);
     layout->addWidget(m_backgroundButton);
     layout->addWidget(m_resetViewportButton);
     layout->addWidget(m_statusLabel);
@@ -91,12 +102,22 @@ MainWindow::MainWindow(QWidget *parent)
         }
     });
 
+    connect(m_removeMediaButton, &QPushButton::clicked, this, [this]() {
+        QListWidgetItem *current = m_mediaListWidget->currentItem();
+        if (!current) {
+            m_statusLabel->setText(QStringLiteral("No media selected to remove."));
+            return;
+        }
+        emit removeMediaRequested(current->data(Qt::UserRole).toString());
+    });
+
     connect(m_backgroundButton, &QPushButton::clicked, this, &MainWindow::backgroundDemoRequested);
 
     m_newProjectButton->installEventFilter(this);
     m_saveButton->installEventFilter(this);
     m_openButton->installEventFilter(this);
     m_importButton->installEventFilter(this);
+    m_removeMediaButton->installEventFilter(this);
     m_backgroundButton->installEventFilter(this);
     m_resetViewportButton->installEventFilter(this);
 }
@@ -155,6 +176,17 @@ void MainWindow::showProject(const Project &project)
 void MainWindow::showStatus(const QString &message)
 {
     m_statusLabel->setText(message);
+}
+
+void MainWindow::showMediaList(const QList<MediaItem> &items)
+{
+    m_mediaListWidget->clear();
+    for (const MediaItem &item : items) {
+        auto *listItem = new QListWidgetItem(
+            QStringLiteral("%1  [%2]").arg(item.fileName(), item.formatTag()),
+            m_mediaListWidget);
+        listItem->setData(Qt::UserRole, item.id());
+    }
 }
 
 void MainWindow::showYaw(double value)

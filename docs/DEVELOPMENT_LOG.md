@@ -643,6 +643,33 @@ Complete the media-validation lifecycle: revalidate media references on project 
 - Automated tests: 73 passed, 0 failed (68 prior + 5 new).
 - New tests: silent identical reopen when media available; unavailable flag + single status message after deleting a referenced file; unavailable after moving a referenced file; duplicate persisted media entries normalized on open and re-save; new project clears unavailable state.
 
+## 2026-09-05 — Phase 2 Objective 6: Project Media Library Management (List & Remove)
+
+### Objective
+
+Complete the media-management slice: let the user see the media referenced by the current project and remove records — no decode, viewer, schema, or dependency changes.
+
+### Work Completed
+
+- `Application::removeMedia(mediaId)`: id-based removal of exactly the matching record (active-project requirement; deterministic messages: `Removed media: <name>`, `Remove failed: media not found.`, `No project to remove media from.`); only the record is removed, never the file.
+- `Application::mediaListChanged(const QList<MediaItem> &)`: structured notification emitted after a successful appending import, a successful removal, a project open, and a new project (empty); duplicate imports and failed removals do not emit.
+- `MainWindow`: media list widget (`mediaListWidget`; `fileName  [formatTag]`, id in `Qt::UserRole`) and Remove Media action (`removeMediaButton`); Remove with no selection shows `No media selected to remove.`; `showMediaList()` repopulates from the authoritative list.
+- `main.cpp`: wires `mediaListChanged` → `showMediaList` and `removeMediaRequested` → `removeMedia`.
+- `Q_DECLARE_METATYPE(MediaItem)` in `MediaItem.h`; meta-type registration in tests for the custom-type signal.
+
+### Verification
+
+- Application build succeeded; offscreen launch smoke event loop alive until timeout (SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 81 passed, 0 failed (73 prior + 8 new).
+- New tests: list emission on import/open/new/remove; removal correctness and persistence; unknown-id and no-project failure paths; removal of an unavailable entry clears unavailable state; MainWindow list population and Remove wiring (with and without selection).
+
+### Boundary Notes
+
+- No decoding, playback, timeline, editing, AI, export, audio, effects, camera-specific logic, active-source/viewer binding, schema migration, or new dependencies.
+- Media records are metadata only; removal never touches underlying files (Decision 002).
+
+
 
 
 

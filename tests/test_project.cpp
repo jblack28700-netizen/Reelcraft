@@ -8,6 +8,7 @@
 #include <QCryptographicHash>
 #include <QColor>
 #include <QLabel>
+#include <QListWidget>
 #include <QPushButton>
 #include <QKeyEvent>
 #include <QSignalSpy>
@@ -111,11 +112,21 @@ private slots:
     void reopenAfterMovingMediaFileFlagsUnavailable();
     void duplicatePersistedMediaNormalizedOnOpenAndResave();
     void newProjectClearsUnavailableMediaState();
+    void mediaImportEmitsMediaListChanged();
+    void openProjectRestoresAndEmitsMediaListChanged();
+    void newProjectEmitsEmptyMediaListChanged();
+    void removeMediaRemovesMatchingRecordOnlyAndPersists();
+    void removeMediaUnknownIdFailsDeterministically();
+    void removeMediaRequiresActiveProject();
+    void removeUnavailableMediaClearsUnavailableState();
+    void mainWindowMediaListPopulatedAndRemoveWorks();
 };
 
 void ProjectTest::initTestCase()
 {
     qRegisterMetaType<Project>("Project");
+    qRegisterMetaType<MediaItem>("MediaItem");
+    qRegisterMetaType<QList<MediaItem>>("QList<MediaItem>");
 }
 
 void ProjectTest::newProjectHasValidDefaults()
@@ -1704,6 +1715,260 @@ void ProjectTest::newProjectClearsUnavailableMediaState()
     QVERIFY(!appOpen.hasUnavailableMedia());
     QCOMPARE(appOpen.unavailableMediaCount(), 0);
     QVERIFY(appOpen.mediaItems().isEmpty());
+}
+
+void ProjectTest::mediaImportEmitsMediaListChanged()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    auto createFile = [&tempDir](const QString &name) {
+        const QString path = tempDir.filePath(name);
+        QFile file(path);
+        file.open(QIODevice::WriteOnly);
+        file.write(QByteArray(16, 'i'));
+        file.close();
+        return path;
+    };
+
+    Application app;
+    app.newProject();
+    QSignalSpy spy(&app, &Application::mediaListChanged);
+
+    const QString firstPath = createFile(QStringLiteral("first.bin"));
+    QVERIFY(app.importMediaFile(firstPath));
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.first().first().value<QList<MediaItem>>().size(), 1);
+    QCOMPARE(spy.first().first().value<QList<MediaItem>>().at(0).id(),
+             app.mediaItems().at(0).id());
+
+    // Duplicate import does not change the list, so no emission.
+    QVERIFY(app.importMediaFile(firstPath));
+    QCOMPARE(spy.count(), 1);
+
+    // A second distinct import emits again with both records.
+    const QString secondPath = createFile(QStringLiteral("second.mov"));
+    QVERIFY(app.importMediaFile(secondPath));
+    QCOMPARE(spy.count(), 2);
+    QCOMPARE(spy.last().first().value<QList<MediaItem>>().size(), 2);
+}
+
+void ProjectTest::openProjectRestoresAndEmitsMediaListChanged()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString firstPath = tempDir.filePath(QStringLiteral("first.mp4"));
+    const QString secondPath = tempDir.filePath(QStringLiteral("second.mov"));
+    for (const QString &path : { firstPath, secondPath }) {
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(QByteArray(32, 'o'));
+        file.close();
+    }
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(firstPath));
+    QVERIFY(app.importMediaFile(secondPath));
+
+    const QString projectPath = tempDir.filePath(QStringLiteral("project.reel"));
+    QVERIFY(app.saveProject(projectPath));
+
+    Application reopened;
+    QSignalSpy spy(&reopened, &Application::mediaListChanged);
+    QVERIFY(reopened.openProject(projectPath));
+
+    QCOMPARE(spy.count(), 1);
+    const QList<MediaItem> restored = spy.first().first().value<QList<MediaItem>>();
+    QCOMPARE(restored.size(), 2);
+    QCOMPARE(restored.at(0).fileName(), QStringLiteral("first.mp4"));
+    QCOMPARE(restored.at(1).fileName(), QStringLiteral("second.mov"));
+    QCOMPARE(restored.at(0).id(), app.mediaItems().at(0).id());
+}
+
+void ProjectTest::newProjectEmitsEmptyMediaListChanged()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString mediaPath = tempDir.filePath(QStringLiteral("clear.bin"));
+    QFile mediaFile(mediaPath);
+    QVERIFY(mediaFile.open(QIODevice::WriteOnly));
+    mediaFile.write(QByteArray(8, 'c'));
+    mediaFile.close();
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(mediaPath));
+    QCOMPARE(app.mediaItems().size(), 1);
+
+    QSignalSpy spy(&app, &Application::mediaListChanged);
+    app.newProject();
+
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(spy.first().first().value<QList<MediaItem>>().isEmpty());
+    QVERIFY(app.mediaItems().isEmpty());
+}
+
+void ProjectTest::removeMediaRemovesMatchingRecordOnlyAndPersists()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString firstPath = tempDir.filePath(QStringLiteral("keep.mp4"));
+    const QString secondPath = tempDir.filePath(QStringLiteral("remove_me.mov"));
+    for (const QString &path : { firstPath, secondPath }) {
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(QByteArray(24, 'r'));
+        file.close();
+    }
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(firstPath));
+    QVERIFY(app.importMediaFile(secondPath));
+    QCOMPARE(app.mediaItems().size(), 2);
+
+    const QString removedId = app.mediaItems().at(1).id();
+    const QString keptName = app.mediaItems().at(0).fileName();
+
+    QSignalSpy listSpy(&app, &Application::mediaListChanged);
+    QSignalSpy messageSpy(&app, &Application::backgroundCompleted);
+    QVERIFY(app.removeMedia(removedId));
+
+    QCOMPARE(app.mediaItems().size(), 1);
+    QCOMPARE(app.mediaItems().at(0).fileName(), keptName);
+    QCOMPARE(listSpy.count(), 1);
+    QCOMPARE(listSpy.first().first().value<QList<MediaItem>>().size(), 1);
+    QCOMPARE(messageSpy.count(), 1);
+    QVERIFY(messageSpy.first().first().toString().contains(QStringLiteral("Removed media")));
+
+    // Persistence reflects the removal.
+    const QString projectPath = tempDir.filePath(QStringLiteral("project.reel"));
+    QVERIFY(app.saveProject(projectPath));
+    Application reopened;
+    QVERIFY(reopened.openProject(projectPath));
+    QCOMPARE(reopened.mediaItems().size(), 1);
+    QCOMPARE(reopened.mediaItems().at(0).fileName(), keptName);
+}
+
+void ProjectTest::removeMediaUnknownIdFailsDeterministically()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString mediaPath = tempDir.filePath(QStringLiteral("stays.bin"));
+    QFile mediaFile(mediaPath);
+    QVERIFY(mediaFile.open(QIODevice::WriteOnly));
+    mediaFile.write(QByteArray(8, 's'));
+    mediaFile.close();
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(mediaPath));
+
+    QSignalSpy listSpy(&app, &Application::mediaListChanged);
+    QSignalSpy messageSpy(&app, &Application::backgroundCompleted);
+    QVERIFY(!app.removeMedia(QStringLiteral("no-such-id")));
+
+    QCOMPARE(app.mediaItems().size(), 1);
+    QCOMPARE(listSpy.count(), 0);
+    QCOMPARE(messageSpy.count(), 1);
+    QVERIFY(messageSpy.first().first().toString().contains(QStringLiteral("Remove failed")));
+}
+
+void ProjectTest::removeMediaRequiresActiveProject()
+{
+    Application app;
+    QSignalSpy listSpy(&app, &Application::mediaListChanged);
+    QSignalSpy messageSpy(&app, &Application::backgroundCompleted);
+
+    QVERIFY(!app.removeMedia(QStringLiteral("any-id")));
+    QCOMPARE(listSpy.count(), 0);
+    QCOMPARE(messageSpy.count(), 1);
+    QVERIFY(messageSpy.first().first().toString().contains(QStringLiteral("No project")));
+}
+
+void ProjectTest::removeUnavailableMediaClearsUnavailableState()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString mediaPath = tempDir.filePath(QStringLiteral("gone_soon.bin"));
+    QFile mediaFile(mediaPath);
+    QVERIFY(mediaFile.open(QIODevice::WriteOnly));
+    mediaFile.write(QByteArray(16, 'g'));
+    mediaFile.close();
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(mediaPath));
+
+    const QString projectPath = tempDir.filePath(QStringLiteral("project.reel"));
+    QVERIFY(app.saveProject(projectPath));
+    QVERIFY(QFile::remove(mediaPath));
+
+    Application appOpen;
+    QVERIFY(appOpen.openProject(projectPath));
+    QVERIFY(appOpen.hasUnavailableMedia());
+    QCOMPARE(appOpen.unavailableMediaCount(), 1);
+
+    const QString mediaId = appOpen.mediaItems().at(0).id();
+    QVERIFY(appOpen.removeMedia(mediaId));
+
+    QVERIFY(appOpen.mediaItems().isEmpty());
+    QVERIFY(!appOpen.hasUnavailableMedia());
+    QCOMPARE(appOpen.unavailableMediaCount(), 0);
+}
+
+void ProjectTest::mainWindowMediaListPopulatedAndRemoveWorks()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString mediaPath = tempDir.filePath(QStringLiteral("media.bin"));
+    QFile mediaFile(mediaPath);
+    QVERIFY(mediaFile.open(QIODevice::WriteOnly));
+    mediaFile.write(QByteArray(16, 'm'));
+    mediaFile.close();
+
+    Application app;
+    TestMainWindow window;
+    QObject::connect(&app, &Application::mediaListChanged,
+                     &window, &MainWindow::showMediaList);
+    QObject::connect(&window, &MainWindow::removeMediaRequested,
+                     &app, &Application::removeMedia);
+
+    app.newProject();
+    QVERIFY(app.importMediaFile(mediaPath));
+
+    auto *list = window.findChild<QListWidget *>(QStringLiteral("mediaListWidget"));
+    QVERIFY(list);
+    QCOMPARE(list->count(), 1);
+    QVERIFY(list->item(0)->text().contains(QStringLiteral("media.bin")));
+
+    auto *removeButton = window.findChild<QPushButton *>(QStringLiteral("removeMediaButton"));
+    QVERIFY(removeButton);
+
+    // No selection: clicking Remove is a no-op with status feedback.
+    QSignalSpy spy(&window, &MainWindow::removeMediaRequested);
+    removeButton->click();
+    QCOMPARE(spy.count(), 0);
+    auto *statusLabel = window.findChild<QLabel *>(QStringLiteral("statusLabel"));
+    QVERIFY(statusLabel);
+    QVERIFY(statusLabel->text().contains(QStringLiteral("No media selected")));
+
+    // Selecting the entry and removing emits the request with its media id.
+    const QString mediaId = app.mediaItems().at(0).id();
+    list->setCurrentRow(0);
+    removeButton->click();
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.first().first().toString(), mediaId);
+
+    QVERIFY(app.mediaItems().isEmpty());
+    QCOMPARE(list->count(), 0);
 }
 
 QTEST_MAIN(ProjectTest)
