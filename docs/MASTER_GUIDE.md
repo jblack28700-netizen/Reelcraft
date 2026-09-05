@@ -84,7 +84,7 @@ A development task is considered **done** only when:
 
 ## 9. Roadmap (Phased Development)
 - **Phase 1 – Foundation:** Basic app architecture, project structure.
-- **Phase 2 – 360° Viewer:** Playback and orientation control.
+- **Phase 2 – 360 Viewer Review & Navigation:** import and manage real media, select active media, deterministic single-frame preview, time stepping/seek, look-around orientation (keyboard and pointer controls), correct flat/equirectangular presentation, and consistent viewer/project state. *(Scope redefined 2026-09-06 — continuous/paced playback, duration-aware playback transport, and audio are explicitly deferred to a future playback/media-engine phase; see DECISIONS.md Decision 016.)*
 - **Phase 3 – Media Engine:** Reliable video processing/rendering.
 - **Phase 4 – Timeline Intelligence:** Transcript and timeline understanding.
 - **Phase 5 – AI Analysis:** Scene, speaker, object, and content analysis.

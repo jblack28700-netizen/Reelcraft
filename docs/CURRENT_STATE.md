@@ -738,3 +738,10 @@ Verification:
 - Test build succeeded.
 - Automated tests: 131 passed, 0 failed (128 prior + 3 new; 0 skipped).
 - New tests: new project after a preview clears the frame and flat mode (marker scene visible); active-media switch and active-media removal clear; same-active re-announcement preserves the presented frame.
+
+
+## Phase 2 Milestone Definition — "360 Viewer Review & Navigation" — Recorded
+
+Status: Recorded (2026-09-06, Decision 016).
+
+Phase 2 is officially scoped as "360 Viewer Review & Navigation": import and manage real media, select active media, deterministic single-frame preview, time stepping/seek, look-around orientation (keyboard and pointer), correct flat/equirectangular presentation, and consistent viewer/project state. Continuous/paced playback, duration-aware transport, audio, and the future production media/player engine are explicitly deferred to a future playback/media-engine phase (see `DECISIONS.md` Decision 016 and the updated MASTER_GUIDE roadmap). Documentation-only change; no source/test/schema/dependency changes.

@@ -513,3 +513,48 @@ For the Objective 9 single-frame presentation foundation, decode via the externa
 - Playback, streaming, audio, and multi-frame pipelines remain explicitly out of scope and are not authorized by this decision.
 - A production media-engine decision is deferred; this does not commit Reelcraft to shipping with an ffmpeg-CLI architecture.
 - Original media files are never modified by the decode path.
+
+
+# Decision 016 — Phase 2 Scope: "360 Viewer Review & Navigation" (Playback Deferred)
+
+**Status:** Accepted (2026-09-06)
+
+## Context
+
+Phase 2 reached Objective 13 with a complete, verified review pipeline (media import/management/selection, availability and active-media contracts, deterministic single-frame decode, time stepping/seek, keyboard and pointer orientation control, flat/equirectangular projection handling, and consistent viewer/project state). A read-only Phase 2 audit showed the roadmap title ("360° Viewer: Playback and orientation control") describing a capability — continuous playback — that every Phase 2 objective had deliberately gated out (audio, ffprobe probing, and continuous playback were each deferred during Objectives 9–12 approvals). The Phase 2 roadmap wording therefore no longer matched the executed, verified scope.
+
+## Decision
+
+Phase 2 is officially redefined as:
+
+**"Phase 2 — 360 Viewer Review & Navigation"**
+
+In scope for Phase 2:
+- Import and manage real media.
+- Select active media.
+- Deterministic single-frame preview.
+- Time stepping/seek.
+- Look-around orientation using keyboard and pointer controls.
+- Correct flat/equirectangular presentation.
+- Consistent viewer/project state.
+
+Explicitly deferred (belong to a future playback/media-engine phase):
+- Continuous/paced playback.
+- Duration-aware playback transport (and ffprobe-based duration metadata).
+- Audio.
+- The future production media/player engine.
+
+## Rationale
+
+- The delivered review pipeline provides the product's near-term value (import, select, and review footage frame-by-frame with orientation control) and is fully verified.
+- Continuous playback requires pacing, duration metadata, and a frame-stream decode path; a per-frame ffmpeg subprocess is not a viable pacing substrate, and a real player/decoder is media-engine territory (Phase 3 direction) that would require a new dependency/subsystem decision.
+- Deferring keeps Phase 2's architectural boundary clean: review now, player/engine later, without reworking Phase-2 contracts.
+
+## Consequences
+
+- The Phase 2 milestone wording is updated in MASTER_GUIDE §9 (Roadmap) and referenced in project state documentation; the deferral is intentional and recorded, not an unfinished omission.
+- `FrameExtractor` remains the review decode seam for single-frame stepping/seek. It is stable and replaceable; the future playback/media-engine phase may introduce a streaming/linked decoder behind the same or an engine-level boundary without altering Phase-2 viewer/media contracts.
+- Time stepping/seek (Objective 10 position state and step controls), projection routing (Objective 12), and the pointer/keyboard orientation surface remain the intentional interim time/orientation model.
+- A future playback/media-engine phase may reopen this decision; it should reuse the Objective 10 position state and transport surface, and will require its own dependency/architecture decision (linked FFmpeg vs QtMultimedia vs ffmpeg streaming subprocess) before implementation.
+- No schema, dependency, source, or test changes result from this decision; it is a scope/boundary record.
+
