@@ -640,3 +640,23 @@ Verification:
 - Automated tests: 100 passed, 0 failed (90 prior + 10 new).
 - New tests: identity/yaw/pitch anchors; positive-roll direction verified against the ViewerProjection convention (quadrant analysis); FOV coverage change; invalid-input rejection incl. no-partial-mutation; pixel-for-pixel determinism; ViewerWidget source-image integration; clearing source restores scene rendering; CPU performance sanity.
 - Performance sanity: EquirectView CPU render ~14 ms/frame at 640×320 (recorded).
+
+
+## Phase 2 Objective 9 — Active-Media Frame Presentation — Complete
+
+Status: Complete.
+
+Closed the final Phase-2 gap: decode a single real frame from the active media record and present it through the verified equirectangular pixel path. Approved decode approach: FFmpeg-CLI adapter (Decision 015).
+
+- `app/media/FrameExtractor.{h,cpp}`: isolated QtCore seam invoking the external `ffmpeg` CLI via QProcess (never linked) to decode one frame (`-frames:v 1 -f image2 -c:v png pipe:1`) parsed to a QImage. Executable resolved via `REELCRAFT_FFMPEG` override then `QStandardPaths::findExecutable`; deterministic errors (unavailable executable, missing/invalid file, start/timeout/exit failure, empty/undecodable frame); no partial output; media file never modified.
+- `Application::previewActiveMediaFrame()`: requires an active project, active media record, and available file; success emits `framePreviewReady(QImage)` + status; deterministic failures via `backgroundCompleted`.
+- `MainWindow`: Preview Active Frame button (`previewFrameButton`) → `previewFrameRequested`; `showFramePreview(QImage)` → `viewerWidget()->setSourceImage` (viewer pixel path unchanged).
+- `main.cpp` wiring; Decision 015 recorded in `DECISIONS.md`.
+- No schema, dependency, media-contract, or viewer changes; no playback/streaming.
+
+Verification:
+- Application build succeeded.
+- Offscreen launch smoke: event loop alive until timeout (SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 107 passed, 0 failed (100 prior + 7 new; 0 skipped — ffmpeg available).
+- New tests: FrameExtractor invalid-input rejection; availability + single-frame decode of a real PNG (exact dims/colors); deterministic repeatability; Application guards (no project / no active media); preview emits correct frame; Preview button signal; end-to-end decode→viewer center (identity camera centers FRONT in the decoded equirect test pattern). Decode tests QSKIP gracefully when ffmpeg is absent.

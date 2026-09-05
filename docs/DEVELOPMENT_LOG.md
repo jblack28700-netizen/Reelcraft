@@ -724,6 +724,36 @@ Establish the smallest safe, deterministic, decode-free pixel presentation path:
 - Marker-scene rendering is a protected regression contract; the source-image path is opt-in.
 - Resolution cap is a documented safeguard; later objectives may raise it or add optimized/GPU rendering without redesigning the camera contract.
 
+## 2026-09-05 — Phase 2 Objective 9: Active-Media Frame Presentation (FFmpeg-CLI decode)
+
+### Objective
+
+Close the final Phase-2 gap: decode a single real frame from the active media record and present it through the verified equirectangular pixel path. Approved decode approach: FFmpeg-CLI adapter (Option A; Decision 015).
+
+### Work Completed
+
+- Added `app/media/FrameExtractor.{h,cpp}` — isolated QtCore seam invoking the external `ffmpeg` executable via QProcess (never linked) to decode one frame (`-v error -nostdin -i <file> -frames:v 1 -an -f image2 -c:v png pipe:1`), parsed in-process to a QImage. Executable resolved via `REELCRAFT_FFMPEG` override then `QStandardPaths::findExecutable`; deterministic errors (unavailable executable, missing/invalid file, start/timeout/exit failure, empty output, undecodable frame); no partial output mutation; media file never modified.
+- `Application::previewActiveMediaFrame()`: requires an active project, an active media record, and an available file (`No project to preview media in.`, `No active media to preview.`, unavailable/ffmpeg-missing/decoder-error paths); success emits `framePreviewReady(QImage)` and `Frame extracted: <name>`.
+- `MainWindow`: Preview Active Frame button (`previewFrameButton`) → `previewFrameRequested`; `showFramePreview(QImage)` → `viewerWidget()->setSourceImage` (viewer pixel path unchanged).
+- `main.cpp`: wires `previewFrameRequested` → `previewActiveMediaFrame` and `framePreviewReady` → `showFramePreview`.
+- Registered FrameExtractor in `reelcraft.pro`/`tests.tests.pro`. Recorded Decision 015 in `DECISIONS.md`.
+
+### Verification
+
+- Application build succeeded; offscreen launch smoke event loop alive until timeout (SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 107 passed, 0 failed (100 prior + 7 new; 0 skipped — ffmpeg available in this environment).
+- New tests: FrameExtractor invalid-input rejection (no ffmpeg needed); availability + single-frame decode of a real PNG media file (exact dimensions/colors); deterministic repeatability; Application guards (no project / no active media); preview emits the correct frame content; Preview button signal; end-to-end decode → viewer center assertion (identity camera centers FRONT in the decoded equirect test pattern). Decode-dependent tests QSKIP cleanly when ffmpeg is unavailable.
+- Diagnostic during development confirmed ffmpeg decode is lossless for the deterministic PNG pattern (decoded center = #ffd54f); the only test failure was a fixed-pixel sampling assumption inside an in-layout widget, corrected to dynamic center sampling.
+
+### Boundary Notes
+
+- FrameExtractor is the decode seam; replaceable by a future media engine without caller/viewer changes.
+- External ffmpeg CLI reliance is the approved trade-off (Decision 015); injectable path + feature detection.
+- Decode is synchronous single-frame (foundation only); playback/streaming require a separate objective.
+- No schema, compiled-dependency, media-contract, or viewer changes; no Objective 10 work.
+
+
 
 
 

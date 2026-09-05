@@ -481,3 +481,35 @@ Verified current platform classification:
 Desktop remains the current first-class product priority.
 
 This classification does not authorize Apple SDKs, toolchains, targets, dependencies, Android implementation, UI replacement, Termux:X11 configuration, or native Apple/Android builds.
+
+
+# Decision 015 — FFmpeg-CLI Decode Adapter for Single-Frame Preview
+
+**Status:** Accepted (2026-09-05, Objective 9)
+
+## Context
+
+Phase 2 Objective 9 requires presenting a real decoded frame from the active media record through the verified EquirectView pixel path. The project has no decode capability and no decode dependency. Qt6Multimedia is not installed in the current proot/Termux development environment; the external `ffmpeg`/`ffprobe` binaries ARE available on the host PATH. A full media engine and production playback are later-phase concerns.
+
+## Decision
+
+For the Objective 9 single-frame presentation foundation, decode via the external `ffmpeg` CLI: `FrameExtractor` invokes ffmpeg with QProcess to emit one PNG frame on stdout (`-frames:v 1 -f image2 -c:v png pipe:1`), parsed in-process to a QImage. ffmpeg is never linked; the executable is resolved via the `REELCRAFT_FFMPEG` environment override then `QStandardPaths::findExecutable`, and its availability is feature-detected.
+
+## Alternatives Considered
+
+- Qt6Multimedia module (requires installing qt6-multimedia-dev in the environment and `QT += multimedia`; backend viability offscreen/Termux unproven) — deferred.
+- Linked FFmpeg libraries (`libavcodec-dev`, etc.) — full dependency; deferred.
+- Defer decode entirely (decode-free objectives only) — rejected: leaves the media→viewer loop unclosed.
+
+## Rationale
+
+- No `.pro`/system dependency change is required for this foundation slice.
+- The decode behavior is isolated behind a replaceable seam (`FrameExtractor`): a future media engine or Qt/FFmpeg-linked backend can replace the implementation without changing callers or the viewer contract.
+- Deterministic, headless-testable; tests skip cleanly when ffmpeg is unavailable.
+
+## Consequences
+
+- Objective 9 introduces reliance on an external executable in the development environment (recorded limitation; feature-detected and injectable).
+- Playback, streaming, audio, and multi-frame pipelines remain explicitly out of scope and are not authorized by this decision.
+- A production media-engine decision is deferred; this does not commit Reelcraft to shipping with an ffmpeg-CLI architecture.
+- Original media files are never modified by the decode path.

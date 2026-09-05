@@ -21,6 +21,7 @@
 #include "application/Application.h"
 #include "core/MediaItem.h"
 #include "core/Project.h"
+#include "media/FrameExtractor.h"
 #include "ui/MainWindow.h"
 #include "ui/ViewerWidget.h"
 #include "viewer/EquirectView.h"
@@ -251,6 +252,13 @@ private slots:
     void viewerWidgetSourceImageRendersThroughCamera();
     void viewerWidgetClearingSourceRestoresSceneRendering();
     void equirectViewPerformanceSanity();
+    void frameExtractorRejectsInvalidInput();
+    void frameExtractorAvailabilityAndSingleFrameDecode();
+    void frameExtractorDeterministicRepeatability();
+    void applicationPreviewRequiresProjectAndActive();
+    void applicationPreviewEmitsFramePreview();
+    void mainWindowPreviewButtonEmitsSignal();
+    void previewEndToEndShowsActiveFrameInViewer();
 };
 
 void ProjectTest::initTestCase()
@@ -2697,6 +2705,192 @@ void ProjectTest::equirectViewPerformanceSanity()
     // Generous sanity bound; this is a CPU-cost measurement, not a
     // performance regression gate.
     QVERIFY(averageMs < 2000.0);
+}
+
+void ProjectTest::frameExtractorRejectsInvalidInput()
+{
+    // Deterministic failures that do not require an ffmpeg executable.
+    QString error;
+    QImage out;
+
+    // Missing media file (checked before process start).
+    QVERIFY(!FrameExtractor::extractFirstFrame(
+        QStringLiteral("/nonexistent/nope.png"), QStringLiteral("/no/ffmpeg"), &out, &error));
+    QVERIFY(error.contains(QStringLiteral("does not exist")));
+
+    // Empty executable path is reported before file checks.
+    error.clear();
+    QVERIFY(!FrameExtractor::extractFirstFrame(
+        QStringLiteral("/nonexistent/nope.png"), QString(), &out, &error));
+    QVERIFY(error.contains(QStringLiteral("ffmpeg not found")));
+
+    error.clear();
+    QVERIFY(!FrameExtractor::extractFirstFrame(
+        QStringLiteral("/nonexistent/nope.png"), QStringLiteral("/no/ffmpeg"), nullptr, &error));
+    QVERIFY(error.contains(QStringLiteral("null output")));
+}
+
+void ProjectTest::frameExtractorAvailabilityAndSingleFrameDecode()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg not available; skipping decode-dependent test.");
+    }
+
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QColor fill(0, 0, 255);
+    QImage source(64, 32, QImage::Format_RGB32);
+    source.fill(fill);
+    const QString mediaPath = tempDir.filePath(QStringLiteral("frame.png"));
+    QVERIFY(source.save(mediaPath, "PNG"));
+
+    QImage decoded;
+    QString error;
+    QVERIFY(FrameExtractor::extractFirstFrame(
+        mediaPath, FrameExtractor::defaultExecutablePath(), &decoded, &error));
+    QVERIFY(error.isEmpty());
+    QVERIFY(!decoded.isNull());
+    QCOMPARE(decoded.width(), 64);
+    QCOMPARE(decoded.height(), 32);
+    expectColor(decoded, 0, 0, fill);
+    expectColor(decoded, 63, 31, fill);
+}
+
+void ProjectTest::frameExtractorDeterministicRepeatability()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg not available; skipping decode-dependent test.");
+    }
+
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    QImage source(48, 24, QImage::Format_RGB32);
+    source.fill(QColor(0, 200, 200));
+    const QString mediaPath = tempDir.filePath(QStringLiteral("repeat.png"));
+    QVERIFY(source.save(mediaPath, "PNG"));
+
+    QImage first;
+    QImage second;
+    QVERIFY(FrameExtractor::extractFirstFrame(
+        mediaPath, FrameExtractor::defaultExecutablePath(), &first));
+    QVERIFY(FrameExtractor::extractFirstFrame(
+        mediaPath, FrameExtractor::defaultExecutablePath(), &second));
+    QVERIFY(imagesIdentical(first, second));
+}
+
+void ProjectTest::applicationPreviewRequiresProjectAndActive()
+{
+    Application app;
+    QSignalSpy spy(&app, &Application::framePreviewReady);
+
+    // No project.
+    QVERIFY(!app.previewActiveMediaFrame());
+    QCOMPARE(spy.count(), 0);
+
+    // Project but no active media.
+    app.newProject();
+    QSignalSpy messageSpy(&app, &Application::backgroundCompleted);
+    QVERIFY(!app.previewActiveMediaFrame());
+    QCOMPARE(spy.count(), 0);
+    QCOMPARE(messageSpy.count(), 1);
+    QVERIFY(messageSpy.first().first().toString().contains(QStringLiteral("No active media")));
+}
+
+void ProjectTest::applicationPreviewEmitsFramePreview()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg not available; skipping decode-dependent test.");
+    }
+
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString mediaPath = tempDir.filePath(QStringLiteral("preview.png"));
+    QImage source(80, 40, QImage::Format_RGB32);
+    source.fill(QColor(255, 0, 0));
+    QVERIFY(source.save(mediaPath, "PNG"));
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(mediaPath));
+    const QString mediaId = app.mediaItems().at(0).id();
+    QVERIFY(app.setActiveMedia(mediaId));
+
+    QSignalSpy spy(&app, &Application::framePreviewReady);
+    QSignalSpy messageSpy(&app, &Application::backgroundCompleted);
+    QVERIFY(app.previewActiveMediaFrame());
+
+    QCOMPARE(spy.count(), 1);
+    const QImage frame = spy.first().first().value<QImage>();
+    QVERIFY(!frame.isNull());
+    QCOMPARE(frame.width(), 80);
+    QCOMPARE(frame.height(), 40);
+    expectColor(frame, 40, 20, QColor(255, 0, 0));
+    QCOMPARE(messageSpy.count(), 1);
+    QVERIFY(messageSpy.first().first().toString().contains(QStringLiteral("Frame extracted")));
+}
+
+void ProjectTest::mainWindowPreviewButtonEmitsSignal()
+{
+    TestMainWindow window;
+    QSignalSpy spy(&window, &MainWindow::previewFrameRequested);
+
+    auto *button = window.findChild<QPushButton *>(QStringLiteral("previewFrameButton"));
+    QVERIFY(button);
+    button->click();
+    QCOMPARE(spy.count(), 1);
+}
+
+void ProjectTest::previewEndToEndShowsActiveFrameInViewer()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg not available; skipping decode-dependent test.");
+    }
+
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    // The deterministic equirectangular test pattern saved as a real PNG media
+    // file: identity camera must center the FRONT region after decode.
+    const QString mediaPath = tempDir.filePath(QStringLiteral("pattern.png"));
+    QVERIFY(buildTestPattern().save(mediaPath, "PNG"));
+
+    Application app;
+    TestMainWindow window;
+    QObject::connect(&app, &Application::framePreviewReady,
+                     &window, &MainWindow::showFramePreview);
+    QObject::connect(&window, &MainWindow::previewFrameRequested,
+                     &app, &Application::previewActiveMediaFrame);
+
+    app.newProject();
+    QVERIFY(app.importMediaFile(mediaPath));
+    const QString mediaId = app.mediaItems().at(0).id();
+    QVERIFY(app.setActiveMedia(mediaId));
+
+    ViewerWidget *viewer = window.viewerWidget();
+    QVERIFY(viewer);
+    viewer->resize(200, 100);
+
+    auto *button = window.findChild<QPushButton *>(QStringLiteral("previewFrameButton"));
+    QVERIFY(button);
+
+    QSignalSpy spy(&app, &Application::framePreviewReady);
+    button->click();
+
+    // Localize: inspect the decoded frame before the viewer mapping.
+    QCOMPARE(spy.count(), 1);
+    const QImage decoded = spy.first().first().value<QImage>();
+    QVERIFY(!decoded.isNull());
+    expectColor(decoded, decoded.width() / 2, decoded.height() / 2, kFrontColor);
+
+    QVERIFY(viewer->hasSourceImage());
+    const QImage view = viewer->grab().toImage();
+    // Identity camera centers FRONT; sample the true image center (the widget
+    // sits inside a layout, so its actual geometry may exceed the requested
+    // resize).
+    expectColor(view, view.width() / 2, view.height() / 2, kFrontColor);
 }
 
 QTEST_MAIN(ProjectTest)

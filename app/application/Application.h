@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QImage>
 #include <QList>
 
 #include "core/MediaItem.h"
@@ -64,6 +65,13 @@ public slots:
     // file. Never auto-selects on import; idempotent when already active.
     bool setActiveMedia(const QString &mediaId);
 
+    // Decodes a single preview frame from the active media (FFmpeg-CLI decode
+    // adapter, Objective 9) and emits framePreviewReady() on success. Requires
+    // an active project, an active media record, and an available file. The
+    // media file is never modified. The frame is presented through the
+    // existing viewer pixel path; no viewer code changes.
+    bool previewActiveMediaFrame();
+
 signals:
     void projectChanged(const Project &project);
     void backgroundCompleted(const QString &message);
@@ -75,6 +83,9 @@ signals:
 
     // Emitted whenever the active media changes (empty id = none active).
     void activeMediaChanged(const QString &mediaId);
+
+    // Emitted after previewActiveMediaFrame() decodes a frame successfully.
+    void framePreviewReady(const QImage &image);
 
 private:
     QJsonArray mediaJson() const;

@@ -410,3 +410,13 @@ Date: 2026-09-05
 - Added camera-anchor, roll-direction, FOV, invalid-input, determinism, and viewer-integration tests plus a CPU performance sanity measurement (~14 ms/frame at 640×320).
 - Full test suite: 100 passed, 0 failed.
 - No real media decoding/playback yet — this is the decode-free pixel presentation foundation.
+
+## v0.2.26 — Active-Media Frame Presentation
+
+Date: 2026-09-05
+
+- The active media record can now produce a real decoded preview frame (single-frame extraction via the external ffmpeg CLI, isolated behind a replaceable adapter seam).
+- A "Preview Active Frame" action decodes and presents the active media's frame through the existing viewer camera path.
+- Added decode, preview, and end-to-end presentation tests (they skip cleanly if ffmpeg is unavailable).
+- Full test suite: 107 passed, 0 failed.
+- No playback/streaming/audio, timeline, AI, export, or effects yet; original media is never modified.

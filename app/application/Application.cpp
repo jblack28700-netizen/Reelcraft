@@ -4,6 +4,7 @@
 #include <QSet>
 #include <QThread>
 
+#include "media/FrameExtractor.h"
 #include "viewer/ViewportState.h"
 
 Application::Application(QObject *parent)
@@ -211,6 +212,41 @@ bool Application::setActiveMedia(const QString &mediaId)
     m_activeMediaId = mediaId;
     emit backgroundCompleted(QStringLiteral("Active media: %1").arg(item->fileName()));
     emit activeMediaChanged(m_activeMediaId);
+    return true;
+}
+
+bool Application::previewActiveMediaFrame()
+{
+    if (!m_hasProject) {
+        emit backgroundCompleted(QStringLiteral("No project to preview media in."));
+        return false;
+    }
+    const MediaItem *active = activeMediaItem();
+    if (!active) {
+        emit backgroundCompleted(QStringLiteral("No active media to preview."));
+        return false;
+    }
+    if (!active->referenceExists()) {
+        emit backgroundCompleted(QStringLiteral("Preview failed: active media is unavailable."));
+        return false;
+    }
+    if (!FrameExtractor::isAvailable()) {
+        emit backgroundCompleted(
+            QStringLiteral("Preview failed: ffmpeg not found (frame extraction unavailable)."));
+        return false;
+    }
+
+    QImage frame;
+    QString error;
+    if (!FrameExtractor::extractFirstFrame(active->path(),
+                                           FrameExtractor::defaultExecutablePath(),
+                                           &frame, &error)) {
+        emit backgroundCompleted(QStringLiteral("Preview failed: %1").arg(error));
+        return false;
+    }
+
+    emit backgroundCompleted(QStringLiteral("Frame extracted: %1").arg(active->fileName()));
+    emit framePreviewReady(frame);
     return true;
 }
 

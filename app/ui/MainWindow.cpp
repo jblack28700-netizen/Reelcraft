@@ -45,6 +45,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_importButton = new QPushButton(QStringLiteral("Import Media"), central);
     m_removeMediaButton = new QPushButton(QStringLiteral("Remove Media"), central);
     m_setActiveButton = new QPushButton(QStringLiteral("Set Active"), central);
+    m_previewFrameButton = new QPushButton(QStringLiteral("Preview Active Frame"), central);
     m_backgroundButton = new QPushButton(QStringLiteral("Run Background Demo"), central);
     m_resetViewportButton = new QPushButton(QStringLiteral("Reset Viewport"), central);
 
@@ -66,6 +67,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_importButton->setObjectName("importMediaButton");
     m_removeMediaButton->setObjectName("removeMediaButton");
     m_setActiveButton->setObjectName("setActiveButton");
+    m_previewFrameButton->setObjectName("previewFrameButton");
     m_backgroundButton->setObjectName("backgroundDemoButton");
     m_resetViewportButton->setObjectName("resetViewportButton");
 
@@ -86,6 +88,7 @@ MainWindow::MainWindow(QWidget *parent)
     layout->addWidget(m_mediaListWidget);
     layout->addWidget(m_removeMediaButton);
     layout->addWidget(m_setActiveButton);
+    layout->addWidget(m_previewFrameButton);
     layout->addWidget(m_activeMediaLabel);
     layout->addWidget(m_backgroundButton);
     layout->addWidget(m_resetViewportButton);
@@ -135,6 +138,10 @@ MainWindow::MainWindow(QWidget *parent)
         emit setActiveRequested(current->data(kMediaIdRole).toString());
     });
 
+    connect(m_previewFrameButton, &QPushButton::clicked, this, [this]() {
+        emit previewFrameRequested();
+    });
+
     connect(m_backgroundButton, &QPushButton::clicked, this, &MainWindow::backgroundDemoRequested);
 
     m_newProjectButton->installEventFilter(this);
@@ -143,6 +150,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_importButton->installEventFilter(this);
     m_removeMediaButton->installEventFilter(this);
     m_setActiveButton->installEventFilter(this);
+    m_previewFrameButton->installEventFilter(this);
     m_backgroundButton->installEventFilter(this);
     m_resetViewportButton->installEventFilter(this);
 }
@@ -232,6 +240,13 @@ void MainWindow::showActiveMedia(const QString &mediaId)
         m_activeMediaLabel->setText(QStringLiteral("Active media: %1").arg(name));
     }
     refreshActiveMarking();
+}
+
+void MainWindow::showFramePreview(const QImage &image)
+{
+    if (m_viewerWidget) {
+        m_viewerWidget->setSourceImage(image);
+    }
 }
 
 void MainWindow::refreshActiveMarking()

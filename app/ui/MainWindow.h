@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QImage>
 #include <QMainWindow>
 
 #include "core/MediaItem.h"
@@ -43,6 +44,9 @@ public slots:
     // Updates the active/selected media display (empty id = none active).
     void showActiveMedia(const QString &mediaId);
 
+    // Presents a decoded preview frame through the viewer pixel path.
+    void showFramePreview(const QImage &image);
+
 signals:
     void newProjectRequested();
     void saveProjectRequested(const QString &filePath);
@@ -50,6 +54,7 @@ signals:
     void importMediaRequested(const QString &filePath);
     void removeMediaRequested(const QString &mediaId);
     void setActiveRequested(const QString &mediaId);
+    void previewFrameRequested();
     void backgroundDemoRequested();
     void resetViewportRequested();
     void viewportYawDeltaRequested(double delta);
@@ -73,6 +78,7 @@ private:
     QPushButton *m_importButton = nullptr;
     QPushButton *m_removeMediaButton = nullptr;
     QPushButton *m_setActiveButton = nullptr;
+    QPushButton *m_previewFrameButton = nullptr;
     QPushButton *m_backgroundButton = nullptr;
     QPushButton *m_resetViewportButton = nullptr;
 

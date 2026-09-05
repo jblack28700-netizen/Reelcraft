@@ -9,6 +9,7 @@ SOURCES += \
     app/application/Application.cpp \
     app/core/MediaItem.cpp \
     app/core/Project.cpp \
+    app/media/FrameExtractor.cpp \
     app/viewer/EquirectView.cpp \
     app/viewer/ViewerProjection.cpp \
     app/viewer/ViewerScene.cpp \
@@ -20,6 +21,7 @@ HEADERS += \
     app/application/Application.h \
     app/core/MediaItem.h \
     app/core/Project.h \
+    app/media/FrameExtractor.h \
     app/viewer/EquirectView.h \
     app/viewer/ViewerProjection.h \
     app/viewer/ViewerScene.h \
