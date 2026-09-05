@@ -388,3 +388,15 @@ Date: 2026-09-05
 - Added media-list sync and removal tests.
 - Full test suite: 81 passed, 0 failed.
 - No decoding, playback, timeline, AI, export, effects, or camera-specific logic yet.
+
+## v0.2.24 — Active Media ("Viewer Source") Contract
+
+Date: 2026-09-05
+
+- A project can now mark one imported media record as active/selected (the "viewer source" contract).
+- The active selection is deterministic: import never auto-selects; removing or starting a new project clears it; reopening a project restores it only when it still resolves to an available media record.
+- The active media id persists with the project (optional additive field; no schema change).
+- Added Set Active/label affordance in the media library; referenced files are never touched.
+- Added selection, consistency, and persistence tests.
+- Full test suite: 90 passed, 0 failed.
+- No decoding, playback, timeline, AI, export, effects, or camera-specific logic yet.

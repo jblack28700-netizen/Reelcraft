@@ -599,3 +599,25 @@ Verification:
 - Test build succeeded.
 - Automated tests: 81 passed, 0 failed (73 prior + 8 new).
 - New tests: list emission on import/open/new/remove; removal correctness and persistence; unknown-id and no-project failure paths; removal of an unavailable entry clears unavailable state; MainWindow list population and Remove wiring (with and without selection).
+
+
+## Phase 2 Objective 7 — Active (Selected) Media — "Viewer Source" Contract — Complete
+
+Status: Complete.
+
+Defined the minimal deterministic "which media is active/selected for viewing" contract; viewer unchanged.
+
+- `Application` owns `m_activeMediaId`; accessors `activeMediaId()` and `activeMediaItem()` (resolves to exactly one current record; nullptr when none/unresolvable).
+- `setActiveMedia(mediaId)`: active-project requirement, id membership, and file availability (`referenceExists()`) validated; idempotent when already active; deterministic messages through `backgroundCompleted`.
+- `activeMediaChanged(mediaId)` signal emitted only on actual change (empty = cleared).
+- Consistency rules: import never auto-selects; removing the active record clears it (one emission); removing others preserves it; new project clears it; open normalizes the media list first, then restores the persisted id only when it resolves to a current, available record — dangling/invalid/unavailable ids are cleared deterministically (no dangling active reference, invariant enforced).
+- Persistence: optional additive top-level `activeMediaId` project JSON key (viewerState pattern) — written only when set, read leniently; no schema-version bump, no migration.
+- MainWindow: `setActiveButton` (acts on list current row; no selection → status), `activeMediaLabel`, `▶` marking of the active row, `showActiveMedia` slot, `setActiveRequested` signal; wired in `main.cpp`.
+- Media files never touched; media identity/dedup/availability/ordering/persistence and all viewer/presentation code unchanged.
+
+Verification:
+- Application build succeeded.
+- Offscreen launch smoke: event loop alive until timeout (SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 90 passed, 0 failed (81 prior + 9 new).
+- New tests: set/clear semantics + idempotency; import never auto-selects; removal rules; new-project clearing; save→reopen round trip; open-time normalization (dangling/legacy/duplicate persisted ids); unavailable media cannot become active; MainWindow Set Active/label/marking.

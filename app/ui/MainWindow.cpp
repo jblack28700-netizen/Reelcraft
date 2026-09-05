@@ -12,6 +12,15 @@
 
 #include "ui/ViewerWidget.h"
 
+namespace {
+
+constexpr int kMediaIdRole = Qt::UserRole;
+constexpr int kMediaNameRole = Qt::UserRole + 1;
+constexpr int kMediaTagRole = Qt::UserRole + 2;
+const QString kActivePrefix = QStringLiteral("▶ ");
+
+} // namespace
+
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
@@ -23,6 +32,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     m_projectLabel = new QLabel(QStringLiteral("No project"), central);
     m_statusLabel = new QLabel(QStringLiteral("Ready"), central);
+    m_activeMediaLabel = new QLabel(QStringLiteral("Active media: None"), central);
 
     m_yawLabel = new QLabel(QStringLiteral("Yaw: 0.0"), central);
     m_pitchLabel = new QLabel(QStringLiteral("Pitch: 0.0"), central);
@@ -34,6 +44,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_openButton = new QPushButton(QStringLiteral("Open Project"), central);
     m_importButton = new QPushButton(QStringLiteral("Import Media"), central);
     m_removeMediaButton = new QPushButton(QStringLiteral("Remove Media"), central);
+    m_setActiveButton = new QPushButton(QStringLiteral("Set Active"), central);
     m_backgroundButton = new QPushButton(QStringLiteral("Run Background Demo"), central);
     m_resetViewportButton = new QPushButton(QStringLiteral("Reset Viewport"), central);
 
@@ -44,6 +55,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     m_projectLabel->setObjectName("projectLabel");
     m_statusLabel->setObjectName("statusLabel");
+    m_activeMediaLabel->setObjectName("activeMediaLabel");
     m_yawLabel->setObjectName("yawLabel");
     m_pitchLabel->setObjectName("pitchLabel");
     m_rollLabel->setObjectName("rollLabel");
@@ -53,6 +65,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_openButton->setObjectName("openProjectButton");
     m_importButton->setObjectName("importMediaButton");
     m_removeMediaButton->setObjectName("removeMediaButton");
+    m_setActiveButton->setObjectName("setActiveButton");
     m_backgroundButton->setObjectName("backgroundDemoButton");
     m_resetViewportButton->setObjectName("resetViewportButton");
 
@@ -72,6 +85,8 @@ MainWindow::MainWindow(QWidget *parent)
     layout->addWidget(m_importButton);
     layout->addWidget(m_mediaListWidget);
     layout->addWidget(m_removeMediaButton);
+    layout->addWidget(m_setActiveButton);
+    layout->addWidget(m_activeMediaLabel);
     layout->addWidget(m_backgroundButton);
     layout->addWidget(m_resetViewportButton);
     layout->addWidget(m_statusLabel);
@@ -108,7 +123,16 @@ MainWindow::MainWindow(QWidget *parent)
             m_statusLabel->setText(QStringLiteral("No media selected to remove."));
             return;
         }
-        emit removeMediaRequested(current->data(Qt::UserRole).toString());
+        emit removeMediaRequested(current->data(kMediaIdRole).toString());
+    });
+
+    connect(m_setActiveButton, &QPushButton::clicked, this, [this]() {
+        QListWidgetItem *current = m_mediaListWidget->currentItem();
+        if (!current) {
+            m_statusLabel->setText(QStringLiteral("No media selected to set active."));
+            return;
+        }
+        emit setActiveRequested(current->data(kMediaIdRole).toString());
     });
 
     connect(m_backgroundButton, &QPushButton::clicked, this, &MainWindow::backgroundDemoRequested);
@@ -118,6 +142,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_openButton->installEventFilter(this);
     m_importButton->installEventFilter(this);
     m_removeMediaButton->installEventFilter(this);
+    m_setActiveButton->installEventFilter(this);
     m_backgroundButton->installEventFilter(this);
     m_resetViewportButton->installEventFilter(this);
 }
@@ -182,10 +207,47 @@ void MainWindow::showMediaList(const QList<MediaItem> &items)
 {
     m_mediaListWidget->clear();
     for (const MediaItem &item : items) {
-        auto *listItem = new QListWidgetItem(
-            QStringLiteral("%1  [%2]").arg(item.fileName(), item.formatTag()),
-            m_mediaListWidget);
-        listItem->setData(Qt::UserRole, item.id());
+        auto *listItem = new QListWidgetItem(m_mediaListWidget);
+        listItem->setData(kMediaIdRole, item.id());
+        listItem->setData(kMediaNameRole, item.fileName());
+        listItem->setData(kMediaTagRole, item.formatTag());
+    }
+    refreshActiveMarking();
+}
+
+void MainWindow::showActiveMedia(const QString &mediaId)
+{
+    m_activeMediaIdText = mediaId;
+    if (mediaId.isEmpty()) {
+        m_activeMediaLabel->setText(QStringLiteral("Active media: None"));
+    } else {
+        QString name = QStringLiteral("Unknown");
+        for (int i = 0; i < m_mediaListWidget->count(); ++i) {
+            QListWidgetItem *row = m_mediaListWidget->item(i);
+            if (row && row->data(kMediaIdRole).toString() == mediaId) {
+                name = row->data(kMediaNameRole).toString();
+                break;
+            }
+        }
+        m_activeMediaLabel->setText(QStringLiteral("Active media: %1").arg(name));
+    }
+    refreshActiveMarking();
+}
+
+void MainWindow::refreshActiveMarking()
+{
+    for (int i = 0; i < m_mediaListWidget->count(); ++i) {
+        QListWidgetItem *row = m_mediaListWidget->item(i);
+        if (!row) {
+            continue;
+        }
+        const QString id = row->data(kMediaIdRole).toString();
+        const bool active = !m_activeMediaIdText.isEmpty() && id == m_activeMediaIdText;
+        const QString text = QStringLiteral("%1%2  [%3]")
+                                 .arg(active ? kActivePrefix : QString(),
+                                      row->data(kMediaNameRole).toString(),
+                                      row->data(kMediaTagRole).toString());
+        row->setText(text);
     }
 }
 

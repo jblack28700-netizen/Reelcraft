@@ -58,6 +58,16 @@ void Project::setMedia(const QJsonArray &media)
     m_media = media;
 }
 
+QString Project::activeMediaId() const
+{
+    return m_activeMediaId;
+}
+
+void Project::setActiveMediaId(const QString &activeMediaId)
+{
+    m_activeMediaId = activeMediaId;
+}
+
 int Project::schemaVersion() const
 {
     return m_schemaVersion;
@@ -75,6 +85,9 @@ bool Project::save(const QString &filePath, QString *error) const
     }
     if (!m_media.isEmpty()) {
         object.insert(QStringLiteral("media"), m_media);
+    }
+    if (!m_activeMediaId.isEmpty()) {
+        object.insert(QStringLiteral("activeMediaId"), m_activeMediaId);
     }
 
     QFile file(filePath);
@@ -160,6 +173,11 @@ Project Project::load(const QString &filePath, bool *ok, QString *error)
     const QJsonValue mediaValue = object.value(QStringLiteral("media"));
     if (mediaValue.isArray()) {
         project.m_media = mediaValue.toArray();
+    }
+
+    const QJsonValue activeMediaIdValue = object.value(QStringLiteral("activeMediaId"));
+    if (activeMediaIdValue.isString()) {
+        project.m_activeMediaId = activeMediaIdValue.toString();
     }
 
     if (ok) {

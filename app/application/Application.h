@@ -30,6 +30,13 @@ public:
     bool hasUnavailableMedia() const;
     int unavailableMediaCount() const;
 
+    // The active/selected media ("viewer source" contract). The invariant is:
+    // the active id is empty, or it resolves to exactly one current MediaItem
+    // in the normalized list whose file was available at selection/restore
+    // time. It is never a dangling reference.
+    QString activeMediaId() const;
+    const MediaItem *activeMediaItem() const;
+
 public slots:
     void newProject();
     bool saveProject(const QString &filePath);
@@ -48,8 +55,14 @@ public slots:
 
     // Removes the media record with the given id from the current project.
     // Requires an active project and an existing media id. Only the record is
-    // removed; the referenced file is never modified or deleted.
+    // removed; the referenced file is never modified or deleted. If the active
+    // media is removed, the active id is cleared.
     bool removeMedia(const QString &mediaId);
+
+    // Sets the active/selected media to the record with the given id. Requires
+    // an active project, an existing media id, and an available referenced
+    // file. Never auto-selects on import; idempotent when already active.
+    bool setActiveMedia(const QString &mediaId);
 
 signals:
     void projectChanged(const Project &project);
@@ -60,12 +73,20 @@ signals:
     // after a project is opened, and after a new project is created (empty).
     void mediaListChanged(const QList<MediaItem> &items);
 
+    // Emitted whenever the active media changes (empty id = none active).
+    void activeMediaChanged(const QString &mediaId);
+
 private:
     QJsonArray mediaJson() const;
     void restoreMediaFromJson(const QJsonArray &media);
+    // Restores the active id from a persisted value after the media list has
+    // been normalized: the id is kept only when it resolves to a current,
+    // available media record; otherwise it is cleared deterministically.
+    void restoreActiveMediaFromProject(const QString &persistedId);
 
     Project m_currentProject;
     bool m_hasProject = false;
     ViewportState *m_viewportState = nullptr;
     QList<MediaItem> m_mediaItems;
+    QString m_activeMediaId;
 };

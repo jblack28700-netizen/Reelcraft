@@ -40,12 +40,16 @@ public slots:
     // Rebuilds the project media list display from the authoritative list.
     void showMediaList(const QList<MediaItem> &items);
 
+    // Updates the active/selected media display (empty id = none active).
+    void showActiveMedia(const QString &mediaId);
+
 signals:
     void newProjectRequested();
     void saveProjectRequested(const QString &filePath);
     void openProjectRequested(const QString &filePath);
     void importMediaRequested(const QString &filePath);
     void removeMediaRequested(const QString &mediaId);
+    void setActiveRequested(const QString &mediaId);
     void backgroundDemoRequested();
     void resetViewportRequested();
     void viewportYawDeltaRequested(double delta);
@@ -56,6 +60,7 @@ signals:
 private:
     QLabel *m_projectLabel = nullptr;
     QLabel *m_statusLabel = nullptr;
+    QLabel *m_activeMediaLabel = nullptr;
 
     QLabel *m_yawLabel = nullptr;
     QLabel *m_pitchLabel = nullptr;
@@ -67,10 +72,15 @@ private:
     QPushButton *m_openButton = nullptr;
     QPushButton *m_importButton = nullptr;
     QPushButton *m_removeMediaButton = nullptr;
+    QPushButton *m_setActiveButton = nullptr;
     QPushButton *m_backgroundButton = nullptr;
     QPushButton *m_resetViewportButton = nullptr;
 
     QListWidget *m_mediaListWidget = nullptr;
 
     ViewerWidget *m_viewerWidget = nullptr;
+
+    // Active media id used to mark the active row in the list display.
+    QString m_activeMediaIdText;
+    void refreshActiveMarking();
 };

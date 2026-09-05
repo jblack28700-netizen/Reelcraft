@@ -120,6 +120,15 @@ private slots:
     void removeMediaRequiresActiveProject();
     void removeUnavailableMediaClearsUnavailableState();
     void mainWindowMediaListPopulatedAndRemoveWorks();
+    void activeMediaRequiresProjectAndSetsState();
+    void activeMediaSameIdAndUnknownIdBehavior();
+    void activeMediaImportNeverAutoSelects();
+    void activeMediaRemovalRules();
+    void activeMediaClearedOnNewProject();
+    void activeMediaRoundTripRestoresOnReopen();
+    void activeMediaOpenClearsDanglingOrLegacy();
+    void activeMediaUnavailableCannotBeActive();
+    void mainWindowSetActiveAndLabelWork();
 };
 
 void ProjectTest::initTestCase()
@@ -1968,6 +1977,373 @@ void ProjectTest::mainWindowMediaListPopulatedAndRemoveWorks()
     QCOMPARE(spy.first().first().toString(), mediaId);
 
     QVERIFY(app.mediaItems().isEmpty());
+    QCOMPARE(list->count(), 0);
+}
+
+void ProjectTest::activeMediaRequiresProjectAndSetsState()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString mediaPath = tempDir.filePath(QStringLiteral("act.bin"));
+    QFile mediaFile(mediaPath);
+    QVERIFY(mediaFile.open(QIODevice::WriteOnly));
+    mediaFile.write(QByteArray(12, 'a'));
+    mediaFile.close();
+
+    Application app;
+    QSignalSpy spy(&app, &Application::activeMediaChanged);
+
+    // No active project: selection fails safely.
+    QVERIFY(!app.setActiveMedia(QStringLiteral("any")));
+    QCOMPARE(spy.count(), 0);
+    QVERIFY(app.activeMediaId().isEmpty());
+    QVERIFY(app.activeMediaItem() == nullptr);
+
+    app.newProject();
+    QVERIFY(app.importMediaFile(mediaPath));
+    const QString id = app.mediaItems().at(0).id();
+
+    QVERIFY(app.setActiveMedia(id));
+    QCOMPARE(app.activeMediaId(), id);
+    QVERIFY(app.activeMediaItem() != nullptr);
+    QCOMPARE(app.activeMediaItem()->id(), id);
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.first().first().toString(), id);
+}
+
+void ProjectTest::activeMediaSameIdAndUnknownIdBehavior()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString mediaPath = tempDir.filePath(QStringLiteral("same.bin"));
+    QFile mediaFile(mediaPath);
+    QVERIFY(mediaFile.open(QIODevice::WriteOnly));
+    mediaFile.write(QByteArray(8, 's'));
+    mediaFile.close();
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(mediaPath));
+    const QString id = app.mediaItems().at(0).id();
+    QVERIFY(app.setActiveMedia(id));
+
+    // Same id again: no change, no activeMediaChanged emission.
+    QSignalSpy spy(&app, &Application::activeMediaChanged);
+    QSignalSpy messageSpy(&app, &Application::backgroundCompleted);
+    QVERIFY(app.setActiveMedia(id));
+    QCOMPARE(spy.count(), 0);
+    QCOMPARE(messageSpy.count(), 1);
+    QVERIFY(messageSpy.first().first().toString().contains(QStringLiteral("already active")));
+    QCOMPARE(app.activeMediaId(), id);
+
+    // Unknown id (including empty): fails, state unchanged, no emission.
+    QVERIFY(!app.setActiveMedia(QStringLiteral("no-such-id")));
+    QVERIFY(!app.setActiveMedia(QString()));
+    QCOMPARE(app.activeMediaId(), id);
+    QCOMPARE(spy.count(), 0);
+}
+
+void ProjectTest::activeMediaImportNeverAutoSelects()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    auto createFile = [&tempDir](const QString &name) {
+        const QString path = tempDir.filePath(name);
+        QFile file(path);
+        file.open(QIODevice::WriteOnly);
+        file.write(QByteArray(8, 'n'));
+        file.close();
+        return path;
+    };
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(createFile(QStringLiteral("a.bin"))));
+    QVERIFY(app.importMediaFile(createFile(QStringLiteral("b.bin"))));
+
+    // Imports never auto-select.
+    QVERIFY(app.activeMediaId().isEmpty());
+    QVERIFY(app.activeMediaItem() == nullptr);
+
+    // Selecting then importing another file leaves the selection unchanged.
+    const QString id = app.mediaItems().at(0).id();
+    QVERIFY(app.setActiveMedia(id));
+    QVERIFY(app.importMediaFile(createFile(QStringLiteral("c.mov"))));
+    QCOMPARE(app.activeMediaId(), id);
+    QCOMPARE(app.mediaItems().size(), 3);
+}
+
+void ProjectTest::activeMediaRemovalRules()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString firstPath = tempDir.filePath(QStringLiteral("first.bin"));
+    const QString secondPath = tempDir.filePath(QStringLiteral("second.bin"));
+    for (const QString &path : { firstPath, secondPath }) {
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(QByteArray(8, 'r'));
+        file.close();
+    }
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(firstPath));
+    QVERIFY(app.importMediaFile(secondPath));
+
+    const QString activeId = app.mediaItems().at(0).id();
+    const QString otherId = app.mediaItems().at(1).id();
+    QVERIFY(app.setActiveMedia(activeId));
+
+    QSignalSpy spy(&app, &Application::activeMediaChanged);
+
+    // Removing a non-active record preserves the active id (no emission).
+    QVERIFY(app.removeMedia(otherId));
+    QCOMPARE(app.activeMediaId(), activeId);
+    QCOMPARE(spy.count(), 0);
+
+    // Removing the active record clears it with one emission.
+    QVERIFY(app.removeMedia(activeId));
+    QVERIFY(app.activeMediaId().isEmpty());
+    QVERIFY(app.activeMediaItem() == nullptr);
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(spy.first().first().toString().isEmpty());
+}
+
+void ProjectTest::activeMediaClearedOnNewProject()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString mediaPath = tempDir.filePath(QStringLiteral("clear.bin"));
+    QFile mediaFile(mediaPath);
+    QVERIFY(mediaFile.open(QIODevice::WriteOnly));
+    mediaFile.write(QByteArray(6, 'c'));
+    mediaFile.close();
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(mediaPath));
+    const QString id = app.mediaItems().at(0).id();
+    QVERIFY(app.setActiveMedia(id));
+
+    QSignalSpy spy(&app, &Application::activeMediaChanged);
+    app.newProject();
+
+    QVERIFY(app.activeMediaId().isEmpty());
+    QVERIFY(app.activeMediaItem() == nullptr);
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(spy.first().first().toString().isEmpty());
+}
+
+void ProjectTest::activeMediaRoundTripRestoresOnReopen()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString firstPath = tempDir.filePath(QStringLiteral("first.bin"));
+    const QString secondPath = tempDir.filePath(QStringLiteral("second.mov"));
+    for (const QString &path : { firstPath, secondPath }) {
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(QByteArray(16, 'p'));
+        file.close();
+    }
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(firstPath));
+    QVERIFY(app.importMediaFile(secondPath));
+
+    const QString activeId = app.mediaItems().at(1).id();
+    QVERIFY(app.setActiveMedia(activeId));
+
+    const QString projectPath = tempDir.filePath(QStringLiteral("project.reel"));
+    QVERIFY(app.saveProject(projectPath));
+
+    Application reopened;
+    QSignalSpy spy(&reopened, &Application::activeMediaChanged);
+    QVERIFY(reopened.openProject(projectPath));
+
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(reopened.activeMediaId(), activeId);
+    QVERIFY(reopened.activeMediaItem() != nullptr);
+    QCOMPARE(reopened.activeMediaItem()->id(), activeId);
+    QCOMPARE(reopened.activeMediaItem()->fileName(), QStringLiteral("second.mov"));
+}
+
+void ProjectTest::activeMediaOpenClearsDanglingOrLegacy()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString mediaPath = tempDir.filePath(QStringLiteral("media.bin"));
+    QFile mediaFile(mediaPath);
+    QVERIFY(mediaFile.open(QIODevice::WriteOnly));
+    mediaFile.write(QByteArray(16, 'm'));
+    mediaFile.close();
+    const MediaItem item = MediaItem::createFromFilePath(mediaPath);
+    QVERIFY(item.isValid());
+
+    auto writeProject = [&tempDir](const QString &name, const QJsonArray &media,
+                                   const QJsonValue &activeId) {
+        QJsonObject project;
+        project.insert(QStringLiteral("id"), QStringLiteral("id-") + name);
+        project.insert(QStringLiteral("name"), QStringLiteral("Project ") + name);
+        project.insert(QStringLiteral("created"),
+                       QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+        project.insert(QStringLiteral("schemaVersion"), Project::CurrentSchemaVersion);
+        project.insert(QStringLiteral("media"), media);
+        if (activeId.isString()) {
+            project.insert(QStringLiteral("activeMediaId"), activeId);
+        }
+        const QString projectPath = tempDir.filePath(name + QStringLiteral(".reel"));
+        QFile file(projectPath);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            return QString();
+        }
+        file.write(QJsonDocument(project).toJson(QJsonDocument::Compact));
+        file.close();
+        return projectPath;
+    };
+
+    QJsonArray single;
+    single.append(item.toJsonObject());
+
+    // Dangling persisted active id: cleared deterministically.
+    const QString danglingPath =
+        writeProject(QStringLiteral("dangling"), single, QJsonValue(QStringLiteral("no-such-id")));
+    QVERIFY(!danglingPath.isEmpty());
+    Application appDangling;
+    QVERIFY(appDangling.openProject(danglingPath));
+    QCOMPARE(appDangling.mediaItems().size(), 1);
+    QVERIFY(appDangling.activeMediaId().isEmpty());
+
+    // Legacy project without the key: no active media.
+    const QString legacyPath =
+        writeProject(QStringLiteral("legacy"), single, QJsonValue());
+    QVERIFY(!legacyPath.isEmpty());
+    Application appLegacy;
+    QVERIFY(appLegacy.openProject(legacyPath));
+    QVERIFY(appLegacy.activeMediaId().isEmpty());
+
+    // Duplicate media entries + valid active id: normalization yields one
+    // record and the active id resolves to it.
+    QJsonArray duplicated;
+    duplicated.append(item.toJsonObject());
+    duplicated.append(item.toJsonObject());
+    const QString dupPath =
+        writeProject(QStringLiteral("dups"), duplicated, QJsonValue(item.id()));
+    QVERIFY(!dupPath.isEmpty());
+    Application appDup;
+    QSignalSpy spy(&appDup, &Application::activeMediaChanged);
+    QVERIFY(appDup.openProject(dupPath));
+    QCOMPARE(appDup.mediaItems().size(), 1);
+    QCOMPARE(appDup.activeMediaId(), item.id());
+    QCOMPARE(spy.count(), 1);
+}
+
+void ProjectTest::activeMediaUnavailableCannotBeActive()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString mediaPath = tempDir.filePath(QStringLiteral("vanishes.bin"));
+    QFile mediaFile(mediaPath);
+    QVERIFY(mediaFile.open(QIODevice::WriteOnly));
+    mediaFile.write(QByteArray(16, 'v'));
+    mediaFile.close();
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(mediaPath));
+    const QString id = app.mediaItems().at(0).id();
+    QVERIFY(app.setActiveMedia(id));
+
+    const QString projectPath = tempDir.filePath(QStringLiteral("project.reel"));
+    QVERIFY(app.saveProject(projectPath));
+    QVERIFY(QFile::remove(mediaPath));
+
+    // Reopen: the record is retained but unavailable; the persisted active id
+    // must be cleared (never a dangling/unavailable active selection).
+    Application reopened;
+    QVERIFY(reopened.openProject(projectPath));
+    QCOMPARE(reopened.mediaItems().size(), 1);
+    QVERIFY(reopened.hasUnavailableMedia());
+    QVERIFY(reopened.activeMediaId().isEmpty());
+    QVERIFY(reopened.activeMediaItem() == nullptr);
+
+    // Selecting an unavailable record is rejected.
+    QSignalSpy messageSpy(&reopened, &Application::backgroundCompleted);
+    QVERIFY(!reopened.setActiveMedia(id));
+    QCOMPARE(messageSpy.count(), 1);
+    QVERIFY(messageSpy.first().first().toString().contains(QStringLiteral("unavailable")));
+    QVERIFY(reopened.activeMediaId().isEmpty());
+}
+
+void ProjectTest::mainWindowSetActiveAndLabelWork()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    const QString mediaPath = tempDir.filePath(QStringLiteral("media.bin"));
+    QFile mediaFile(mediaPath);
+    QVERIFY(mediaFile.open(QIODevice::WriteOnly));
+    mediaFile.write(QByteArray(16, 'm'));
+    mediaFile.close();
+
+    Application app;
+    TestMainWindow window;
+    QObject::connect(&app, &Application::mediaListChanged,
+                     &window, &MainWindow::showMediaList);
+    QObject::connect(&app, &Application::activeMediaChanged,
+                     &window, &MainWindow::showActiveMedia);
+    QObject::connect(&window, &MainWindow::setActiveRequested,
+                     &app, &Application::setActiveMedia);
+    QObject::connect(&window, &MainWindow::removeMediaRequested,
+                     &app, &Application::removeMedia);
+
+    app.newProject();
+    QVERIFY(app.importMediaFile(mediaPath));
+
+    auto *setActiveButton = window.findChild<QPushButton *>(QStringLiteral("setActiveButton"));
+    QVERIFY(setActiveButton);
+    auto *activeLabel = window.findChild<QLabel *>(QStringLiteral("activeMediaLabel"));
+    QVERIFY(activeLabel);
+    QCOMPARE(activeLabel->text(), QStringLiteral("Active media: None"));
+
+    // No selection: clicking Set Active is a no-op with status feedback.
+    QSignalSpy spy(&window, &MainWindow::setActiveRequested);
+    setActiveButton->click();
+    QCOMPARE(spy.count(), 0);
+    auto *statusLabel = window.findChild<QLabel *>(QStringLiteral("statusLabel"));
+    QVERIFY(statusLabel);
+    QVERIFY(statusLabel->text().contains(QStringLiteral("No media selected to set active")));
+
+    // Selecting the row and setting active updates id, label, and row marking.
+    auto *list = window.findChild<QListWidget *>(QStringLiteral("mediaListWidget"));
+    QVERIFY(list);
+    const QString mediaId = app.mediaItems().at(0).id();
+    list->setCurrentRow(0);
+    setActiveButton->click();
+
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.first().first().toString(), mediaId);
+    QCOMPARE(app.activeMediaId(), mediaId);
+    QCOMPARE(activeLabel->text(), QStringLiteral("Active media: media.bin"));
+    QVERIFY(list->item(0)->text().startsWith(QStringLiteral("▶ ")));
+
+    // Removing the active media clears the label back to None.
+    auto *removeButton = window.findChild<QPushButton *>(QStringLiteral("removeMediaButton"));
+    QVERIFY(removeButton);
+    list->setCurrentRow(0);
+    removeButton->click();
+    QVERIFY(app.activeMediaId().isEmpty());
+    QCOMPARE(activeLabel->text(), QStringLiteral("Active media: None"));
     QCOMPARE(list->count(), 0);
 }
 

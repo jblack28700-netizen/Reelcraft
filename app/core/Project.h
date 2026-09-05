@@ -27,6 +27,13 @@ public:
     QJsonArray media() const;
     void setMedia(const QJsonArray &media);
 
+    // Optional additive reference to the active/selected media record id.
+    // Written only when non-empty; read leniently. Mirrors the viewerState
+    // pattern: Application owns the authoritative value and validates it
+    // against the media list after open.
+    QString activeMediaId() const;
+    void setActiveMediaId(const QString &activeMediaId);
+
     int schemaVersion() const;
     static constexpr int CurrentSchemaVersion = 2;
 
@@ -39,6 +46,7 @@ private:
     QDateTime m_created;
     QJsonObject m_viewerState;
     QJsonArray m_media;
+    QString m_activeMediaId;
     int m_schemaVersion = CurrentSchemaVersion;
 };
 

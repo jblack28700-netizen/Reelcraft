@@ -669,6 +669,35 @@ Complete the media-management slice: let the user see the media referenced by th
 - No decoding, playback, timeline, editing, AI, export, audio, effects, camera-specific logic, active-source/viewer binding, schema migration, or new dependencies.
 - Media records are metadata only; removal never touches underlying files (Decision 002).
 
+## 2026-09-05 — Phase 2 Objective 7: Active (Selected) Media — "Viewer Source" Contract
+
+### Objective
+
+Define the minimal deterministic contract for which imported media record is active/selected for viewing, keeping the viewer unchanged.
+
+### Work Completed
+
+- `Application`: owns `m_activeMediaId`; accessors `activeMediaId()` and `activeMediaItem()` (resolves to exactly one current record or nullptr).
+- `Application::setActiveMedia(mediaId)`: requires an active project (`No project to select media in.`), an existing id (`Select failed: media not found.`), and an available file (`Select failed: media is unavailable.`); idempotent when already active (`Media already active: <name>`); success emits `Active media: <name>` and `activeMediaChanged`.
+- `Application::activeMediaChanged(const QString &)` emitted only on actual change (empty = cleared).
+- Consistency rules: import never auto-selects; removing the active record clears it with one emission; removing others preserves it; `newProject` clears it; `openProject` normalizes the media list first and restores the persisted id only when it resolves to a current, available record (dangling/invalid/unavailable → cleared deterministically).
+- Persistence: `Project` carries an optional additive `activeMediaId` (written only when non-empty, read leniently); no schema-version bump, no migration.
+- `MainWindow`: `setActiveButton` acting on the list current row, `activeMediaLabel` (`Active media: <name>`/`None`), `▶` marking of the active row, `showActiveMedia`, `setActiveRequested`; wired in `main.cpp`.
+- `Project.h/.cpp`, `Application.h/.cpp`, `MainWindow.h/.cpp`, `main.cpp`, `tests/test_project.cpp`.
+
+### Verification
+
+- Application build succeeded; offscreen launch smoke event loop alive until timeout (SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 90 passed, 0 failed (81 prior + 9 new, all green on the first full run).
+- New tests: set/clear semantics and idempotency; import never auto-selects; removal rules; new-project clearing; save→reopen round trip; open-time normalization (dangling/legacy/duplicate persisted ids); unavailable media cannot become active; MainWindow Set Active/label/marking.
+
+### Boundary Notes
+
+- No decoding, playback, timeline, editing, AI, export, audio, effects, camera-specific logic, viewer/presentation changes, schema migration, or new dependencies.
+- Original media files never touched; active selection requires an available reference at selection/restore time (point-in-time snapshot; no watchers).
+
+
 
 
 

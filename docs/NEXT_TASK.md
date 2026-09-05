@@ -9,64 +9,65 @@
 - Phase 2 Objective 4 — Real Media Foundation — complete and verified (`MediaItem` media records; `Application`-owned import/validation/deduplication; optional additive project `media` JSON section persisted on save and restored deterministically on reopen; Import Media UI; original files never modified).
 - Phase 2 Objective 5 — Media Reference Availability and Open-Time Integrity — complete and verified (reopen-time revalidation of media references; deterministic list normalization/deduplication on open; unavailable-media status surfaced through the existing signal boundary).
 - Phase 2 Objective 6 — Project Media Library Management (List & Remove) — complete and verified (`mediaListChanged` structured notification; deterministic `removeMedia(id)`; media list and Remove action in the shell; UI kept in sync without polling).
-- Automated suite: 81 passed, 0 failed. Working tree clean at the Objective 6 checkpoint commit.
+- Phase 2 Objective 7 — Active (Selected) Media — "Viewer Source" Contract — complete and verified (Application-owned active media id; `setActiveMedia`/`activeMediaId`/`activeMediaItem`; `activeMediaChanged`; deterministic list-consistency rules; optional additive persisted `activeMediaId`; Set Active/label affordance).
+- Automated suite: 90 passed, 0 failed. Working tree clean at the Objective 7 checkpoint commit.
 
 See `CURRENT_STATE.md` and `DEVELOPMENT_LOG.md` for the verified record.
 
-## Active Objective — Phase 2, Objective 6: Project Media Library Management (List & Remove)
+## Active Objective — Phase 2, Objective 7: Active (Selected) Media — "Viewer Source" Contract
 
-Status: **Complete — implemented and verified (2026-09-05; automated suite 81 passed, 0 failed).**
+Status: **Complete — implemented and verified (2026-09-05; automated suite 90 passed, 0 failed).**
 
 ### Objective
 
-Complete the media-management slice begun in Objectives 4–5: let the user see the media referenced by the current project and remove records — with no decode, viewer, schema, or dependency changes.
+Define the minimal deterministic concept of which imported media record is active/selected for viewing, keeping the viewer itself unchanged.
 
 ### Scope (implemented)
 
-- `Application::removeMedia(mediaId)`: removes the matching record only (id-based, idempotent, deterministic messages), requires an active project; original files are never touched.
-- `Application::mediaListChanged(const QList<MediaItem> &)`: structured notification emitted after a successful appending import, a successful removal, a project open, and a new project (empty); duplicate imports and failed removals do not emit.
-- `MainWindow`: media list widget (`mediaListWidget`, file name + format tag) and Remove Media action (`removeMediaButton`); `showMediaList` populates the list; Remove with no selection is a no-op with status feedback.
-- `main.cpp`: wires `mediaListChanged` → `showMediaList` and `removeMediaRequested` → `Application::removeMedia`.
-- `Q_DECLARE_METATYPE(MediaItem)` and meta-type registration for the custom-type signal.
+- Application-owned `m_activeMediaId`; accessors `activeMediaId()` and `activeMediaItem()` (resolves to exactly one current record; `nullptr` when none/unresolvable).
+- `setActiveMedia(mediaId)`: requires an active project, an existing id, and an available referenced file; idempotent when already active; deterministic messages via the existing signal boundary.
+- `activeMediaChanged(mediaId)` emitted only on actual change (empty = cleared).
+- Deterministic list-consistency rules: import never auto-selects; removing the active record clears it; new project clears it; open normalizes the media list first and then restores the persisted id only when it resolves to a current, available record (dangling/invalid/unavailable ids are cleared deterministically).
+- Persistence: optional additive top-level `activeMediaId` project JSON key following the `viewerState` precedent — written only when set, read leniently; no schema-version bump, no migration.
+- MainWindow: Set Active button (`setActiveButton`) acting on the media-list current row, `activeMediaLabel` readout, and `▶` marking of the active row; `showActiveMedia` slot; `setActiveRequested` signal; wired in `main.cpp`.
+- Availability is enforced at selection/restore time (point-in-time `referenceExists()`); no filesystem watching.
 
 ### Explicit Non-Goals
 
-- Decoding, probing, playback, preview, timeline, editing, AI, export, audio, effects, camera-specific logic
-- 360° classification/detection (conceptual only)
-- Active/selected-media ("viewer source") concepts or any media-to-viewer binding
-- Moving/copying media files, path rewriting, or reference repair; multi-select/drag-drop/confirm dialogs
-- Viewer camera/presentation/scene changes
-- Schema-version bump or migration (no new persisted fields)
-- Performance/GPU optimization; new dependencies; unrelated refactoring/cleanup
+- Decoding, probing, playback, preview, or any media dependency
+- Viewer changes (`ViewerWidget`, `ViewerProjection`, `ViewerScene`, `ViewportState` untouched); no media-to-viewer binding yet
+- Media-library redesign, multi-select, drag-and-drop, confirm dialogs
+- Timeline, editing, AI analysis/editing, export, audio, effects, camera-specific logic, 360° classification
+- Schema-version bump or migration; new dependencies; unrelated refactoring/cleanup
 
 ### Definition of Done
 
-- Media list UI reflects imports, removals, opens, and new projects deterministically without polling.
-- `removeMedia` removes the correct record, preserves ordering, reports deterministically, and persists on the next save.
-- Unknown id and no-active-project removals fail safely; Remove with no selection is a no-op with feedback.
-- Removing an entry whose file is unavailable clears unavailable state when it was the last one.
-- `mediaListChanged` fires exactly once per list-determining mutation with the correct list.
-- Original media files never modified (byte/SHA-256 invariant maintained by the Objective 4 test).
-- New tests pass; the 73-test regression suite remains green (suite now 81).
-- App and tests build/pass offscreen; documentation updated; one Git checkpoint; clean tree; no dependencies, no schema change.
+- Selection requires an active project and a current, available record; idempotent; deterministic failure messages.
+- `activeMediaChanged` fires exactly once per real change and never on no-ops.
+- Invariant holds: active id is empty or resolves to exactly one current record whose file was available at selection/restore time.
+- Import never auto-selects; removal of the active record clears it; removal of others preserves it; new project clears it.
+- Reopen restores a valid persisted id after normalization; dangling/invalid/unavailable ids are cleared deterministically.
+- Save→reopen round trip preserves the active id and record identity.
+- Original media never modified; media identity/dedup/availability/ordering/persistence unchanged.
+- New tests pass; the 81-test regression suite remains green (suite now 90).
+- App and tests build/pass offscreen; smoke unaffected; docs updated; one Git checkpoint; clean tree; no dependencies, no schema change.
 
 ### Verification Strategy
 
-- New tests: list emission on import/open/new/remove; removal correctness + persistence; unknown-id and no-project failures; removal clears unavailable state; MainWindow list population and Remove wiring (with and without selection).
+- New tests: set/clear semantics and idempotency; import never auto-selects; removal rules; new-project clearing; save→reopen round trip; open-time normalization with dangling/legacy/duplicate persisted ids; unavailable media cannot become active; MainWindow Set Active/label/marking.
 - Regression: full suite offscreen via the existing build-and-test script.
 
 ### Architectural Boundaries / Risks
 
-- `Application` remains the single owner of the media list; the UI only mirrors it via `mediaListChanged` (no polling, no UI-owned state).
-- Media records are metadata only; removal never touches the underlying files (Decision 002).
-- The conditional status message on open fires only for unavailable media; existing success-path signal tests are unaffected.
-- Custom-type signal args require meta-type registration (covered by tests).
-- MainWindow additions use new object names/signals; no existing widget or signal behavior changed.
+- `Application` remains the single owner of the active id and the media list; the UI only mirrors display state.
+- Availability is a point-in-time snapshot at selection/restore; no watchers or real-time revocation.
+- Additive key caveat (older readers drop the key on resave) is the documented `viewerState`/`media` precedent.
+- `activeMediaItem()` returns a pointer into the internal list; it must not outlive a list mutation (accessor-only usage, covered by tests).
 
 ### Implementation Gate
 
-This objective is complete at its checkpoint. The implementing agent for the next objective must re-read the project state, confirm one active objective, preserve the verified checkpoint (Objective 6 commit, parent `5f60e9c`), and stop-and-ask on any conflict with the recorded architecture.
+This objective is complete at its checkpoint. The implementing agent for the next objective must re-read the project state, confirm one active objective, preserve the verified checkpoint (Objective 7 commit, parent `8c71edd`), and stop-and-ask on any conflict with the recorded architecture.
 
 ## Next Logical State
 
-Define the next smallest Phase 2 development objective from the verified Phase 2 Objective 6 state. Do not begin automatically.
+Define the next smallest Phase 2 development objective from the verified Phase 2 Objective 7 state. Do not begin automatically.

@@ -36,13 +36,36 @@ QList<MediaItem> Application::mediaItems() const
     return m_mediaItems;
 }
 
+QString Application::activeMediaId() const
+{
+    return m_activeMediaId;
+}
+
+const MediaItem *Application::activeMediaItem() const
+{
+    if (m_activeMediaId.isEmpty()) {
+        return nullptr;
+    }
+    for (const MediaItem &item : m_mediaItems) {
+        if (item.id() == m_activeMediaId) {
+            return &item;
+        }
+    }
+    return nullptr;
+}
+
 void Application::newProject()
 {
     m_currentProject = Project();
     m_hasProject = true;
+    const bool hadActiveMedia = !m_activeMediaId.isEmpty();
     m_mediaItems.clear();
+    m_activeMediaId.clear();
     resetViewport();
     emit mediaListChanged(m_mediaItems);
+    if (hadActiveMedia) {
+        emit activeMediaChanged(m_activeMediaId);
+    }
     emit projectChanged(m_currentProject);
 }
 
@@ -55,6 +78,7 @@ bool Application::saveProject(const QString &filePath)
 
     m_currentProject.setViewerState(m_viewportState ? m_viewportState->toJsonObject() : QJsonObject());
     m_currentProject.setMedia(mediaJson());
+    m_currentProject.setActiveMediaId(m_activeMediaId);
 
     QString error;
     const bool ok = m_currentProject.save(filePath, &error);
@@ -92,7 +116,10 @@ bool Application::openProject(const QString &filePath)
                                      .arg(m_mediaItems.size()));
     }
 
+    // The media list is normalized first; the active id is then restored only
+    // when it resolves to a current, available media record.
     emit mediaListChanged(m_mediaItems);
+    restoreActiveMediaFromProject(m_currentProject.activeMediaId());
     emit projectChanged(m_currentProject);
     return true;
 }
@@ -135,15 +162,56 @@ bool Application::removeMedia(const QString &mediaId)
     for (int i = 0; i < m_mediaItems.size(); ++i) {
         if (m_mediaItems.at(i).id() == mediaId) {
             const QString fileName = m_mediaItems.at(i).fileName();
+            const bool removedActive = (m_activeMediaId == mediaId);
             m_mediaItems.removeAt(i);
+            if (removedActive) {
+                m_activeMediaId.clear();
+            }
             emit backgroundCompleted(QStringLiteral("Removed media: %1").arg(fileName));
             emit mediaListChanged(m_mediaItems);
+            if (removedActive) {
+                emit activeMediaChanged(m_activeMediaId);
+            }
             return true;
         }
     }
 
     emit backgroundCompleted(QStringLiteral("Remove failed: media not found."));
     return false;
+}
+
+bool Application::setActiveMedia(const QString &mediaId)
+{
+    if (!m_hasProject) {
+        emit backgroundCompleted(QStringLiteral("No project to select media in."));
+        return false;
+    }
+
+    const MediaItem *item = nullptr;
+    for (const MediaItem &candidate : m_mediaItems) {
+        if (candidate.id() == mediaId) {
+            item = &candidate;
+            break;
+        }
+    }
+    if (!item) {
+        emit backgroundCompleted(QStringLiteral("Select failed: media not found."));
+        return false;
+    }
+    if (!item->referenceExists()) {
+        emit backgroundCompleted(QStringLiteral("Select failed: media is unavailable."));
+        return false;
+    }
+
+    if (m_activeMediaId == mediaId) {
+        emit backgroundCompleted(QStringLiteral("Media already active: %1").arg(item->fileName()));
+        return true;
+    }
+
+    m_activeMediaId = mediaId;
+    emit backgroundCompleted(QStringLiteral("Active media: %1").arg(item->fileName()));
+    emit activeMediaChanged(m_activeMediaId);
+    return true;
 }
 
 void Application::runBackgroundDemo()
@@ -223,6 +291,23 @@ void Application::restoreMediaFromJson(const QJsonArray &media)
         }
         seenIds.insert(item.id());
         m_mediaItems.append(item);
+    }
+}
+
+void Application::restoreActiveMediaFromProject(const QString &persistedId)
+{
+    const QString previous = m_activeMediaId;
+    m_activeMediaId.clear();
+    if (!persistedId.isEmpty()) {
+        for (const MediaItem &item : m_mediaItems) {
+            if (item.id() == persistedId && item.referenceExists()) {
+                m_activeMediaId = item.id();
+                break;
+            }
+        }
+    }
+    if (m_activeMediaId != previous) {
+        emit activeMediaChanged(m_activeMediaId);
     }
 }
 
