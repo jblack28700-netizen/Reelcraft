@@ -760,6 +760,26 @@ Verification:
 - New tests: bilinear quarter-blend anchor at texel (1.5,1.5) on a 4×4 source (proves interpolation, not nearest); seam (±180°) and pole (±90°) robustness and determinism. All prior EquirectView/viewer/presentation tests pass unmodified.
 
 
+## Phase 2 Objective 15 — Real-Media Review Path Validation — Complete
+
+Status: Complete.
+
+Validated the full Phase-2 review path end-to-end against deterministic FFmpeg-generated equirectangular multi-frame media (no physical camera).
+
+- Test fixture generator: 30 s, 1 fps, all-keyframe 2:1 equirect video with deterministic time-varying FRONT content (red/green/blue per-frame cycle) and a fixed RIGHT marker (magenta), built with the existing FFmpeg-CLI pattern (Decision 015; QSKIP if ffmpeg unavailable).
+- Focused end-to-end validation: fixture frame distinctness and seekability; import → set active → preview (t=0 red) → step +1 (green) → look-around at +90° yaw (magenta RIGHT centered) → seek t=5 (blue) with position tracking and viewer state — plus prior state/routing guards.
+- Informational performance (no gate): single-frame decode ~633 ms/step (subprocess), per-paint render ~41 ms at 640×320 — recorded as interaction-latency data for future caching/engine decisions.
+- Environment limitation recorded: synthetic-but-real encoded media is the review proxy; hardware 360-camera validation is out of scope in this environment.
+- Approved dev-script change: test-runner timeout raised 20 s → 240 s (FFmpeg fixture suites exceed the old cap).
+
+Verification:
+- Application build succeeded.
+- Offscreen launch smoke: event loop alive until timeout (SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 136 passed, 0 failed (133 prior + 3 new; 0 skipped; suite ~26 s).
+- New tests: equirect fixture frames distinct and seekable; end-to-end review path on the equirect clip; informational performance. No production source changed.
+
+
 ## Phase 2 Milestone Definition — "360 Viewer Review & Navigation" — Recorded
 
 Status: Recorded (2026-09-06, Decision 016).

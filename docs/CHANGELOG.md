@@ -473,3 +473,13 @@ Date: 2026-09-06
 - Added interpolation and seam/pole tests.
 - Full test suite: 133 passed, 0 failed.
 - Rendering resolution safeguard remains 640 px (unchanged); no continuous playback, audio, streaming, timeline, AI, export, or effects yet; original media is never modified.
+
+## v0.2.32 — Real-Media Review Path Validation
+
+Date: 2026-09-06
+
+- The full review workflow (select, single-frame preview, stepping/seek, look-around orientation, equirect routing, state resets) is now validated end-to-end against deterministic FFmpeg-generated equirectangular video (no physical camera required).
+- Added review-path validation fixtures/tests; test-runner timeout raised accordingly in the dev script.
+- Informational performance recorded (decode ~633 ms/step; render ~41 ms/paint at 640 px).
+- Full test suite: 136 passed, 0 failed.
+- No continuous playback, audio, streaming, timeline, AI, export, or effects yet; original media is never modified.

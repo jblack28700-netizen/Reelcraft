@@ -15,4 +15,5 @@ echo "Building tests..."
 make
 
 echo "Running tests offscreen..."
-QT_QPA_PLATFORM=offscreen timeout 20 ./reelcraft_tests
+# 240s ceiling: Objective 15+ FFmpeg-generated review fixtures raise suite runtime.
+QT_QPA_PLATFORM=offscreen timeout 240 ./reelcraft_tests

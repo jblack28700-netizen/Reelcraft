@@ -191,6 +191,94 @@ bool blueDominant(const QColor &color)
     return color.blue() > color.red() + 80 && color.blue() > color.green() + 80;
 }
 
+// Objective 15: deterministic equirectangular long-clip review fixture.
+const QColor kReviewFrameColors[] = {
+    QColor(230, 0, 0),   // red
+    QColor(0, 230, 0),   // green
+    QColor(0, 0, 230),   // blue
+};
+const QColor kReviewRightColor(230, 0, 230); // magenta: unique vs the cycle
+
+bool reviewRedDominant(const QColor &color)
+{
+    return color.red() > 140 && color.green() < 110 && color.blue() < 110;
+}
+bool reviewGreenDominant(const QColor &color)
+{
+    return color.green() > 140 && color.red() < 110 && color.blue() < 110;
+}
+bool reviewBlueDominant(const QColor &color)
+{
+    return color.blue() > 140 && color.red() < 110 && color.green() < 110;
+}
+bool reviewMagentaDominant(const QColor &color)
+{
+    return color.red() > 140 && color.blue() > 140 && color.green() < 110;
+}
+
+QImage buildReviewFrame(int width, int height, int frameIndex)
+{
+    const QColor frontColor = kReviewFrameColors[frameIndex % 3];
+    QImage frame(width, height, QImage::Format_ARGB32);
+    frame.fill(QColor(10, 10, 12));
+    for (int sy = 0; sy < height; ++sy) {
+        const double pitch = 90.0 - (sy + 0.5) * 180.0 / height;
+        for (int sx = 0; sx < width; ++sx) {
+            const double yaw = (sx + 0.5) * 360.0 / width - 180.0;
+            QColor color;
+            if (qAbs(yaw) <= 10.0 && qAbs(pitch) <= 8.0) {
+                color = frontColor;
+            } else if (yaw >= 80.0 && yaw <= 100.0 && qAbs(pitch) <= 30.0) {
+                color = kReviewRightColor;
+            } else {
+                continue;
+            }
+            frame.setPixel(sx, sy, color.rgb());
+        }
+    }
+    return frame;
+}
+
+bool createEquirectReviewVideo(const QString &directory, const QString &ffmpegPath,
+                               int frameCount, QString *outVideoPath)
+{
+    if (frameCount <= 0) {
+        return false;
+    }
+    for (int i = 0; i < frameCount; ++i) {
+        const QString name = QStringLiteral("/r_%1.png")
+                                 .arg(i, 2, 10, QLatin1Char('0'));
+        if (!buildReviewFrame(360, 180, i).save(directory + name, "PNG")) {
+            return false;
+        }
+    }
+    const QString videoPath = directory + QStringLiteral("/review_clip.mp4");
+    QProcess process;
+    process.start(ffmpegPath, {
+        QStringLiteral("-y"),
+        QStringLiteral("-framerate"), QStringLiteral("1"),
+        QStringLiteral("-i"), directory + QStringLiteral("/r_%02d.png"),
+        QStringLiteral("-c:v"), QStringLiteral("libx264"),
+        QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"),
+        QStringLiteral("-g"), QStringLiteral("1"),
+        QStringLiteral("-r"), QStringLiteral("1"),
+        videoPath
+    });
+    const bool started = process.waitForStarted(15000);
+    if (started) {
+        process.waitForFinished(60000);
+    }
+    for (int i = 0; i < frameCount; ++i) {
+        QFile::remove(directory + QStringLiteral("/r_%1.png")
+                                  .arg(i, 2, 10, QLatin1Char('0')));
+    }
+    if (!started || process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+        return false;
+    }
+    *outVideoPath = videoPath;
+    return true;
+}
+
 } // namespace
 
 class TestMainWindow : public MainWindow
@@ -341,6 +429,9 @@ private slots:
     void viewerSourcePersistsWhileContextStable();
     void equirectViewBilinearBlendsFourNeighbors();
     void equirectViewBilinearRobustAtSeamAndPoles();
+    void equirectReviewFixtureFramesAreDistinctAndSeekable();
+    void reviewPathEndToEndOnEquirectClip();
+    void equirectReviewPerformanceInformational();
 };
 
 void ProjectTest::initTestCase()
@@ -3830,6 +3921,145 @@ void ProjectTest::equirectViewBilinearRobustAtSeamAndPoles()
     QVERIFY(EquirectView::render(pattern, 180.0, 0.0, 0.0, 90.0, 200, 100, &secondSeam));
     QVERIFY(imagesIdentical(firstSeam, secondSeam));
     expectColor(firstSeam, 100, 50, kPatternBackground);
+}
+
+void ProjectTest::equirectReviewFixtureFramesAreDistinctAndSeekable()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg not available; skipping decode-dependent test.");
+    }
+
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    QString videoPath;
+    QVERIFY(createEquirectReviewVideo(tempDir.path(),
+                                      FrameExtractor::defaultExecutablePath(),
+                                      30, &videoPath));
+
+    QImage atZero;
+    QImage atOne;
+    QImage atFive;
+    QVERIFY(FrameExtractor::extractFrameAt(
+        videoPath, FrameExtractor::defaultExecutablePath(), 0.0, &atZero));
+    QVERIFY(FrameExtractor::extractFrameAt(
+        videoPath, FrameExtractor::defaultExecutablePath(), 1.0, &atOne));
+    QVERIFY(FrameExtractor::extractFrameAt(
+        videoPath, FrameExtractor::defaultExecutablePath(), 5.0, &atFive));
+
+    const QColor centerZero = atZero.pixelColor(atZero.width() / 2, atZero.height() / 2);
+    const QColor centerOne = atOne.pixelColor(atOne.width() / 2, atOne.height() / 2);
+    const QColor centerFive = atFive.pixelColor(atFive.width() / 2, atFive.height() / 2);
+
+    QVERIFY(reviewRedDominant(centerZero));   // frame 0 = red
+    QVERIFY(reviewGreenDominant(centerOne));  // frame 1 = green
+    QVERIFY(reviewBlueDominant(centerFive));  // frame 5 % 3 == 2 = blue
+
+    QVERIFY(!imagesIdentical(atZero, atOne));
+}
+
+void ProjectTest::reviewPathEndToEndOnEquirectClip()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg not available; skipping decode-dependent test.");
+    }
+
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    QString videoPath;
+    QVERIFY(createEquirectReviewVideo(tempDir.path(),
+                                      FrameExtractor::defaultExecutablePath(),
+                                      30, &videoPath));
+
+    Application app;
+    TestMainWindow window;
+    QObject::connect(&app, &Application::mediaListChanged,
+                     &window, &MainWindow::showMediaList);
+    QObject::connect(&app, &Application::activeMediaChanged,
+                     &window, &MainWindow::showActiveMedia);
+    QObject::connect(&app, &Application::projectChanged,
+                     &window, &MainWindow::showProject);
+    QObject::connect(&app, &Application::framePreviewReady,
+                     &window, &MainWindow::showFramePreview);
+    QObject::connect(&app, &Application::previewTimeChanged,
+                     &window, &MainWindow::showPreviewTime);
+    QObject::connect(&window, &MainWindow::previewStepRequested,
+                     &app, &Application::stepActiveMediaPreview);
+
+    app.newProject();
+    QVERIFY(app.importMediaFile(videoPath));
+    const QString mediaId = app.mediaItems().at(0).id();
+    QVERIFY(app.setActiveMedia(mediaId));
+
+    ViewerWidget *viewer = window.viewerWidget();
+    QVERIFY(viewer);
+    viewer->setViewportState(app.viewportState());
+
+    auto centerColor = [viewer]() {
+        const QImage image = viewer->grab().toImage();
+        return image.pixelColor(image.width() / 2, image.height() / 2);
+    };
+
+    // Preview at t=0: FRONT red.
+    QVERIFY(app.previewActiveMediaFrameAt(0.0));
+    QVERIFY(viewer->hasSourceImage());
+    QVERIFY(reviewRedDominant(centerColor()));
+
+    // Step +1 s: FRONT green.
+    auto *stepForward = window.findChild<QPushButton *>(QStringLiteral("stepForwardButton"));
+    QVERIFY(stepForward);
+    stepForward->click();
+    QVERIFY(reviewGreenDominant(centerColor()));
+    QCOMPARE(app.previewTimeSeconds(), 1.0);
+
+    // Look around while the frame is present: +90 yaw centers RIGHT (magenta).
+    app.adjustViewportYaw(90.0);
+    QVERIFY(reviewMagentaDominant(centerColor()));
+    app.resetViewport();
+
+    // Seek far forward: frame 5 % 3 == 2 => FRONT blue.
+    QVERIFY(app.previewActiveMediaFrameAt(5.0));
+    QVERIFY(reviewBlueDominant(centerColor()));
+    QCOMPARE(app.previewTimeSeconds(), 5.0);
+}
+
+void ProjectTest::equirectReviewPerformanceInformational()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg not available; skipping decode-dependent test.");
+    }
+
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    QString videoPath;
+    QVERIFY(createEquirectReviewVideo(tempDir.path(),
+                                      FrameExtractor::defaultExecutablePath(),
+                                      30, &videoPath));
+
+    // One-shot per-step decode cost on the real clip.
+    QElapsedTimer timer;
+    timer.start();
+    QImage frame;
+    for (int t = 0; t < 5; ++t) {
+        QVERIFY(FrameExtractor::extractFrameAt(
+            videoPath, FrameExtractor::defaultExecutablePath(),
+            static_cast<double>(t), &frame));
+    }
+    const double decodeMs = static_cast<double>(timer.nsecsElapsed()) / 5 / 1e6;
+    qInfo("Review path: single-frame decode ~%.1f ms/step on the equirect clip", decodeMs);
+
+    // Per-paint equirect render cost on a decoded frame (640 cap).
+    const QImage pattern = buildTestPattern();
+    timer.restart();
+    QImage view;
+    for (int i = 0; i < 5; ++i) {
+        QVERIFY(EquirectView::render(pattern, 10.0, 5.0, 3.0, 90.0,
+                                     EquirectView::MaxOutputWidth, 320, &view));
+    }
+    const double renderMs = static_cast<double>(timer.nsecsElapsed()) / 5 / 1e6;
+    qInfo("Review path: per-paint render ~%.1f ms at %dx%d",
+          renderMs, EquirectView::MaxOutputWidth, 320);
+
+    // Informational only; no timing gate.
 }
 
 QTEST_MAIN(ProjectTest)

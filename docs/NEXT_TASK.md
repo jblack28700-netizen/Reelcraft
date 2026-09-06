@@ -17,54 +17,52 @@
 - Phase 2 Objective 12 — Projection Declaration & Flat-Media Preview Path — complete and verified (optional additive `projection` on `MediaItem` — equirectangular | flat | Unknown; declared via shell controls; Unknown routes to equirectangular; opt-in flat fit/letterbox presentation with no camera transform; equirect/marker paths unchanged).
 - Phase 2 Objective 13 — Viewer Presentation State Consistency — complete and verified (stale decoded frames and flat mode are cleared when the project or active-media context changes: new project, open, active-media change, active-media removal; the viewer returns to the deterministic marker scene until the user previews again).
 - Phase 2 Objective 14 — Presentation Quality: Bilinear Equirectangular Rendering — complete and verified (deterministic bilinear sampling in EquirectView; all camera/seam/pole/validation contracts preserved; MaxOutputWidth stays 640; measured 36.98 ms/frame at 640x320, informational 148.69 ms at 1280x640).
-- Automated suite: 133 passed, 0 failed. Working tree clean at the Objective 14 checkpoint commit.
+- Phase 2 Objective 15 — Real-Media Review Path Validation — complete and verified (deterministic FFmpeg-generated 30 s equirect clip fixture; full review path exercised: import/select, preview, stepping across frames, look-around during frame presentation, equirect routing, state resets; environment limitation recorded — no physical camera here; informational perf: ~633 ms/step decode, ~41 ms/paint render).
+- Automated suite: 136 passed, 0 failed. Working tree clean at the Objective 15 checkpoint commit.
 
 See `CURRENT_STATE.md` and `DEVELOPMENT_LOG.md` for the verified record.
 
-## Active Objective — Phase 2, Objective 14: Presentation Quality — Bilinear Equirectangular Rendering
+## Active Objective — Phase 2, Objective 15: Real-Media Review Path Validation
 
-Status: **Complete — implemented and verified (2026-09-06; automated suite 133 passed, 0 failed).**
+Status: **Complete — implemented and verified (2026-09-06; automated suite 136 passed, 0 failed).**
 
 ### Objective
 
-Replace nearest-neighbor equirectangular sampling with deterministic bilinear interpolation to improve single-frame review quality, preserving every rendering/camera/validation contract.
+Validate the full Phase-2 review workflow (import/select, single-frame preview, stepping/seek, look-around orientation, equirect routing, state resets) end-to-end against deterministic FFmpeg-generated equirectangular multi-frame media — with no physical camera hardware.
 
 ### Scope (implemented)
 
-- `EquirectView::render` now samples bilinearly (four-texel straight-space blend with alpha; horizontal wrap at the seam; vertical clamp at poles; integer-rounded, deterministic).
-- Camera conventions (ViewportState/ViewerProjection), roll/FOV math, validation and no-partial-output semantics unchanged; output Format_ARGB32 unchanged.
-- `MaxOutputWidth = 640` unchanged and not configurable (this objective).
-- No changes to flat mode, ViewerWidget architecture, FrameExtractor, media/time/audio/engine, schema, or dependencies.
+- Test-side fixture generator: 2:1 equirect video (30 s @ 1 fps, all-keyframe) whose frames carry deterministic time-varying FRONT content (red/green/blue cycle) and a fixed RIGHT marker (magenta), reusing the existing FFmpeg-CLI fixture pattern (Decision 015; QSKIP if ffmpeg unavailable).
+- Focused end-to-end tests: fixture frame distinctness/seekability; full review path (preview t=0 red, step +1 green, +90° yaw look-around centers magenta, seek t=5 blue, position tracking, viewer state via wiring); informational performance.
+- No production source changes; no dependencies; no ffprobe/duration/playback/audio/hardware.
+- Dev script change (approved): test-runner timeout raised 20 s -> 240 s in `scripts/build_and_test.sh` because FFmpeg fixture suites exceed the old cap.
 
 ### Explicit Non-Goals
 
-- Raising or configuring `MaxOutputWidth` (deferred; informational 1280x640 cost measured)
-- Render caching/invalidation or GPU path (follow-up if interactive latency warrants)
-- Flat presentation, decode seam, media/time/audio changes; new dependencies; schema/contract changes; Objective 15 work
+- Continuous playback/duration/ffprobe/audio (deferred, Decision 016); hardware-camera validation (out of scope here — recorded limitation)
+- Production-code changes; FrameExtractor/Application/ViewerWidget/EquirectView/media/schema/dependency changes; GPU/cap changes
 
 ### Definition of Done
 
-- Bilinear sampling deterministic and correct (focused blend-anchor and seam/pole tests).
-- All existing EquirectView/viewer/presentation tests pass unmodified.
-- Full regression green (131 prior + 2 new = 133); build + offscreen smoke pass.
-- Performance measured and recorded (36.98 ms/frame at 640x320 bilinear; informational 148.69 ms at 1280x640).
-- Docs updated; one Git checkpoint; clean tree; no dependency/schema/contract change.
+- Deterministic equirect long-clip fixture produces verifiable, distinct frames.
+- New review-path tests pass (stepping across frames, look-around with frame present, routing, state, position).
+- Full regression (133 prior + 3 new = 136) green; build + offscreen smoke pass; informational performance recorded; docs updated; one checkpoint; clean tree; no dependency/schema/architecture change.
 
 ### Verification Strategy
 
-- Focused: exact quarter-blend at texel (1.5,1.5) on a 4x4 source (bilinear, not nearest); seam (+/-180 deg) and pole (+/-90 deg) robustness and determinism.
-- Regression: full suite offscreen via the existing build-and-test script.
+- Focused: fixture sanity + end-to-end review path on the clip; informational timing (no gate).
+- Regression: full suite offscreen via the existing build-and-test script (raised timeout).
 
 ### Architectural Boundaries / Risks
 
-- Uniform-patch interiors are identical under bilinear, so all color-anchor and pixel tests are preserved unmodified.
-- Per-paint cost rises (~37 ms at 640x320 vs ~15-23 nearest); drag/wheel re-render per event — recorded as an interaction-latency concern; caching/GPU are follow-up candidates, not this objective's scope.
-- 640px cap remains and configurability is explicitly deferred.
+- Pure test/validation layer; all production contracts preserved.
+- Environment limitation recorded: synthetic-but-real encoded media is the proxy; no hardware 360 camera in this environment.
+- Measured informational costs: ~633 ms/step decode (subprocess), ~41 ms/paint render at 640x320 — input to future interaction/caching decisions, not gates.
 
 ### Implementation Gate
 
-This objective is complete at its checkpoint. The implementing agent for the next objective must re-read the project state, confirm one active objective, preserve the verified checkpoint (Objective 14 commit, parent `3c1046d`), and stop-and-ask on any conflict with the recorded architecture.
+This objective is complete at its checkpoint. The implementing agent for the next objective must re-read the project state, confirm one active objective, preserve the verified checkpoint (Objective 15 commit, parent `8d11e85`), and stop-and-ask on any conflict with the recorded architecture.
 
 ## Next Logical State
 
-Define the next smallest Phase 2 (360 Viewer Review & Navigation) development objective from the verified Phase 2 Objective 14 state. Do not begin automatically.
+Define the next smallest Phase 2 (360 Viewer Review & Navigation) development objective from the verified Phase 2 Objective 15 state. Do not begin automatically.

@@ -886,6 +886,33 @@ Replace nearest-neighbor equirectangular sampling with deterministic bilinear in
 - Interaction-latency note: per-paint render cost rose to ~37 ms; drag/wheel re-render per event — render caching/invalidation or a GPU path are follow-up candidates, not this objective.
 - Uniform-patch interiors are identical under bilinear, so color-anchor/determinism tests were preserved without modification.
 
+## 2026-09-06 — Phase 2 Objective 15: Real-Media Review Path Validation
+
+### Objective
+
+Validate the full Phase-2 review workflow end-to-end against deterministic FFmpeg-generated equirectangular multi-frame media — with no physical camera hardware.
+
+### Work Completed
+
+- Added test fixture generator `createEquirectReviewVideo` (+`buildReviewFrame`): 30 s, 1 fps, all-keyframe, 2:1 equirect video (360×180) with deterministic per-frame FRONT content (red/green/blue cycle) and a fixed RIGHT marker (magenta); reuses the FFmpeg-CLI fixture pattern (Decision 015); QSKIP when ffmpeg unavailable.
+- Added three focused tests: fixture frame distinctness/seekability (t0 red / t1 green / t5 blue with dominance checks); end-to-end review path on the clip (preview t0 red → step +1 green → +90° yaw look-around centers magenta → reset → seek t5 blue; position tracking; viewer state via wiring); informational performance (no gate).
+- Approved dev-script change: `scripts/build_and_test.sh` test-runner timeout raised 20 s → 240 s (Objective-15 FFmpeg fixture suites exceed the old cap; confirmed via a DECISION REQUIRED stop).
+- Files: `tests/test_project.cpp`, `scripts/build_and_test.sh`.
+
+### Verification
+
+- Application build succeeded; offscreen launch smoke event loop alive until timeout (SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 136 passed, 0 failed (133 prior + 3 new; 0 skipped; suite ~26 s).
+- Informational performance: single-frame decode ~633 ms/step on the equirect clip; per-paint render ~40.7 ms at 640×320 (no timing gate).
+
+### Boundary Notes
+
+- Pure test/validation layer; no production source, dependency, schema, or architecture change.
+- Environment limitation recorded: synthetic-but-real encoded media is the review proxy here; hardware 360-camera validation is out of scope.
+- Measured subprocess decode (~633 ms/step) recorded as interaction-latency data for future caching/engine decisions; no Objective 16 work.
+
+
 
 
 
