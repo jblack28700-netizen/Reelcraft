@@ -785,3 +785,21 @@ Verification:
 Status: Recorded (2026-09-06, Decision 016).
 
 Phase 2 is officially scoped as "360 Viewer Review & Navigation": import and manage real media, select active media, deterministic single-frame preview, time stepping/seek, look-around orientation (keyboard and pointer), correct flat/equirectangular presentation, and consistent viewer/project state. Continuous/paced playback, duration-aware transport, audio, and the future production media/player engine are explicitly deferred to a future playback/media-engine phase (see `DECISIONS.md` Decision 016 and the updated MASTER_GUIDE roadmap). Documentation-only change; no source/test/schema/dependency changes.
+
+## Phase 2 Formal Completion
+
+Status: Complete — 2026-09-06 (Phase 2 closeout commit; verified at the closeout commit).
+
+Phase 2 — 360 Viewer Review & Navigation (Decision 016) is formally complete.
+
+Verified Definition-of-Done evidence:
+- Objectives 1-15 complete and verified (media import/management/selection, availability, active-media contract, equirectangular presentation with deterministic bilinear sampling, flat-media routing, keyboard and pointer orientation controls, single-frame decode, time stepping/seek, viewer-state consistency, real-media review-path validation).
+- Automated test suite: 136 passed, 0 failed, 0 skipped.
+- Application and test builds succeed.
+- Offscreen launch smoke: event loop alive until timeout (SMOKE_EXIT=124).
+- Working tree clean at the closeout checkpoint.
+- Clean-checkout verification of the closeout commit: build + tests pass (136/0/0) and offscreen smoke succeeds.
+- Decision 016 scope satisfied: no continuous playback, duration metadata, ffprobe probing, audio, or media-engine implementation exists.
+- No production source, test, script, schema, dependency, or architecture changes were made by this closeout (documentation only).
+
+Phase 3 (per Decision 016 / roadmap Phase 3 - Media Engine) has not started; the next step is a Phase 3 opening decision/discovery, not implementation.

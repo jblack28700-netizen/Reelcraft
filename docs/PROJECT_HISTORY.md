@@ -242,3 +242,11 @@ No production media engine, 360° editing pipeline, AI provider integration, voi
 `DEVELOPMENT_LOG.md` records the detailed evaluation outcome. `CURRENT_STATE.md` now identifies validated technical direction as the current stage, and `NEXT_TASK.md` now defines the smallest Phase 1 application-foundation objective.
 
 This milestone represents completion of the evaluation stage and transition into controlled Phase 1 foundation implementation planning. It does not represent completion of the Reelcraft application.
+
+## 2026-09-06 — Phase 2 (360 Viewer Review & Navigation) Complete
+
+Phase 2 was re-scoped by Decision 016 to "360 Viewer Review & Navigation": import and manage real media, select active media, deterministic single-frame preview, time stepping/seek, look-around orientation (keyboard and pointer), correct flat/equirectangular presentation, and consistent viewer/project state. Continuous/paced playback, duration-aware transport, and audio are explicitly deferred to a future playback/media-engine phase.
+
+Objectives 1-15 were implemented and verified incrementally: viewer state/camera foundations, synthetic scene and equirectangular presentation (bilinear), media import/availability/library/active-media contracts, FFmpeg-CLI single-frame decode seam, time navigation, pointer orientation controls, projection declaration and flat routing, viewer-state consistency, and end-to-end real-media review-path validation.
+
+Verification at closeout: 136 passed / 0 failed / 0 skipped; application and test builds succeed; offscreen smoke SMOKE_EXIT=124; clean-checkout verification of the closeout commit passes; working tree clean. Phase 2 formally closed 2026-09-06 (closeout commit; prior HEAD ae317f5). Phase 3 (Media Engine / playback decision) has not started.

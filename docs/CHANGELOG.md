@@ -483,3 +483,12 @@ Date: 2026-09-06
 - Informational performance recorded (decode ~633 ms/step; render ~41 ms/paint at 640 px).
 - Full test suite: 136 passed, 0 failed.
 - No continuous playback, audio, streaming, timeline, AI, export, or effects yet; original media is never modified.
+
+## v0.2.33 — Phase 2 Complete
+
+Date: 2026-09-06
+
+- Phase 2 — "360 Viewer Review & Navigation" (Decision 016) is formally complete.
+- Final suite: 136 passed, 0 failed; builds succeed; offscreen smoke passes; clean-checkout verification of the closeout commit passes.
+- Closeout is documentation-only (no production source/test/script/schema/dependency changes).
+- Phase 3 (media engine / continuous playback) has not started; a Phase 3 opening decision/discovery is the next step.

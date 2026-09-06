@@ -18,51 +18,18 @@
 - Phase 2 Objective 13 — Viewer Presentation State Consistency — complete and verified (stale decoded frames and flat mode are cleared when the project or active-media context changes: new project, open, active-media change, active-media removal; the viewer returns to the deterministic marker scene until the user previews again).
 - Phase 2 Objective 14 — Presentation Quality: Bilinear Equirectangular Rendering — complete and verified (deterministic bilinear sampling in EquirectView; all camera/seam/pole/validation contracts preserved; MaxOutputWidth stays 640; measured 36.98 ms/frame at 640x320, informational 148.69 ms at 1280x640).
 - Phase 2 Objective 15 — Real-Media Review Path Validation — complete and verified (deterministic FFmpeg-generated 30 s equirect clip fixture; full review path exercised: import/select, preview, stepping across frames, look-around during frame presentation, equirect routing, state resets; environment limitation recorded — no physical camera here; informational perf: ~633 ms/step decode, ~41 ms/paint render).
-- Automated suite: 136 passed, 0 failed. Working tree clean at the Objective 15 checkpoint commit.
+- Automated suite: 136 passed, 0 failed. Phase 2 formally closed at the closeout commit (docs-only; prior HEAD `ae317f5`).
 
 See `CURRENT_STATE.md` and `DEVELOPMENT_LOG.md` for the verified record.
 
-## Active Objective — Phase 2, Objective 15: Real-Media Review Path Validation
+## Phase 2 — 360 Viewer Review & Navigation — Formally Closed
 
-Status: **Complete — implemented and verified (2026-09-06; automated suite 136 passed, 0 failed).**
+Status: **Complete — formally closed 2026-09-06 (closeout commit).**
 
-### Objective
+- Objectives 1-15 complete and verified; automated suite 136 passed / 0 failed / 0 skipped; builds succeed; offscreen smoke SMOKE_EXIT=124; clean-checkout verification of the closeout commit passes.
+- Scope per Decision 016: import/manage/select media, deterministic single-frame preview, time stepping/seek, look-around orientation (keyboard + pointer), flat/equirectangular correctness, consistent viewer/project state. Continuous/paced playback, duration-aware transport, and audio are explicitly deferred.
+- Closeout was documentation-only (CURRENT_STATE, PROJECT_HISTORY, DEVELOPMENT_LOG, CHANGELOG v0.2.33); no production source/test/script/schema/dependency/architecture changes.
 
-Validate the full Phase-2 review workflow (import/select, single-frame preview, stepping/seek, look-around orientation, equirect routing, state resets) end-to-end against deterministic FFmpeg-generated equirectangular multi-frame media — with no physical camera hardware.
+## Next Phase — Direction Only (NOT STARTED)
 
-### Scope (implemented)
-
-- Test-side fixture generator: 2:1 equirect video (30 s @ 1 fps, all-keyframe) whose frames carry deterministic time-varying FRONT content (red/green/blue cycle) and a fixed RIGHT marker (magenta), reusing the existing FFmpeg-CLI fixture pattern (Decision 015; QSKIP if ffmpeg unavailable).
-- Focused end-to-end tests: fixture frame distinctness/seekability; full review path (preview t=0 red, step +1 green, +90° yaw look-around centers magenta, seek t=5 blue, position tracking, viewer state via wiring); informational performance.
-- No production source changes; no dependencies; no ffprobe/duration/playback/audio/hardware.
-- Dev script change (approved): test-runner timeout raised 20 s -> 240 s in `scripts/build_and_test.sh` because FFmpeg fixture suites exceed the old cap.
-
-### Explicit Non-Goals
-
-- Continuous playback/duration/ffprobe/audio (deferred, Decision 016); hardware-camera validation (out of scope here — recorded limitation)
-- Production-code changes; FrameExtractor/Application/ViewerWidget/EquirectView/media/schema/dependency changes; GPU/cap changes
-
-### Definition of Done
-
-- Deterministic equirect long-clip fixture produces verifiable, distinct frames.
-- New review-path tests pass (stepping across frames, look-around with frame present, routing, state, position).
-- Full regression (133 prior + 3 new = 136) green; build + offscreen smoke pass; informational performance recorded; docs updated; one checkpoint; clean tree; no dependency/schema/architecture change.
-
-### Verification Strategy
-
-- Focused: fixture sanity + end-to-end review path on the clip; informational timing (no gate).
-- Regression: full suite offscreen via the existing build-and-test script (raised timeout).
-
-### Architectural Boundaries / Risks
-
-- Pure test/validation layer; all production contracts preserved.
-- Environment limitation recorded: synthetic-but-real encoded media is the proxy; no hardware 360 camera in this environment.
-- Measured informational costs: ~633 ms/step decode (subprocess), ~41 ms/paint render at 640x320 — input to future interaction/caching decisions, not gates.
-
-### Implementation Gate
-
-This objective is complete at its checkpoint. The implementing agent for the next objective must re-read the project state, confirm one active objective, preserve the verified checkpoint (Objective 15 commit, parent `8d11e85`), and stop-and-ask on any conflict with the recorded architecture.
-
-## Next Logical State
-
-Define the next smallest Phase 2 (360 Viewer Review & Navigation) development objective from the verified Phase 2 Objective 15 state. Do not begin automatically.
+Phase 3 (Media Engine / playback), per Decision 016 and MASTER_GUIDE roadmap: begin with a decision/feasibility discovery objective only — decode/player architecture and dependency choice (linked FFmpeg vs QtMultimedia vs ffmpeg streaming subprocess), environment feasibility probe (offscreen/Termux), and scope decomposition for continuous playback + duration-aware transport (reusing the Objective 10 position state/surface) and the deterministic media engine. Do not begin automatically.
