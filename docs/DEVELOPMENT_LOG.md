@@ -918,3 +918,11 @@ Validate the full Phase-2 review workflow end-to-end against deterministic FFmpe
 - Formal closeout performed: documentation-only updates to CURRENT_STATE (formal completion record), PROJECT_HISTORY (Phase 2 milestone), NEXT_TASK (closed state + Phase 3 direction), CHANGELOG (v0.2.33).
 - Clean-checkout verification of the Phase 2 closeout commit: fresh clone -> scripts/build_and_test.sh -> application and test builds succeed, Totals: 136 passed, 0 failed, 0 skipped; offscreen smoke of the built application SMOKE_EXIT=124.
 - No production source, test, script, schema, dependency, or architecture changes. Phase 3 not started.
+
+## 2026-09-06 — Phase 3 Opening Decisions Recorded (Objective 1 — documentation)
+
+- Read-only Phase 3 opening feasibility discovery completed and approved (verified environment facts: Qt 6.10.2 proot, QtMultimedia absent, Termux FFmpeg 8.1.2 with dev tree only outside the proot ABI; persistent-subprocess path feasible today, linked FFmpeg/QtMultimedia require installs).
+- Recorded Decision 017 (documentation only): Phase 3 opening architecture = persistent FFmpeg streaming subprocess behind a replaceable media/player seam; FrameExtractor remains the single-frame preview/validation seam; linked FFmpeg and QtMultimedia deferred; ffprobe duration metadata reopened as a future decision gate; Objective 10 preview-time contract preserved (playback extends it); architecture boundary decode seam → player/timing → Application → Viewer.
+- Synchronized CURRENT_STATE (Phase 3 OPEN record), PROJECT_HISTORY (Phase 3 opening milestone), NEXT_TASK (Phase 3 open; next = feasibility/contract objective), CHANGELOG (v0.2.34).
+- Verification: focused documentation consistency checks (anchors/headings/decision text present; docs-only diff); Phase 2 remains formally closed; no implementation, dependency, or schema changes; one docs-only Git checkpoint.
+

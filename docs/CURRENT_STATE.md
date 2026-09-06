@@ -803,3 +803,16 @@ Verified Definition-of-Done evidence:
 - No production source, test, script, schema, dependency, or architecture changes were made by this closeout (documentation only).
 
 Phase 3 (per Decision 016 / roadmap Phase 3 - Media Engine) has not started; the next step is a Phase 3 opening decision/discovery, not implementation.
+
+
+## Phase 3 — Media Engine — Opening Decisions Recorded
+
+Status: Open (decisions recorded 2026-09-06, Decision 017). Phase 2 remains formally closed.
+
+- Phase 3 opening architecture (approved): persistent FFmpeg streaming subprocess behind a replaceable media/player seam — the currently feasible implementation path in this environment.
+- FrameExtractor remains the deterministic single-frame preview/validation seam (not the permanent continuous-playback engine).
+- Linked FFmpeg libraries and QtMultimedia: deferred (no installation; revisit only at a real desktop/deployment dependency decision).
+- ffprobe duration metadata: reopened for Phase 3 as its own future decision gate (not implemented).
+- Objective 10 preview-time position contract preserved; playback extends rather than replaces it.
+- Architecture boundary: decode/media-source seam → player/timing (playhead, state, rate, pacing, clock) → Application (active-media state, player-lifecycle orchestration) → Viewer (presentation); timeline/editor/AI remain above Application and never reach into decoding.
+- No media-engine/playback/duration/audio implementation exists; no dependencies installed or changed; documentation-only changes in this objective.

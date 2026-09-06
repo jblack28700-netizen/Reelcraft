@@ -558,3 +558,38 @@ Explicitly deferred (belong to a future playback/media-engine phase):
 - A future playback/media-engine phase may reopen this decision; it should reuse the Objective 10 position state and transport surface, and will require its own dependency/architecture decision (linked FFmpeg vs QtMultimedia vs ffmpeg streaming subprocess) before implementation.
 - No schema, dependency, source, or test changes result from this decision; it is a scope/boundary record.
 
+
+# Decision 017 — Phase 3 Opening Architecture: Persistent FFmpeg Streaming Subprocess; Linked FFmpeg & QtMultimedia Deferred
+
+**Status:** Accepted (2026-09-06, Phase 3 Objective 1 — documentation only)
+
+## Context
+
+Phase 2 formally closed at `dcd876b`. A read-only Phase 3 opening feasibility discovery was completed and approved. Verified environment facts: Qt 6.10.2 (proot) with QtMultimedia absent; FFmpeg 8.1.2 binaries present (Termux) with development headers/libs present only in the Termux tree (bionic runtime, not linkable into the proot-glibc Qt application); therefore persistent-subprocess use of the existing FFmpeg CLI is feasible today, while linked FFmpeg libraries and QtMultimedia would require new package installation that is deferred.
+
+## APPROVED decisions
+
+- **Phase 3 opening architecture:** use a persistent FFmpeg streaming subprocess behind a replaceable media/player seam. This subprocess approach is the currently feasible implementation path in this environment.
+- **FrameExtractor classification:** FrameExtractor remains the deterministic single-frame preview/validation seam. It is NOT to be retrofitted into the permanent continuous-playback engine.
+- **Objective 10 contract:** the existing public/application-level preview-time contract (requested-time semantics, success-only position updates, step/floor and -ss keyframe semantics, reset rules, beyond-end deterministic failure) is preserved. Playback must extend this contract rather than replace or silently redefine it.
+- **Architecture boundary:** decode/media-source seam owns media decoding and frame/segment delivery; player/timing subsystem owns playhead, playback state, rate, pacing, and clock; Application owns active-media/application state and orchestrates player lifecycle; Viewer owns presentation only; future timeline/editor/AI systems remain above Application and must not reach directly into decoding.
+
+## DEFERRED decisions
+
+- **Linked FFmpeg libraries (libavformat/libavcodec/libavutil/libswscale):** deferred. Do not install FFmpeg development packages as part of this decision; revisit only when a real desktop/deployment dependency decision requires it.
+- **QtMultimedia:** deferred. Do not install QtMultimedia. Current feasibility discovery found it absent and judged it a weaker fit for Reelcraft's deterministic frame-oriented architecture.
+
+## FUTURE decision gates
+
+- **ffprobe duration metadata:** explicitly reopened for Phase 3 and requires its own decision/objective (NOT implemented now). The future decision must evaluate: whether duration is required for playback UX; ffprobe availability; deterministic parsing; malformed/unsupported media behavior; caching/persistence implications; whether duration should be persisted or derived; interaction with Objective 10's beyond-end behavior; and impact on seeking and transport UI.
+- **Production engine replacement:** a future linked-FFmpeg or Qt engine may replace the subprocess seam behind the same boundary when a real desktop/deployment target demands it (replaceable seam, reuses Objective 10 contract and Objective 15 fixtures).
+
+## Intentionally NOT decisions (implementation-detail planning for later feasibility/implementation objectives)
+
+Exact FFmpeg command line; rawvideo vs image2pipe transport; frame-pump implementation; clock implementation; buffering strategy; cache design; threading model; exact playback-rate implementation; audio architecture.
+
+## Consequences
+
+- Phase 3 is marked OPEN with the approved opening architecture; no media-engine/playback/duration/audio implementation exists and none is authorized by this decision.
+- No source, test, build, schema, dependency, or Objective 10 behavior changes result from this decision; it is a scope/boundary and dependency-stance record.
+

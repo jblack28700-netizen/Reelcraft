@@ -492,3 +492,12 @@ Date: 2026-09-06
 - Final suite: 136 passed, 0 failed; builds succeed; offscreen smoke passes; clean-checkout verification of the closeout commit passes.
 - Closeout is documentation-only (no production source/test/script/schema/dependency changes).
 - Phase 3 (media engine / continuous playback) has not started; a Phase 3 opening decision/discovery is the next step.
+
+## v0.2.34 — Phase 3 Opening Decisions Recorded
+
+Date: 2026-09-06
+
+- Phase 3 (Media Engine) opened with documentation-only decisions (Decision 017): persistent FFmpeg streaming subprocess behind a replaceable media/player seam as the opening architecture.
+- FrameExtractor remains the deterministic single-frame preview/validation seam; linked FFmpeg libraries and QtMultimedia are deferred; ffprobe duration metadata is reopened as a future decision gate.
+- Objective 10's preview-time contract is preserved; playback will extend it.
+- No media-engine/playback/duration/audio implementation, dependencies, or source changes; Phase 2 remains formally closed.

@@ -30,6 +30,18 @@ Status: **Complete — formally closed 2026-09-06 (closeout commit).**
 - Scope per Decision 016: import/manage/select media, deterministic single-frame preview, time stepping/seek, look-around orientation (keyboard + pointer), flat/equirectangular correctness, consistent viewer/project state. Continuous/paced playback, duration-aware transport, and audio are explicitly deferred.
 - Closeout was documentation-only (CURRENT_STATE, PROJECT_HISTORY, DEVELOPMENT_LOG, CHANGELOG v0.2.33); no production source/test/script/schema/dependency/architecture changes.
 
-## Next Phase — Direction Only (NOT STARTED)
+## Phase 3 — Media Engine (OPEN — opening architecture recorded; implementation NOT authorized)
 
-Phase 3 (Media Engine / playback), per Decision 016 and MASTER_GUIDE roadmap: begin with a decision/feasibility discovery objective only — decode/player architecture and dependency choice (linked FFmpeg vs QtMultimedia vs ffmpeg streaming subprocess), environment feasibility probe (offscreen/Termux), and scope decomposition for continuous playback + duration-aware transport (reusing the Objective 10 position state/surface) and the deterministic media engine. Do not begin automatically.
+Status: **Open (decisions recorded 2026-09-06, Decision 017). No media-engine/playback/duration/audio implementation exists.**
+
+- Phase 3 opening architecture (approved): persistent FFmpeg streaming subprocess behind a replaceable media/player seam — the currently feasible implementation path in this environment.
+- FrameExtractor remains the deterministic single-frame preview/validation seam (not the permanent engine).
+- Linked FFmpeg libraries and QtMultimedia: deferred (do not install; revisit at a real desktop/deployment dependency decision).
+- ffprobe duration metadata: reopened as its own future Phase 3 decision gate (not implemented).
+- Objective 10 preview-time position contract is preserved; playback must extend rather than replace it.
+- Architecture boundary: decode/media-source seam → player/timing → Application (orchestration) → Viewer (presentation); timeline/editor/AI above Application, never reaching into decoding.
+- Phase 2 remains formally closed (`dcd876b`). No implementation has started.
+
+## Next Objective (Phase 3, Objective 2) — NOT STARTED
+
+Phase 3 feasibility/contract objective: prove persistent-subprocess frame delivery, timing, seeks, process lifecycle, and determinism in this environment (small, testable). Do not begin automatically.
