@@ -926,3 +926,11 @@ Validate the full Phase-2 review workflow end-to-end against deterministic FFmpe
 - Synchronized CURRENT_STATE (Phase 3 OPEN record), PROJECT_HISTORY (Phase 3 opening milestone), NEXT_TASK (Phase 3 open; next = feasibility/contract objective), CHANGELOG (v0.2.34).
 - Verification: focused documentation consistency checks (anchors/headings/decision text present; docs-only diff); Phase 2 remains formally closed; no implementation, dependency, or schema changes; one docs-only Git checkpoint.
 
+## 2026-09-06 — Phase 3 Objective 2: Persistent FFmpeg Streaming Feasibility Probe (tests only)
+
+- Added temporary test-only probe helpers + 3 tests in `tests/test_project.cpp` (clearly marked Phase 3 Objective 2 feasibility; no production code): persistent rawvideo stream read of a 25-frame @5 fps deterministic equirect clip with bounded waits everywhere; EOF normal-exit; missing-file deterministic error; terminate/kill then clean restart.
+- Informational measurement (no gate): 25/25 frames delivered at ~39.9 frames/s (unthrottled rawvideo, 160x80), ~1.0 ms inter-frame delivery latency. Rawvideo/transport/pacing details intentionally NOT decisions (Decision 017).
+- Verification: probe tests pass; full regression 139 passed / 0 failed (136 prior + 3 new; 0 skipped); build success; offscreen smoke SMOKE_EXIT=124.
+- No dependency, ffprobe, schema, Obj-10 contract, FrameExtractor, or production changes; docs updated (NEXT_TASK/CURRENT_STATE/CHANGELOG v0.2.35); one Git checkpoint.
+
+

@@ -279,6 +279,92 @@ bool createEquirectReviewVideo(const QString &directory, const QString &ffmpegPa
     return true;
 }
 
+// --- Phase 3 Objective 2: TEMPORARY feasibility probe helpers (tests only) ---
+// These deliberately do NOT introduce production infrastructure. They prove that
+// a persistent FFmpeg subprocess can stream frames, hit EOF, and be killed/
+// restarted cleanly in this environment. Transport details (rawvideo, pacing,
+// buffering) are recorded as measurements only, NOT decisions.
+
+bool createStreamProbeVideo(const QString &directory, const QString &ffmpegPath,
+                            int frameCount, int framesPerSecond, QString *outVideoPath)
+{
+    const int width = 160;
+    const int height = 80;
+    if (frameCount <= 0 || framesPerSecond <= 0) {
+        return false;
+    }
+    for (int i = 0; i < frameCount; ++i) {
+        const QString name = QStringLiteral("/s_%1.png")
+                                 .arg(i, 3, 10, QLatin1Char('0'));
+        if (!buildReviewFrame(width, height, i).save(directory + name, "PNG")) {
+            return false;
+        }
+    }
+    const QString videoPath = directory + QStringLiteral("/stream_probe.mp4");
+    QProcess process;
+    process.start(ffmpegPath, {
+        QStringLiteral("-y"),
+        QStringLiteral("-framerate"), QString::number(framesPerSecond),
+        QStringLiteral("-i"), directory + QStringLiteral("/s_%03d.png"),
+        QStringLiteral("-c:v"), QStringLiteral("libx264"),
+        QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"),
+        QStringLiteral("-g"), QStringLiteral("1"),
+        QStringLiteral("-r"), QString::number(framesPerSecond),
+        videoPath
+    });
+    const bool started = process.waitForStarted(15000);
+    if (started) {
+        process.waitForFinished(60000);
+    }
+    for (int i = 0; i < frameCount; ++i) {
+        QFile::remove(directory + QStringLiteral("/s_%1.png")
+                                  .arg(i, 3, 10, QLatin1Char('0')));
+    }
+    if (!started || process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+        return false;
+    }
+    *outVideoPath = videoPath;
+    return true;
+}
+
+// Reads exactly one raw rgb24 frame (w*h*3 bytes) from the process stdout with a
+// bounded total wait. Returns false on timeout/EOF without a full frame.
+bool readRawFrame(QProcess &process, int width, int height, QByteArray &pending,
+                  QImage *outImage, int timeoutMs)
+{
+    const qint64 need = static_cast<qint64>(width) * height * 3;
+    QElapsedTimer timer;
+    timer.start();
+    while (pending.size() < need && timer.elapsed() < timeoutMs) {
+        if (process.waitForReadyRead(250)) {
+            pending += process.readAll();
+        } else if (process.state() == QProcess::NotRunning) {
+            break;
+        }
+    }
+    if (pending.size() < need) {
+        return false;
+    }
+    const QImage image(reinterpret_cast<const uchar *>(pending.constData()),
+                       width, height, width * 3, QImage::Format_RGB888);
+    *outImage = image.copy();
+    pending.remove(0, need);
+    return true;
+}
+
+bool classifyFrameColor(const QImage &frame, int expectedIndex)
+{
+    const QColor center = frame.pixelColor(frame.width() / 2, frame.height() / 2);
+    switch (expectedIndex % 3) {
+    case 0:
+        return reviewRedDominant(center);
+    case 1:
+        return reviewGreenDominant(center);
+    default:
+        return reviewBlueDominant(center);
+    }
+}
+
 } // namespace
 
 class TestMainWindow : public MainWindow
@@ -432,6 +518,9 @@ private slots:
     void equirectReviewFixtureFramesAreDistinctAndSeekable();
     void reviewPathEndToEndOnEquirectClip();
     void equirectReviewPerformanceInformational();
+    void persistentStreamProbeDeliversFramesInOrder();
+    void persistentStreamProbeErrorOnMissingFile();
+    void persistentStreamProbeKillAndRestartLifecycle();
 };
 
 void ProjectTest::initTestCase()
@@ -4060,6 +4149,159 @@ void ProjectTest::equirectReviewPerformanceInformational()
           renderMs, EquirectView::MaxOutputWidth, 320);
 
     // Informational only; no timing gate.
+}
+
+void ProjectTest::persistentStreamProbeDeliversFramesInOrder()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg not available; skipping decode-dependent test.");
+    }
+
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    QString videoPath;
+    constexpr int kFrames = 25;
+    constexpr int kFps = 5;
+    constexpr int kWidth = 160;
+    constexpr int kHeight = 80;
+    QVERIFY(createStreamProbeVideo(tempDir.path(),
+                                   FrameExtractor::defaultExecutablePath(),
+                                   kFrames, kFps, &videoPath));
+
+    QProcess process;
+    process.setProcessChannelMode(QProcess::SeparateChannels);
+    process.start(FrameExtractor::defaultExecutablePath(), {
+        QStringLiteral("-v"), QStringLiteral("error"),
+        QStringLiteral("-nostdin"),
+        QStringLiteral("-i"), videoPath,
+        QStringLiteral("-f"), QStringLiteral("rawvideo"),
+        QStringLiteral("-pix_fmt"), QStringLiteral("rgb24"),
+        QStringLiteral("-")
+    });
+    QVERIFY(process.waitForStarted(10000));
+
+    QElapsedTimer clock;
+    clock.start();
+    QByteArray pending;
+    QList<double> arrivalMs;
+    QList<QImage> frames;
+    constexpr int kReadTimeoutMs = 60000;
+    while (frames.size() < kFrames && clock.elapsed() < kReadTimeoutMs) {
+        QImage frame;
+        if (!readRawFrame(process, kWidth, kHeight, pending, &frame, kReadTimeoutMs)) {
+            break;
+        }
+        arrivalMs.append(clock.elapsed());
+        frames.append(frame);
+    }
+
+    // Allow the process to finish and reach EOF within a bounded wait.
+    if (process.state() != QProcess::NotRunning) {
+        process.waitForFinished(15000);
+    }
+    const QByteArray errorOutput = process.readAllStandardError();
+
+    const int delivered = frames.size();
+    QVERIFY2(delivered >= kFrames, qPrintable(
+        QStringLiteral("Expected %1 frames, delivered %2; stderr: %3")
+            .arg(kFrames).arg(delivered)
+            .arg(QString::fromUtf8(errorOutput).trimmed().left(200))));
+    QVERIFY(process.exitStatus() == QProcess::NormalExit);
+    QVERIFY(process.exitCode() == 0);
+
+    // Content in order: frame i carries the i%3 color (red/green/blue cycle).
+    for (int i = 0; i < delivered && i < 9; ++i) {
+        QVERIFY2(classifyFrameColor(frames.at(i), i),
+                 qPrintable(QStringLiteral("Frame %1 color mismatch").arg(i)));
+    }
+
+    const double elapsedSeconds = clock.elapsed() / 1000.0;
+    const double deliveredFps = elapsedSeconds > 0.0 ? delivered / elapsedSeconds : 0.0;
+    double firstArrivalMs = 0.0;
+    if (arrivalMs.size() >= 2) {
+        firstArrivalMs = arrivalMs.at(1) - arrivalMs.at(0);
+    }
+    qInfo("Persistent subprocess probe: %d/%d frames delivered, ~%.1f frames/s, "
+          "median inter-frame latency ~%.1f ms (informational; rawvideo, unthrottled)",
+          delivered, kFrames, deliveredFps, firstArrivalMs);
+
+    // No timing gate; the above are evidence for the feasibility record.
+}
+
+void ProjectTest::persistentStreamProbeErrorOnMissingFile()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg not available; skipping decode-dependent test.");
+    }
+
+    QProcess process;
+    process.setProcessChannelMode(QProcess::SeparateChannels);
+    process.start(FrameExtractor::defaultExecutablePath(), {
+        QStringLiteral("-v"), QStringLiteral("error"),
+        QStringLiteral("-nostdin"),
+        QStringLiteral("-i"), QStringLiteral("/nonexistent/probe.mp4"),
+        QStringLiteral("-f"), QStringLiteral("rawvideo"),
+        QStringLiteral("-pix_fmt"), QStringLiteral("rgb24"),
+        QStringLiteral("-")
+    });
+    QVERIFY(process.waitForStarted(10000));
+    process.waitForFinished(15000);
+    QVERIFY(process.exitStatus() == QProcess::NormalExit);
+    QVERIFY(process.exitCode() != 0);
+    QVERIFY(!process.readAllStandardError().isEmpty());
+}
+
+void ProjectTest::persistentStreamProbeKillAndRestartLifecycle()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg not available; skipping decode-dependent test.");
+    }
+
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    QString videoPath;
+    QVERIFY(createStreamProbeVideo(tempDir.path(),
+                                   FrameExtractor::defaultExecutablePath(),
+                                   25, 5, &videoPath));
+
+    auto startStream = [&videoPath](QProcess &process) {
+        process.setProcessChannelMode(QProcess::SeparateChannels);
+        process.start(FrameExtractor::defaultExecutablePath(), {
+            QStringLiteral("-v"), QStringLiteral("error"),
+            QStringLiteral("-nostdin"),
+            QStringLiteral("-i"), videoPath,
+            QStringLiteral("-f"), QStringLiteral("rawvideo"),
+            QStringLiteral("-pix_fmt"), QStringLiteral("rgb24"),
+            QStringLiteral("-")
+        });
+        return process.waitForStarted(10000);
+    };
+
+    // First stream: read one frame, then kill cleanly.
+    QProcess first;
+    QVERIFY(startStream(first));
+    QByteArray pending;
+    QImage frame;
+    QVERIFY(readRawFrame(first, 160, 80, pending, &frame, 30000));
+    first.terminate();
+    if (!first.waitForFinished(3000)) {
+        first.kill();
+        first.waitForFinished(3000);
+    }
+    QVERIFY(first.state() == QProcess::NotRunning);
+
+    // Restart: a fresh process must stream from the beginning again.
+    QProcess second;
+    QVERIFY(startStream(second));
+    pending.clear();
+    QVERIFY(readRawFrame(second, 160, 80, pending, &frame, 30000));
+    QVERIFY(classifyFrameColor(frame, 0)); // frame 0 = red
+    second.terminate();
+    if (!second.waitForFinished(3000)) {
+        second.kill();
+        second.waitForFinished(3000);
+    }
+    QVERIFY(second.state() == QProcess::NotRunning);
 }
 
 QTEST_MAIN(ProjectTest)

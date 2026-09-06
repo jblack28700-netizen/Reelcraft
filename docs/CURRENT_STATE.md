@@ -816,3 +816,18 @@ Status: Open (decisions recorded 2026-09-06, Decision 017). Phase 2 remains form
 - Objective 10 preview-time position contract preserved; playback extends rather than replaces it.
 - Architecture boundary: decode/media-source seam → player/timing (playhead, state, rate, pacing, clock) → Application (active-media state, player-lifecycle orchestration) → Viewer (presentation); timeline/editor/AI remain above Application and never reach into decoding.
 - No media-engine/playback/duration/audio implementation exists; no dependencies installed or changed; documentation-only changes in this objective.
+
+
+## Phase 3 Objective 2 — Persistent FFmpeg Streaming Feasibility Probe — Complete
+
+Status: Complete.
+
+- Tests-only feasibility probe (no production code): a persistent FFmpeg subprocess streams 25/25 frames of a deterministic equirect clip (rawvideo), reaches EOF cleanly (exit 0), errors deterministically on a missing file, and supports clean terminate/kill then restart.
+- Informational measurement (no gate): ~39.9 frames/s unthrottled delivery at 160x80, ~1.0 ms inter-frame delivery latency — evidence that a persistent-subprocess frame path is CPU-plausible in this environment; rawvideo/transport details intentionally not decisions (Decision 017).
+- No dependency, ffprobe, schema, Obj-10 contract, FrameExtractor, or production changes.
+
+Verification:
+- Application build succeeded.
+- Offscreen launch smoke: event loop alive until timeout (SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 139 passed, 0 failed (136 prior + 3 probe tests; 0 skipped).

@@ -42,6 +42,26 @@ Status: **Open (decisions recorded 2026-09-06, Decision 017). No media-engine/pl
 - Architecture boundary: decode/media-source seam → player/timing → Application (orchestration) → Viewer (presentation); timeline/editor/AI above Application, never reaching into decoding.
 - Phase 2 remains formally closed (`dcd876b`). No implementation has started.
 
-## Next Objective (Phase 3, Objective 2) — NOT STARTED
+## Phase 3, Objective 2 — Persistent FFmpeg Streaming Feasibility Probe — Complete
 
-Phase 3 feasibility/contract objective: prove persistent-subprocess frame delivery, timing, seeks, process lifecycle, and determinism in this environment (small, testable). Do not begin automatically.
+Status: **Complete — implemented and verified (2026-09-06; automated suite 139 passed, 0 failed).**
+
+### Objective (tests-only feasibility evidence)
+
+Prove, with temporary test-only probe helpers (no production changes), that a persistent FFmpeg subprocess can stream frames, reach EOF cleanly, fail deterministically on missing input, and be killed/restarted cleanly in this environment.
+
+### Scope (implemented)
+
+- Temporary probe helpers + 3 tests in `tests/test_project.cpp` (clearly marked Phase 3 Objective 2 feasibility; no production/engine code).
+- Persistent rawvideo stream read of a 25-frame @5 fps deterministic equirect clip; bounded waits everywhere.
+- Measurements recorded informationally (no timing gate): 25/25 frames delivered at ~39.9 frames/s (unthrottled rawvideo, 160x80), ~1.0 ms inter-frame delivery latency.
+- EOF normal-exit; missing-file deterministic error; terminate/kill then clean restart verified.
+- No dependency, ffprobe, schema, Obj-10, FrameExtractor, or production changes; rawvideo/transport details intentionally NOT decisions.
+
+### Verification
+
+- Focused probe tests pass; full regression 139/0/0; build success; offscreen smoke SMOKE_EXIT=124.
+
+## Next Objective (Phase 3, Objective 3) — NOT STARTED
+
+Media-engine foundation: introduce the replaceable player/media-source seam and a deterministic frame pump over the persistent-subprocess stream (reusing probe evidence), without changing the Objective 10 contract. Do not begin automatically.

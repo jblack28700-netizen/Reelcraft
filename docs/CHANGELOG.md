@@ -501,3 +501,12 @@ Date: 2026-09-06
 - FrameExtractor remains the deterministic single-frame preview/validation seam; linked FFmpeg libraries and QtMultimedia are deferred; ffprobe duration metadata is reopened as a future decision gate.
 - Objective 10's preview-time contract is preserved; playback will extend it.
 - No media-engine/playback/duration/audio implementation, dependencies, or source changes; Phase 2 remains formally closed.
+
+## v0.2.35 — Phase 3 Media-Engine Feasibility Probe
+
+Date: 2026-09-06
+
+- Tests-only feasibility evidence (no production changes): a persistent FFmpeg subprocess streams frames, reaches EOF cleanly, fails deterministically on missing input, and supports clean kill/restart.
+- Informational measurement: ~39.9 frames/s unthrottled rawvideo delivery at 160x80, ~1.0 ms inter-frame latency (not a performance gate).
+- Full test suite: 139 passed, 0 failed.
+- No media-engine/playback/duration/audio implementation, dependencies, ffprobe, or Obj-10 contract changes.
