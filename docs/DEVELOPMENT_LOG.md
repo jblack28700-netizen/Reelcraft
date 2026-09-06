@@ -859,6 +859,34 @@ Make the viewer's on-screen content and presentation mode deterministically cons
 - Preview remains an explicit user action (no auto-present on active change).
 - No Application/media/decode/time-navigation/schema/render changes; no Objective 14 work.
 
+## 2026-09-06 — Phase 2 Objective 14: Presentation Quality — Bilinear Equirectangular Rendering
+
+### Objective
+
+Replace nearest-neighbor equirectangular sampling with deterministic bilinear interpolation to improve single-frame review quality; preserve every rendering/camera/validation contract.
+
+### Work Completed
+
+- `EquirectView::render` sampling replaced with deterministic bilinear interpolation: four-texel straight-space (unpremultiplied) channel blend with alpha, horizontal seam wrap ((x0+1) mod width), vertical pole clamp, integer-rounded output. Edge handling for u/v at exactly 1.0 added.
+- Camera conventions (ViewportState/ViewerProjection), roll/FOV math, input validation, and no-partial-output semantics unchanged; output Format_ARGB32 unchanged; `MaxOutputWidth = 640` unchanged and non-configurable.
+- No changes to flat mode, ViewerWidget architecture, FrameExtractor, media/time/audio, schema, or dependencies.
+- Files: `app/viewer/EquirectView.cpp`, `tests/test_project.cpp`.
+
+### Verification
+
+- Application build succeeded; offscreen launch smoke event loop alive until timeout (SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 133 passed, 0 failed (131 prior + 2 new; 0 skipped). All existing EquirectView/viewer/presentation tests pass unmodified.
+- New tests: bilinear quarter-blend anchor at texel (1.5,1.5) on a 4×4 source (proves interpolation, not nearest); seam (±180°) and pole (±90°) robustness and determinism.
+- Performance: bilinear 36.98 ms/frame at 640×320 (nearest was ~15–23 ms); informational 148.69 ms at 1280×640 (quantifies a future cap-raise decision).
+
+### Boundary Notes
+
+- 640px safeguard remains unchanged; cap configurability explicitly deferred.
+- Interaction-latency note: per-paint render cost rose to ~37 ms; drag/wheel re-render per event — render caching/invalidation or a GPU path are follow-up candidates, not this objective.
+- Uniform-patch interiors are identical under bilinear, so color-anchor/determinism tests were preserved without modification.
+
+
 
 
 

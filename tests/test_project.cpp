@@ -339,6 +339,8 @@ private slots:
     void viewerClearedOnNewProjectAfterPreview();
     void viewerClearedWhenActiveMediaChangesOrRemoved();
     void viewerSourcePersistsWhileContextStable();
+    void equirectViewBilinearBlendsFourNeighbors();
+    void equirectViewBilinearRobustAtSeamAndPoles();
 };
 
 void ProjectTest::initTestCase()
@@ -2765,7 +2767,7 @@ void ProjectTest::equirectViewPerformanceSanity()
 {
     const QImage pattern = buildTestPattern();
 
-    // Warm-up.
+    // Warm-up at the capped resolution.
     QImage warm;
     QVERIFY(EquirectView::render(pattern, 0.0, 0.0, 0.0, 90.0,
                                   EquirectView::MaxOutputWidth, 320, &warm));
@@ -2778,13 +2780,22 @@ void ProjectTest::equirectViewPerformanceSanity()
         QVERIFY(EquirectView::render(pattern, 10.0, 5.0, 3.0, 90.0,
                                      EquirectView::MaxOutputWidth, 320, &view));
     }
-    const double averageMs = static_cast<double>(timer.nsecsElapsed()) / kIterations / 1e6;
-    qInfo("EquirectView CPU render: %.2f ms/frame at %dx%d (max width %d)",
-          averageMs, EquirectView::MaxOutputWidth, 320, EquirectView::MaxOutputWidth);
+    const double cappedMs = static_cast<double>(timer.nsecsElapsed()) / kIterations / 1e6;
+    qInfo("EquirectView bilinear CPU render: %.2f ms/frame at %dx%d (max width %d)",
+          cappedMs, EquirectView::MaxOutputWidth, 320, EquirectView::MaxOutputWidth);
+
+    // Informational only (no gate): quantifies the cost of a future cap raise.
+    timer.restart();
+    for (int i = 0; i < kIterations; ++i) {
+        QVERIFY(EquirectView::render(pattern, 10.0, 5.0, 3.0, 90.0, 1280, 640, &view));
+    }
+    const double wideMs = static_cast<double>(timer.nsecsElapsed()) / kIterations / 1e6;
+    qInfo("EquirectView bilinear CPU render (informational): %.2f ms/frame at 1280x640",
+          wideMs);
 
     // Generous sanity bound; this is a CPU-cost measurement, not a
     // performance regression gate.
-    QVERIFY(averageMs < 2000.0);
+    QVERIFY(cappedMs < 2000.0);
 }
 
 void ProjectTest::frameExtractorRejectsInvalidInput()
@@ -3768,6 +3779,57 @@ void ProjectTest::viewerSourcePersistsWhileContextStable()
     // Re-announcing the same active id must not clear the presented frame.
     window.showActiveMedia(mediaId);
     QVERIFY(viewer->hasSourceImage());
+}
+
+void ProjectTest::equirectViewBilinearBlendsFourNeighbors()
+{
+    // 4x4 source with four distinct colors around texel coordinates
+    // (1..2, 1..2); a 1x1 render whose center ray lands exactly at (1.5, 1.5)
+    // must produce the quarter blend (bilinear), not any single neighbor
+    // (nearest).
+    QImage source(4, 4, QImage::Format_ARGB32);
+    source.fill(QColor(0, 0, 0));
+    source.setPixelColor(1, 1, QColor(200, 0, 0));
+    source.setPixelColor(2, 1, QColor(0, 200, 0));
+    source.setPixelColor(1, 2, QColor(0, 0, 200));
+    source.setPixelColor(2, 2, QColor(100, 100, 100));
+
+    QImage view;
+    QVERIFY(EquirectView::render(source, -45.0, 22.5, 0.0, 90.0, 1, 1, &view));
+    QCOMPARE(view.width(), 1);
+    QCOMPARE(view.height(), 1);
+
+    const QColor color = view.pixelColor(0, 0);
+    QVERIFY(qAbs(color.red() - 75) <= 3);
+    QVERIFY(qAbs(color.green() - 75) <= 3);
+    QVERIFY(qAbs(color.blue() - 75) <= 3);
+    // Bilinear, not nearest: must not equal any pure neighbor.
+    QVERIFY(color != QColor(200, 0, 0));
+    QVERIFY(color != QColor(0, 200, 0));
+    QVERIFY(color != QColor(0, 0, 200));
+}
+
+void ProjectTest::equirectViewBilinearRobustAtSeamAndPoles()
+{
+    const QImage pattern = buildTestPattern();
+
+    // Pole directions clamp vertically and stay exact on uniform rows.
+    QImage viewUp;
+    QVERIFY(EquirectView::render(pattern, 0.0, 90.0, 0.0, 90.0, 200, 100, &viewUp));
+    expectColor(viewUp, 100, 50, kUpColor);
+
+    QImage viewDown;
+    QVERIFY(EquirectView::render(pattern, 0.0, -90.0, 0.0, 90.0, 200, 100, &viewDown));
+    expectColor(viewDown, 100, 50, kDownColor);
+
+    // The horizontal seam (+/-180 deg yaw) wraps deterministically without
+    // artifacts; center is background (no marker region at yaw 180).
+    QImage firstSeam;
+    QImage secondSeam;
+    QVERIFY(EquirectView::render(pattern, 180.0, 0.0, 0.0, 90.0, 200, 100, &firstSeam));
+    QVERIFY(EquirectView::render(pattern, 180.0, 0.0, 0.0, 90.0, 200, 100, &secondSeam));
+    QVERIFY(imagesIdentical(firstSeam, secondSeam));
+    expectColor(firstSeam, 100, 50, kPatternBackground);
 }
 
 QTEST_MAIN(ProjectTest)

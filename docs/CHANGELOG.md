@@ -463,3 +463,13 @@ Date: 2026-09-06
 - Added viewer state-consistency tests.
 - Full test suite: 131 passed, 0 failed.
 - No continuous playback, audio, streaming, timeline, AI, export, or effects yet; original media is never modified.
+
+## v0.2.31 — Bilinear Equirectangular Rendering
+
+Date: 2026-09-06
+
+- Equirectangular preview rendering now uses deterministic bilinear sampling for smoother single-frame review (no more blocky nearest-neighbor pixels when zoomed).
+- Camera/orientation behavior, seam handling, and validation are unchanged.
+- Added interpolation and seam/pole tests.
+- Full test suite: 133 passed, 0 failed.
+- Rendering resolution safeguard remains 640 px (unchanged); no continuous playback, audio, streaming, timeline, AI, export, or effects yet; original media is never modified.

@@ -16,48 +16,55 @@
 - Phase 2 Objective 11 — Pointer-Based Viewer Orientation Control — complete and verified (left-drag yaw/pitch deltas: drag right = yaw increases, drag up = pitch increases; wheel FOV: up = decrease = zoom in, down = increase = zoom out; routed through the existing Application adjust slots; viewer remains presentation-only).
 - Phase 2 Objective 12 — Projection Declaration & Flat-Media Preview Path — complete and verified (optional additive `projection` on `MediaItem` — equirectangular | flat | Unknown; declared via shell controls; Unknown routes to equirectangular; opt-in flat fit/letterbox presentation with no camera transform; equirect/marker paths unchanged).
 - Phase 2 Objective 13 — Viewer Presentation State Consistency — complete and verified (stale decoded frames and flat mode are cleared when the project or active-media context changes: new project, open, active-media change, active-media removal; the viewer returns to the deterministic marker scene until the user previews again).
-- Automated suite: 131 passed, 0 failed. Working tree clean at the Objective 13 checkpoint commit.
+- Phase 2 Objective 14 — Presentation Quality: Bilinear Equirectangular Rendering — complete and verified (deterministic bilinear sampling in EquirectView; all camera/seam/pole/validation contracts preserved; MaxOutputWidth stays 640; measured 36.98 ms/frame at 640x320, informational 148.69 ms at 1280x640).
+- Automated suite: 133 passed, 0 failed. Working tree clean at the Objective 14 checkpoint commit.
 
 See `CURRENT_STATE.md` and `DEVELOPMENT_LOG.md` for the verified record.
 
-## Active Objective — Phase 2, Objective 13: Viewer Presentation State Consistency
+## Active Objective — Phase 2, Objective 14: Presentation Quality — Bilinear Equirectangular Rendering
 
-Status: **Complete — implemented and verified (2026-09-06; automated suite 131 passed, 0 failed).**
+Status: **Complete — implemented and verified (2026-09-06; automated suite 133 passed, 0 failed).**
 
 ### Objective
 
-Make the viewer's on-screen content and presentation mode deterministically consistent with Application state: when the project or active-media context changes (new project, open, active-media change, active-media removal), any stale decoded frame and flat mode are cleared and the viewer returns to the deterministic marker scene until the user previews again.
+Replace nearest-neighbor equirectangular sampling with deterministic bilinear interpolation to improve single-frame review quality, preserving every rendering/camera/validation contract.
 
 ### Scope (implemented)
 
-- `MainWindow::showProject` (projectChanged: new/open) clears the viewer source and flat mode.
-- `MainWindow::showActiveMedia` clears when the active media id changes (including cleared), never on same-id re-announcement.
-- Private `MainWindow::clearViewerSource()`: `viewerWidget()->setSourceImage(QImage())` + `setFlatSourceMode(false)`.
-- Preview/step/routing flows unchanged; Application and viewer contracts unchanged.
+- `EquirectView::render` now samples bilinearly (four-texel straight-space blend with alpha; horizontal wrap at the seam; vertical clamp at poles; integer-rounded, deterministic).
+- Camera conventions (ViewportState/ViewerProjection), roll/FOV math, validation and no-partial-output semantics unchanged; output Format_ARGB32 unchanged.
+- `MaxOutputWidth = 640` unchanged and not configurable (this objective).
+- No changes to flat mode, ViewerWidget architecture, FrameExtractor, media/time/audio/engine, schema, or dependencies.
 
 ### Explicit Non-Goals
 
-- Application/Project/MediaItem/media/decode/time-navigation changes; EquirectView or rendering changes
-- Auto-presenting frames on active change (preview stays an explicit user action)
-- Continuous playback/audio/streaming; ffprobe/duration (gated); schema/persistence/dependencies
-- UI redesign; camera-specific logic; Objective 14 work
+- Raising or configuring `MaxOutputWidth` (deferred; informational 1280x640 cost measured)
+- Render caching/invalidation or GPU path (follow-up if interactive latency warrants)
+- Flat presentation, decode seam, media/time/audio changes; new dependencies; schema/contract changes; Objective 15 work
 
 ### Definition of Done
 
-- Stale frames cleared on new project, open, active-media change, and active-media removal; same-active no-op.
-- Preview/step/flat-equirect routing behavior unchanged.
-- Focused tests pass; the 128-test regression suite remains green (suite now 131).
-- Build + offscreen smoke pass; docs updated; one Git checkpoint; clean tree; no schema/dependency/contract changes.
+- Bilinear sampling deterministic and correct (focused blend-anchor and seam/pole tests).
+- All existing EquirectView/viewer/presentation tests pass unmodified.
+- Full regression green (131 prior + 2 new = 133); build + offscreen smoke pass.
+- Performance measured and recorded (36.98 ms/frame at 640x320 bilinear; informational 148.69 ms at 1280x640).
+- Docs updated; one Git checkpoint; clean tree; no dependency/schema/contract change.
 
 ### Verification Strategy
 
-- Focused: after a frame preview, newProject clears source + flat mode (marker scene visible at identity); active-media switch and active-media removal clear; same-active re-announcement does not clear.
+- Focused: exact quarter-blend at texel (1.5,1.5) on a 4x4 source (bilinear, not nearest); seam (+/-180 deg) and pole (+/-90 deg) robustness and determinism.
 - Regression: full suite offscreen via the existing build-and-test script.
+
+### Architectural Boundaries / Risks
+
+- Uniform-patch interiors are identical under bilinear, so all color-anchor and pixel tests are preserved unmodified.
+- Per-paint cost rises (~37 ms at 640x320 vs ~15-23 nearest); drag/wheel re-render per event — recorded as an interaction-latency concern; caching/GPU are follow-up candidates, not this objective's scope.
+- 640px cap remains and configurability is explicitly deferred.
 
 ### Implementation Gate
 
-This objective is complete at its checkpoint. The implementing agent for the next objective must re-read the project state, confirm one active objective, preserve the verified checkpoint (Objective 13 commit, parent `2e2eb64`), and stop-and-ask on any conflict with the recorded architecture.
+This objective is complete at its checkpoint. The implementing agent for the next objective must re-read the project state, confirm one active objective, preserve the verified checkpoint (Objective 14 commit, parent `3c1046d`), and stop-and-ask on any conflict with the recorded architecture.
 
 ## Next Logical State
 
-Define the next smallest Phase 2 development objective from the verified Phase 2 Objective 13 state. Do not begin automatically.
+Define the next smallest Phase 2 (360 Viewer Review & Navigation) development objective from the verified Phase 2 Objective 14 state. Do not begin automatically.

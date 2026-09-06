@@ -62,6 +62,66 @@ double clampDouble(double value, double low, double high)
     return value < low ? low : (value > high ? high : value);
 }
 
+struct RgbaStraight
+{
+    double red = 0.0;
+    double green = 0.0;
+    double blue = 0.0;
+    double alpha = 0.0;
+};
+
+// Reads one source pixel as straight (unpremultiplied) 0..255 components.
+RgbaStraight readStraight(const QImage &source, int x, int y, bool premultiplied)
+{
+    const QRgb color = source.pixel(x, y);
+    const double alpha = (color >> 24) & 0xFF;
+    double red = (color >> 16) & 0xFF;
+    double green = (color >> 8) & 0xFF;
+    double blue = color & 0xFF;
+    if (premultiplied && alpha > 0.0) {
+        red = red * 255.0 / alpha;
+        green = green * 255.0 / alpha;
+        blue = blue * 255.0 / alpha;
+    }
+    return { red, green, blue, alpha };
+}
+
+// Deterministic bilinear sample of the four neighbors (x0/x1 with horizontal
+// wrap, y0/y1 with vertical clamp). Straight-space blending; alpha is
+// interpolated with the same weights.
+QRgb bilinearSample(const QImage &source, int x0, int x1, int y0, int y1,
+                    double fx, double fy)
+{
+    const bool premultiplied =
+        source.format() == QImage::Format_ARGB32_Premultiplied;
+    const double weight00 = (1.0 - fx) * (1.0 - fy);
+    const double weight10 = fx * (1.0 - fy);
+    const double weight01 = (1.0 - fx) * fy;
+    const double weight11 = fx * fy;
+
+    const RgbaStraight samples[4] = {
+        readStraight(source, x0, y0, premultiplied),
+        readStraight(source, x1, y0, premultiplied),
+        readStraight(source, x0, y1, premultiplied),
+        readStraight(source, x1, y1, premultiplied)
+    };
+    const double weights[4] = { weight00, weight10, weight01, weight11 };
+
+    double red = 0.0;
+    double green = 0.0;
+    double blue = 0.0;
+    double alpha = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        red += weights[i] * samples[i].red;
+        green += weights[i] * samples[i].green;
+        blue += weights[i] * samples[i].blue;
+        alpha += weights[i] * samples[i].alpha;
+    }
+
+    return qRgba(qBound(0, qRound(red), 255), qBound(0, qRound(green), 255),
+                 qBound(0, qRound(blue), 255), qBound(0, qRound(alpha), 255));
+}
+
 } // namespace
 
 bool EquirectView::render(const QImage &equirectSource,
@@ -144,20 +204,43 @@ bool EquirectView::render(const QImage &equirectSource,
             const double worldPitch =
                 std::asin(clampDouble(direction.z / length, -1.0, 1.0));
 
-            // Equirectangular source sampling (nearest neighbor,
-            // deterministic). Horizontal wrap is implicit via the u range.
+            // Equirectangular source sampling (bilinear, deterministic).
+            // Horizontal wrap is implicit via the u range; vertical edges
+            // clamp to the top/bottom source row. Straight (unpremultiplied)
+            // blending is performed and alpha is interpolated with the same
+            // weights.
             const double u = (worldYaw + kPi) / (2.0 * kPi); // [0, 1)
             const double v = (kPi / 2.0 - worldPitch) / kPi; // [0, 1]
-            int sourceX = static_cast<int>(u * sourceWidth);
-            if (sourceX >= equirectSource.width()) {
-                sourceX = 0;
+
+            const double texX = u * sourceWidth;
+            const double texY = v * sourceHeight;
+
+            int x0 = static_cast<int>(texX);
+            if (x0 >= equirectSource.width()) {
+                // u exactly at the seam (1.0): wrap to the left column.
+                x0 = equirectSource.width() - 1;
             }
-            int sourceY = static_cast<int>(v * sourceHeight);
-            if (sourceY >= equirectSource.height()) {
-                sourceY = equirectSource.height() - 1;
+            const int x1 = (x0 + 1) % equirectSource.width();
+            double fx = texX - x0;
+            if (fx >= 1.0) {
+                fx = 1.0;
             }
 
-            result.setPixel(px, py, equirectSource.pixel(sourceX, sourceY));
+            int y0 = static_cast<int>(texY);
+            if (y0 >= equirectSource.height()) {
+                // v at the bottom edge: clamp to the last source row.
+                y0 = equirectSource.height() - 1;
+            }
+            const int y1 = y0 + 1 < equirectSource.height()
+                ? y0 + 1
+                : equirectSource.height() - 1;
+            double fy = texY - y0;
+            if (fy >= 1.0) {
+                fy = 1.0;
+            }
+
+            result.setPixel(px, py, bilinearSample(equirectSource, x0, x1, y0, y1,
+                                                   fx, fy));
         }
     }
 

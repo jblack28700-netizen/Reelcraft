@@ -740,6 +740,26 @@ Verification:
 - New tests: new project after a preview clears the frame and flat mode (marker scene visible); active-media switch and active-media removal clear; same-active re-announcement preserves the presented frame.
 
 
+## Phase 2 Objective 14 — Presentation Quality: Bilinear Equirectangular Rendering — Complete
+
+Status: Complete.
+
+Replaced nearest-neighbor with deterministic bilinear equirectangular sampling.
+
+- `EquirectView::render` samples bilinearly (four-texel straight-space blend with alpha; horizontal seam wrap; vertical pole clamp; integer-rounded, deterministic).
+- All camera/yaw/pitch/roll/FOV conventions, validation, and no-partial-output semantics preserved; output format unchanged; flat mode and all other subsystems untouched.
+- `MaxOutputWidth = 640` remains unchanged and non-configurable (cap/configurability deferred).
+- Performance measured: bilinear 36.98 ms/frame at 640×320 (nearest was ~15–23 ms); informational 148.69 ms at 1280×640 (supports keeping the cap).
+- Interaction-latency note: per-paint render cost rises (~37 ms); drag/wheel re-render per event — render caching/invalidation or a GPU path are follow-up candidates, explicitly not this objective.
+
+Verification:
+- Application build succeeded.
+- Offscreen launch smoke: event loop alive until timeout (SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 133 passed, 0 failed (131 prior + 2 new; 0 skipped).
+- New tests: bilinear quarter-blend anchor at texel (1.5,1.5) on a 4×4 source (proves interpolation, not nearest); seam (±180°) and pole (±90°) robustness and determinism. All prior EquirectView/viewer/presentation tests pass unmodified.
+
+
 ## Phase 2 Milestone Definition — "360 Viewer Review & Navigation" — Recorded
 
 Status: Recorded (2026-09-06, Decision 016).
