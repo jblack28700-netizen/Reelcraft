@@ -30,9 +30,9 @@ Status: **Complete — formally closed 2026-09-06 (closeout commit).**
 - Scope per Decision 016: import/manage/select media, deterministic single-frame preview, time stepping/seek, look-around orientation (keyboard + pointer), flat/equirectangular correctness, consistent viewer/project state. Continuous/paced playback, duration-aware transport, and audio are explicitly deferred.
 - Closeout was documentation-only (CURRENT_STATE, PROJECT_HISTORY, DEVELOPMENT_LOG, CHANGELOG v0.2.33); no production source/test/script/schema/dependency/architecture changes.
 
-## Phase 3 — Media Engine (OPEN — decode/media-source foundation underway)
+## Phase 3 — Media Engine (OPEN — decode/media-source and player/timing foundations underway)
 
-Status: **Open (opening architecture recorded 2026-09-06, Decision 017; decode/media-source foundation implemented 2026-09-16). No continuous playback, duration metadata, or audio implementation exists.**
+Status: **Open (opening architecture recorded 2026-09-06, Decision 017; decode/media-source foundation (Objective 3) and player/timing foundation (Objective 4) implemented 2026-09-16). No Application/UI playback wiring, continuous playback UX, duration metadata, or audio implementation exists.**
 
 - Phase 3 opening architecture (approved): persistent FFmpeg streaming subprocess behind a replaceable media/player seam — the currently feasible implementation path in this environment.
 - FrameExtractor remains the deterministic single-frame preview/validation seam (not the permanent engine).
@@ -83,7 +83,30 @@ Introduce the replaceable decode/media-source seam and a deterministic frame pum
 - Full regression 144 passed / 0 failed / 0 skipped; official `scripts/build_and_test.sh` re-run green.
 - Offscreen smoke SMOKE_EXIT=124.
 
-## Next Objective (Phase 3, Objective 4) — NOT STARTED
+## Phase 3, Objective 4 — Player/Timing Subsystem Foundation — Complete
 
-Player/timing subsystem foundation: introduce the deterministic playhead/playback-state layer above the frame pump, defining its state, clock, and pacing boundaries while preserving the Objective 10 contract and without wiring UI playback. Requires its own scoped objective before implementation. Do not begin automatically.
+Status: **Complete — implemented and verified (2026-09-16; automated suite 154 passed, 0 failed).**
+
+### Objective
+
+Introduce the deterministic player/timing foundation above the `FramePump`, defining playhead/position, play/pause/stop state, deterministic advancement, and replaceable clock and pacing abstractions, without changing the Objective 10 contract and without UI wiring.
+
+### Scope (implemented)
+
+- `Playhead` — deterministic frame count / current index / position from an explicit playback frame interval.
+- `Clock` abstraction + `SystemClock` (monotonic `QElapsedTimer`); tests inject a manual clock.
+- `PacingPolicy` abstraction + `DefaultPacingPolicy` (one frame per elapsed interval, drops frames when behind).
+- `Player` state machine (`Stopped`/`Playing`/`Paused`) with `play()`/`pause()`/`stop()`, `tick()` (clock/pacing-driven, bounded catch-up), `stepOnce()`, and `stateChanged`/`positionChanged`/`framePresented`/`playbackEnded`/`errorOccurred` signals.
+- `FramePump` stays passive and caller-driven; no timer, thread, UI, audio, duration metadata, or timeline.
+
+### Verification
+
+- Clean application and test builds succeed.
+- Full regression 154 passed / 0 failed / 0 skipped; official `scripts/build_and_test.sh` re-run green.
+- Offscreen smoke SMOKE_EXIT=124.
+
+## Next Objective (Phase 3, Objective 5) — NOT STARTED
+
+Application-level player lifecycle orchestration: have `Application` own/create/replace/dispose the media source, frame pump, and player in step with the active-media contract, and define how an event-loop driver (not the `Player`) invokes `tick()`. Preserve the Objective 10 preview-time contract and keep the viewer presentation-only. UI playback controls, duration/ffprobe, audio, and timeline remain deferred. Requires its own scoped objective before implementation. Do not begin automatically.
+
 

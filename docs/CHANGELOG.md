@@ -520,3 +520,13 @@ Date: 2026-09-16
 - No continuous/paced playback, duration metadata/ffprobe, audio, timeline, or viewer playback wiring yet; the Objective 10 preview-time contract and original-media non-destructiveness are unchanged.
 - Full test suite: 144 passed, 0 failed, 0 skipped.
 
+## v0.2.37 — Phase 3 Player/Timing Subsystem Foundation
+
+Date: 2026-09-16
+
+- Introduced the deterministic player/timing foundation above the frame pump: `Player` (`Stopped`/`Playing`/`Paused`, `play`/`pause`/`stop`, `tick`/`stepOnce`, playhead and frame-presentation signals) plus a small `Playhead` position value.
+- Clock and pacing are replaceable abstractions (`Clock`/`SystemClock`, `PacingPolicy`/`DefaultPacingPolicy`) with injected dependencies, so playback behavior is deterministic and tested without wall-clock delays.
+- `FramePump` remains a passive, caller-driven decoder; no timer, thread, UI wiring, audio, duration/ffprobe, or timeline exists yet, and the Objective 10 preview-time contract is unchanged.
+- Full test suite: 154 passed, 0 failed, 0 skipped.
+
+

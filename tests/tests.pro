@@ -14,6 +14,10 @@ SOURCES += \
     ../app/media/FrameExtractor.cpp \
     ../app/media/FramePump.cpp \
     ../app/media/FrameSource.cpp \
+    ../app/playback/DefaultPacingPolicy.cpp \
+    ../app/playback/Playhead.cpp \
+    ../app/playback/Player.cpp \
+    ../app/playback/SystemClock.cpp \
     ../app/viewer/EquirectView.cpp \
     ../app/viewer/ViewerProjection.cpp \
     ../app/viewer/ViewerScene.cpp \
@@ -29,6 +33,12 @@ HEADERS += \
     ../app/media/FrameExtractor.h \
     ../app/media/FramePump.h \
     ../app/media/FrameSource.h \
+    ../app/playback/Clock.h \
+    ../app/playback/DefaultPacingPolicy.h \
+    ../app/playback/PacingPolicy.h \
+    ../app/playback/Playhead.h \
+    ../app/playback/Player.h \
+    ../app/playback/SystemClock.h \
     ../app/viewer/EquirectView.h \
     ../app/viewer/ViewerProjection.h \
     ../app/viewer/ViewerScene.h \

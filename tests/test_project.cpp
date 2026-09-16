@@ -28,6 +28,11 @@
 #include "media/FrameExtractor.h"
 #include "media/FramePump.h"
 #include "media/FrameSource.h"
+#include "playback/Clock.h"
+#include "playback/DefaultPacingPolicy.h"
+#include "playback/PacingPolicy.h"
+#include "playback/Playhead.h"
+#include "playback/Player.h"
 #include "ui/MainWindow.h"
 #include "ui/ViewerWidget.h"
 #include "viewer/EquirectView.h"
@@ -429,6 +434,56 @@ private:
     QString m_error;
 };
 
+// --- Phase 3 Objective 4: deterministic player/timing test doubles ---
+// ManualClock removes wall-clock dependence; RecordingPacingPolicy records the
+// pacing inputs and returns a caller-controlled frame count so player behavior
+// is verified without real-time delays.
+class ManualClock : public Clock
+{
+public:
+    qint64 nowMillis() const override { return m_now; }
+    void setMillis(qint64 now) { m_now = now; }
+    void advance(qint64 deltaMs) { m_now += deltaMs; }
+
+private:
+    qint64 m_now = 0;
+};
+
+class RecordingPacingPolicy : public PacingPolicy
+{
+public:
+    explicit RecordingPacingPolicy(int framesPerCall = 0)
+        : m_framesPerCall(framesPerCall)
+    {
+    }
+
+    int framesToAdvance(qint64 elapsedMs, qint64 frameIntervalMs) const override
+    {
+        m_lastElapsedMs = elapsedMs;
+        m_lastFrameIntervalMs = frameIntervalMs;
+        ++m_calls;
+        return m_framesPerCall;
+    }
+
+    void setFramesPerCall(int frames) { m_framesPerCall = frames; }
+    qint64 lastElapsedMs() const { return m_lastElapsedMs; }
+    qint64 lastFrameIntervalMs() const { return m_lastFrameIntervalMs; }
+    int calls() const { return m_calls; }
+
+private:
+    int m_framesPerCall = 0;
+    mutable qint64 m_lastElapsedMs = 0;
+    mutable qint64 m_lastFrameIntervalMs = 0;
+    mutable int m_calls = 0;
+};
+
+QImage playerTestFrame(int index)
+{
+    QImage image(4, 3, QImage::Format_RGB32);
+    image.fill(QColor((index * 37) % 256, (index * 53) % 256, (index * 71) % 256));
+    return image;
+}
+
 } // namespace
 
 class TestMainWindow : public MainWindow
@@ -590,6 +645,16 @@ private slots:
     void fmpegFrameSourceStreamsFramesInOrder();
     void fmpegFrameSourceValidatesAndRestartsCleanly();
     void framePumpStreamsFfmpegSourceToEnd();
+    void playheadTracksFrameCountIndexAndPosition();
+    void playerInitialStateAndDefaults();
+    void playerPlayPauseStopTransitions();
+    void playerTickUsesInjectedClockAndPacingPolicy();
+    void playerDefaultPacingAdvancesOnFrameIntervals();
+    void playerStepOncePresentsExactlyOneFrame();
+    void playerReachesEndOfStreamDeterministically();
+    void playerReportsFramePumpErrors();
+    void playerHandlesInvalidConfigurationAndBoundaries();
+    void playerTickIsRepeatableWithoutWallClockDelays();
 };
 
 void ProjectTest::initTestCase()
@@ -597,6 +662,7 @@ void ProjectTest::initTestCase()
     qRegisterMetaType<Project>("Project");
     qRegisterMetaType<MediaItem>("MediaItem");
     qRegisterMetaType<QList<MediaItem>>("QList<MediaItem>");
+    qRegisterMetaType<Player::State>("Player::State");
 }
 
 void ProjectTest::newProjectHasValidDefaults()
@@ -4613,6 +4679,414 @@ void ProjectTest::framePumpStreamsFfmpegSourceToEnd()
 
     source.close();
     QVERIFY(!source.isOpen());
+}
+
+// --- Phase 3 Objective 4: player/timing subsystem foundation ---
+
+void ProjectTest::playheadTracksFrameCountIndexAndPosition()
+{
+    Playhead playhead;
+    QCOMPARE(playhead.frameCount(), qint64(0));
+    QCOMPARE(playhead.currentFrameIndex(), qint64(-1));
+    QCOMPARE(playhead.positionMs(40), qint64(0));
+
+    playhead.advance();
+    QCOMPARE(playhead.frameCount(), qint64(1));
+    QCOMPARE(playhead.currentFrameIndex(), qint64(0));
+    QCOMPARE(playhead.positionMs(40), qint64(0));
+
+    playhead.advance();
+    playhead.advance();
+    QCOMPARE(playhead.frameCount(), qint64(3));
+    QCOMPARE(playhead.currentFrameIndex(), qint64(2));
+    QCOMPARE(playhead.positionMs(40), qint64(80));
+
+    // Invalid intervals never produce a negative or undefined position.
+    QCOMPARE(playhead.positionMs(0), qint64(0));
+    QCOMPARE(playhead.positionMs(-5), qint64(0));
+
+    playhead.reset();
+    QCOMPARE(playhead.frameCount(), qint64(0));
+    QCOMPARE(playhead.currentFrameIndex(), qint64(-1));
+    QCOMPARE(playhead.positionMs(40), qint64(0));
+}
+
+void ProjectTest::playerInitialStateAndDefaults()
+{
+    FakeFrameSource source;
+    FramePump pump;
+    pump.setSource(&source);
+    ManualClock clock;
+    RecordingPacingPolicy pacing;
+
+    Player player(&pump, &clock, &pacing);
+    QVERIFY(player.isStopped());
+    QVERIFY(!player.isPlaying());
+    QVERIFY(!player.isPaused());
+    QVERIFY(player.state() == Player::State::Stopped);
+    QCOMPARE(player.frameCount(), qint64(0));
+    QCOMPARE(player.currentFrameIndex(), qint64(-1));
+    QCOMPARE(player.positionMs(), qint64(0));
+    QCOMPARE(player.frameIntervalMs(), qint64(40));
+    QVERIFY(player.framePump() == &pump);
+    QVERIFY(player.clock() == static_cast<Clock *>(&clock));
+    QVERIFY(player.pacingPolicy() == static_cast<PacingPolicy *>(&pacing));
+
+    // Constructing a player emits nothing.
+    int signalCount = 0;
+    QObject::connect(&player, &Player::stateChanged,
+                     [&signalCount](Player::State) { ++signalCount; });
+    QObject::connect(&player, &Player::positionChanged,
+                     [&signalCount](qint64, qint64) { ++signalCount; });
+    QObject::connect(&player, &Player::framePresented,
+                     [&signalCount](const QImage &, qint64, qint64) { ++signalCount; });
+    QCOMPARE(signalCount, 0);
+
+    // The convenience constructor owns usable clock/pacing defaults and can be
+    // driven deterministically through stepOnce().
+    FakeFrameSource defaultSource;
+    defaultSource.appendFrame(playerTestFrame(0));
+    FramePump defaultPump;
+    defaultPump.setSource(&defaultSource);
+    Player defaultPlayer(&defaultPump);
+    QVERIFY(defaultPlayer.clock() != nullptr);
+    QVERIFY(defaultPlayer.pacingPolicy() != nullptr);
+    QCOMPARE(defaultPlayer.frameIntervalMs(), qint64(40));
+    QVERIFY(defaultPlayer.stepOnce());
+    QCOMPARE(defaultPlayer.frameCount(), qint64(1));
+}
+
+void ProjectTest::playerPlayPauseStopTransitions()
+{
+    FakeFrameSource source;
+    source.appendFrame(playerTestFrame(0));
+    FramePump pump;
+    pump.setSource(&source);
+    ManualClock clock;
+    RecordingPacingPolicy pacing(0);
+
+    Player player(&pump, &clock, &pacing);
+    QList<Player::State> states;
+    QObject::connect(&player, &Player::stateChanged,
+                     [&states](Player::State state) { states.append(state); });
+
+    player.play();
+    QVERIFY(player.isPlaying());
+    player.play(); // idempotent
+    QCOMPARE(states.size(), 1);
+    QVERIFY(states.at(0) == Player::State::Playing);
+
+    player.pause();
+    QVERIFY(player.isPaused());
+    player.pause(); // idempotent
+    QCOMPARE(states.size(), 2);
+    QVERIFY(states.at(1) == Player::State::Paused);
+
+    player.play();
+    QVERIFY(player.isPlaying());
+    QCOMPARE(states.size(), 3);
+    QVERIFY(states.at(2) == Player::State::Playing);
+
+    player.stop();
+    QVERIFY(player.isStopped());
+    QCOMPARE(states.size(), 4);
+    QVERIFY(states.at(3) == Player::State::Stopped);
+
+    // stop() while already stopped and pause() while stopped are no-ops.
+    player.stop();
+    player.pause();
+    QVERIFY(player.isStopped());
+    QCOMPARE(states.size(), 4);
+}
+
+void ProjectTest::playerTickUsesInjectedClockAndPacingPolicy()
+{
+    FakeFrameSource source;
+    for (int i = 0; i < 6; ++i) {
+        source.appendFrame(playerTestFrame(i));
+    }
+    FramePump pump;
+    pump.setSource(&source);
+    ManualClock clock;
+    RecordingPacingPolicy pacing(0);
+
+    Player player(&pump, &clock, &pacing);
+    QVERIFY(player.setFrameIntervalMs(50));
+
+    // tick() is a no-op unless Playing and never consults pacing then.
+    QCOMPARE(player.tick(), 0);
+    QCOMPARE(pacing.calls(), 0);
+    QCOMPARE(player.frameCount(), qint64(0));
+
+    player.play(); // records lastPacing at clock.nowMillis() == 0
+    clock.setMillis(1000);
+
+    pacing.setFramesPerCall(3);
+    QCOMPARE(player.tick(), 3);
+    QCOMPARE(pacing.calls(), 1);
+    QCOMPARE(pacing.lastElapsedMs(), qint64(1000));
+    QCOMPARE(pacing.lastFrameIntervalMs(), qint64(50));
+    QCOMPARE(player.frameCount(), qint64(3));
+    QCOMPARE(player.currentFrameIndex(), qint64(2));
+    QCOMPARE(player.positionMs(), qint64(100));
+
+    // A policy that reports no work advances nothing.
+    pacing.setFramesPerCall(0);
+    QCOMPARE(player.tick(), 0);
+    QCOMPARE(player.frameCount(), qint64(3));
+
+    // Replacing the policy takes effect immediately.
+    pacing.setFramesPerCall(2);
+    QCOMPARE(player.tick(), 2);
+    QCOMPARE(player.frameCount(), qint64(5));
+    QCOMPARE(player.positionMs(), qint64(200));
+
+    // Pausing stops tick() advancement entirely.
+    player.pause();
+    clock.advance(10000);
+    pacing.setFramesPerCall(50);
+    QCOMPARE(player.tick(), 0);
+    QCOMPARE(player.frameCount(), qint64(5));
+
+    // Resuming continues from the retained playhead and drains the remainder.
+    int ended = 0;
+    QObject::connect(&player, &Player::playbackEnded, [&ended]() { ++ended; });
+    player.play();
+    clock.advance(100);
+    QCOMPARE(player.tick(), 1);
+    QCOMPARE(player.frameCount(), qint64(6));
+    QVERIFY(player.isStopped());
+    QCOMPARE(ended, 1);
+}
+
+void ProjectTest::playerDefaultPacingAdvancesOnFrameIntervals()
+{
+    FakeFrameSource source;
+    for (int i = 0; i < 5; ++i) {
+        source.appendFrame(playerTestFrame(i));
+    }
+    FramePump pump;
+    pump.setSource(&source);
+    ManualClock clock;
+    DefaultPacingPolicy pacing;
+
+    Player player(&pump, &clock, &pacing);
+    QVERIFY(player.setFrameIntervalMs(40));
+    player.play(); // lastPacing at 0
+
+    QCOMPARE(player.tick(), 0); // elapsed 0
+
+    clock.advance(39);
+    QCOMPARE(player.tick(), 0); // not yet a full interval
+    QCOMPARE(player.frameCount(), qint64(0));
+
+    clock.advance(1); // now 40: exactly one interval
+    QCOMPARE(player.tick(), 1);
+    QCOMPARE(player.frameCount(), qint64(1));
+    QCOMPARE(player.positionMs(), qint64(0));
+
+    clock.advance(120); // now 160: 120 ms accrued == 3 intervals
+    QCOMPARE(player.tick(), 3);
+    QCOMPARE(player.frameCount(), qint64(4));
+    QCOMPARE(player.positionMs(), qint64(120));
+
+    // A tick with no accrued interval presents nothing.
+    QCOMPARE(player.tick(), 0);
+    QCOMPARE(player.frameCount(), qint64(4));
+
+    // A non-monotonic clock is clamped, never a negative burst.
+    clock.setMillis(0);
+    QCOMPARE(player.tick(), 0);
+    QCOMPARE(player.frameCount(), qint64(4));
+}
+
+void ProjectTest::playerStepOncePresentsExactlyOneFrame()
+{
+    FakeFrameSource source;
+    for (int i = 0; i < 2; ++i) {
+        source.appendFrame(playerTestFrame(i));
+    }
+    FramePump pump;
+    pump.setSource(&source);
+    ManualClock clock;
+    RecordingPacingPolicy pacing(7); // pacing must be irrelevant to stepOnce
+
+    Player player(&pump, &clock, &pacing);
+    QList<QImage> presented;
+    int positions = 0;
+    int ended = 0;
+    QObject::connect(&player, &Player::framePresented,
+                     [&presented](const QImage &image, qint64, qint64) {
+                         presented.append(image);
+                     });
+    QObject::connect(&player, &Player::positionChanged,
+                     [&positions](qint64, qint64) { ++positions; });
+    QObject::connect(&player, &Player::playbackEnded, [&ended]() { ++ended; });
+
+    // Stepping is independent of state, clock, and pacing.
+    QVERIFY(player.isStopped());
+    QVERIFY(player.stepOnce());
+    QCOMPARE(player.frameCount(), qint64(1));
+    QCOMPARE(player.currentFrameIndex(), qint64(0));
+    QCOMPARE(pacing.calls(), 0);
+
+    QVERIFY(player.stepOnce());
+    QCOMPARE(player.frameCount(), qint64(2));
+    QCOMPARE(static_cast<int>(presented.size()), 2);
+    QVERIFY(imagesIdentical(presented.at(0), playerTestFrame(0)));
+    QVERIFY(imagesIdentical(presented.at(1), playerTestFrame(1)));
+    QCOMPARE(positions, 2);
+
+    // The third step hits end-of-stream: no frame, but it is reported.
+    QVERIFY(!player.stepOnce());
+    QCOMPARE(player.frameCount(), qint64(2));
+    QCOMPARE(ended, 1);
+    QCOMPARE(static_cast<int>(presented.size()), 2);
+}
+
+void ProjectTest::playerReachesEndOfStreamDeterministically()
+{
+    FakeFrameSource source;
+    for (int i = 0; i < 3; ++i) {
+        source.appendFrame(playerTestFrame(i));
+    }
+    FramePump pump;
+    pump.setSource(&source);
+    ManualClock clock;
+    RecordingPacingPolicy pacing(10);
+
+    Player player(&pump, &clock, &pacing);
+    int ended = 0;
+    QObject::connect(&player, &Player::playbackEnded, [&ended]() { ++ended; });
+
+    player.play();
+    clock.advance(1000);
+
+    // The pacing policy asks for more frames than exist; the player presents
+    // all three, then reports end-of-stream and stops within one tick.
+    QCOMPARE(player.tick(), 3);
+    QCOMPARE(player.frameCount(), qint64(3));
+    QVERIFY(player.isStopped());
+    QCOMPARE(ended, 1);
+
+    // Further ticks are no-ops while stopped.
+    QCOMPARE(player.tick(), 0);
+    QCOMPARE(ended, 1);
+
+    // Playing again immediately re-reports the already-exhausted stream.
+    player.play();
+    QVERIFY(player.isPlaying());
+    QCOMPARE(player.tick(), 0);
+    QVERIFY(player.isStopped());
+    QCOMPARE(ended, 2);
+}
+
+void ProjectTest::playerReportsFramePumpErrors()
+{
+    FakeFrameSource source;
+    source.setMode(FakeFrameSource::Mode::Error);
+    source.setErrorText(QStringLiteral("synthetic player decode failure"));
+    FramePump pump;
+    pump.setSource(&source);
+    ManualClock clock;
+    RecordingPacingPolicy pacing(1);
+
+    Player player(&pump, &clock, &pacing);
+    int errors = 0;
+    QString message;
+    QObject::connect(&player, &Player::errorOccurred,
+                     [&errors, &message](const QString &text) {
+                         ++errors;
+                         message = text;
+                     });
+
+    player.play();
+    clock.advance(100);
+    QCOMPARE(player.tick(), 0);
+    QCOMPARE(errors, 1);
+    QCOMPARE(message, QStringLiteral("synthetic player decode failure"));
+    QVERIFY(player.isStopped());
+}
+
+void ProjectTest::playerHandlesInvalidConfigurationAndBoundaries()
+{
+    ManualClock clock;
+    RecordingPacingPolicy pacing(1);
+
+    // A player without a pump cannot play and reports why.
+    Player noPump(nullptr, &clock, &pacing);
+    int errors = 0;
+    QObject::connect(&noPump, &Player::errorOccurred,
+                     [&errors](const QString &) { ++errors; });
+    noPump.play();
+    QVERIFY(noPump.isStopped());
+    QCOMPARE(errors, 1);
+    QCOMPARE(noPump.tick(), 0);
+    QVERIFY(!noPump.stepOnce());
+
+    FakeFrameSource source;
+    source.appendFrame(playerTestFrame(0));
+    FramePump pump;
+    pump.setSource(&source);
+    Player player(&pump, &clock, &pacing);
+
+    // Invalid frame intervals are rejected without changing the interval.
+    QVERIFY(!player.setFrameIntervalMs(0));
+    QVERIFY(!player.setFrameIntervalMs(-10));
+    QCOMPARE(player.frameIntervalMs(), qint64(40));
+    QVERIFY(player.setFrameIntervalMs(33));
+    QCOMPARE(player.frameIntervalMs(), qint64(33));
+
+    // A null pacing policy is ignored rather than replacing the current one.
+    PacingPolicy *before = player.pacingPolicy();
+    player.setPacingPolicy(nullptr);
+    QVERIFY(player.pacingPolicy() == before);
+}
+
+void ProjectTest::playerTickIsRepeatableWithoutWallClockDelays()
+{
+    const auto runSequence = [](int *framesOut, qint64 *positionOut, int *signalsOut) {
+        FakeFrameSource source;
+        for (int i = 0; i < 6; ++i) {
+            source.appendFrame(playerTestFrame(i));
+        }
+        FramePump pump;
+        pump.setSource(&source);
+        ManualClock clock;
+        DefaultPacingPolicy pacing;
+        Player player(&pump, &clock, &pacing);
+        player.setFrameIntervalMs(30);
+
+        int signalCount = 0;
+        QObject::connect(&player, &Player::framePresented,
+                         [&signalCount](const QImage &, qint64, qint64) { ++signalCount; });
+
+        player.play();
+        int total = 0;
+        for (int step = 0; step < 5; ++step) {
+            clock.advance(17);
+            total += player.tick();
+        }
+        *framesOut = total;
+        *positionOut = player.positionMs();
+        *signalsOut = signalCount;
+    };
+
+    int framesA = 0;
+    int framesB = 0;
+    int signalsA = 0;
+    int signalsB = 0;
+    qint64 positionA = 0;
+    qint64 positionB = 0;
+    runSequence(&framesA, &positionA, &signalsA);
+    runSequence(&framesB, &positionB, &signalsB);
+
+    QCOMPARE(framesA, framesB);
+    QCOMPARE(positionA, positionB);
+    QCOMPARE(signalsA, signalsB);
+    // 17 ms ticks at a 30 ms interval present exactly two frames over five ticks.
+    QCOMPARE(framesA, 2);
+    QCOMPARE(signalsA, 2);
 }
 
 QTEST_MAIN(ProjectTest)

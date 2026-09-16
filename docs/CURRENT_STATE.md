@@ -849,3 +849,23 @@ Verification:
 - Test build succeeded.
 - Automated tests: 144 passed, 0 failed, 0 skipped (139 prior + 5 seam/pump tests).
 - Official `scripts/build_and_test.sh` workflow re-run green.
+
+## Phase 3 Objective 4 — Player/Timing Subsystem Foundation — Complete
+
+Status: Complete (2026-09-16).
+
+- Introduced the player/timing subsystem (`app/playback/`) above the Objective 3 `FramePump`, preserving the architecture boundary decode seam → player/timing → Application → Viewer.
+- `Playhead` (`app/playback/Playhead.{h,cpp}`): deterministic current-position value (frame count, current frame index, presentation timestamp) derived from an explicit playback frame interval; it performs no pacing and reads no clock.
+- `Clock` (`app/playback/Clock.h`) abstraction + `SystemClock` (`app/playback/SystemClock.{h,cpp}`, monotonic `QElapsedTimer`). Tests inject a manual clock, so playback behavior is verified without wall-clock delays.
+- `PacingPolicy` (`app/playback/PacingPolicy.h`) abstraction + `DefaultPacingPolicy` (`app/playback/DefaultPacingPolicy.{h,cpp}`): maps elapsed time to a frame count (one frame per interval, dropping frames when behind). Pacing is replaceable and independently testable.
+- `Player` (`app/playback/Player.{h,cpp}`): a `Stopped`/`Playing`/`Paused` state machine with `play()`/`pause()`/`stop()`, playhead getters, `tick()` (clock/pacing-driven with bounded per-tick catch-up) and `stepOnce()` (explicit single frame), and `stateChanged`/`positionChanged`/`framePresented`/`playbackEnded`/`errorOccurred` signals. It reacts to `FramePump` `frameReady`/`streamEnded`/`streamFailed`.
+- `Player` has no timer, thread, UI, audio, duration metadata, or timeline; `FramePump` remains a passive, caller-driven decoder. The frame interval is a playback pacing parameter, not media metadata.
+- Objective 10 preview-time contract unchanged; no Application/UI wiring, schema, or dependency changes. New files are compiled into both the application and test builds.
+
+Verification:
+- Application build succeeded (clean rebuild).
+- Test build succeeded (clean rebuild).
+- Automated tests: 154 passed, 0 failed, 0 skipped (144 prior + 10 player/timing tests).
+- Offscreen launch smoke: event loop alive until timeout (SMOKE_EXIT=124).
+- Official `scripts/build_and_test.sh` workflow re-run green.
+

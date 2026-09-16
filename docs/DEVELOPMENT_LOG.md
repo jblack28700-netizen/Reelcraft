@@ -962,5 +962,38 @@ Introduce the replaceable decode/media-source seam and a deterministic frame pum
 - No continuous/paced playback, duration metadata/ffprobe, audio, timeline, or viewer playback wiring exists; `FrameExtractor` remains the single-frame preview/validation seam.
 - A production FFmpeg-library or QtMultimedia replacement remains deferred (Decision 017) and can implement `FrameSource` behind the same boundary.
 
+## 2026-09-16 — Phase 3 Objective 4: Player/Timing Subsystem Foundation
+
+### Objective
+
+Introduce the deterministic player/timing foundation above the Objective 3 `FramePump`: playhead/position, play/pause/stop state, deterministic advancement, and replaceable clock and pacing abstractions, without changing the Objective 10 contract and without UI wiring.
+
+### Work Completed
+
+- Added `Playhead` (`app/playback/Playhead.{h,cpp}`): frame count since reset, current frame index (-1 before any frame), and presentation timestamp derived from an explicit frame interval. Pure and clock-free.
+- Added the `Clock` abstraction (`app/playback/Clock.h`) and `SystemClock` (`app/playback/SystemClock.{h,cpp}`, monotonic `QElapsedTimer`). Tests inject a manual clock so no test depends on wall-clock timing.
+- Added the `PacingPolicy` abstraction (`app/playback/PacingPolicy.h`) and `DefaultPacingPolicy` (`app/playback/DefaultPacingPolicy.{h,cpp}`): elapsed-time-to-frame-count with catch-up frame dropping. Replaceable and independently testable.
+- Added `Player` (`app/playback/Player.{h,cpp}`): `Stopped`/`Playing`/`Paused` state machine with `play()`/`pause()`/`stop()`, playhead getters, `tick()` (clock/pacing-driven, bounded per-tick catch-up), `stepOnce()` (explicit single frame), and `stateChanged`/`positionChanged`/`framePresented`/`playbackEnded`/`errorOccurred` signals. It consumes the `FramePump` strictly through its existing `frameReady`/`streamEnded`/`streamFailed` signals.
+- Registered the subsystem in `reelcraft.pro` and `tests/tests.pro`.
+- Added 10 tests to `tests/test_project.cpp` covering playhead math, initial state/defaults, play/pause/stop transitions, injected clock/pacing behavior, default interval pacing, `stepOnce`, end-of-stream, pump error propagation, invalid configuration/boundaries (null pump, invalid interval, null policy, non-monotonic clock), and bit-for-bit repeatability without wall-clock delays.
+- `FramePump` behavior and Objective 3 tests are unchanged. No Application/UI wiring, timer, thread, audio, duration/ffprobe, timeline, schema, dependency, or Objective 10 changes.
+- No new DECISIONS entry: Decision 017 already fixes the player/timing boundary and explicitly lists the clock implementation and playback-rate/pacing implementation as implementation details, not decisions.
+
+### Verification
+
+- Clean application and test builds succeed.
+- Focused Objective 4 tests: 12 ran (10 new + init/cleanup), all passed in ~1 ms (no wall-clock dependence).
+- Full regression: 154 passed, 0 failed, 0 skipped.
+- Offscreen smoke: event loop alive until timeout (SMOKE_EXIT=124).
+- Official `scripts/build_and_test.sh`: builds succeed, 154/0/0.
+
+### Boundary Notes
+
+- The `Player` owns no timer and no thread; a future Application-level objective must supply the event-loop driver that calls `tick()` and will orchestrate source/pump/player lifecycle against the active-media contract.
+- `stop()` resets the playhead but does not rewind or reopen the underlying source; restarting a stream requires source/pump lifecycle management (deferred).
+- The playhead is frame-interval-based (a playback pacing parameter) rather than duration/timestamp-based; ffprobe duration metadata remains a future decision gate (Decision 017).
+- Build/verification again ran in the DSH x86_64 Ubuntu 24.04 agent container against Ubuntu `qt6-base-dev` 6.4.2; no dependency or environment change for this objective.
+
+
 
 
