@@ -200,3 +200,11 @@ Consequently, performance and graphical behavior must be validated on representa
 - Termux/Ubuntu: development environment only
 
 The current verified build/test workflow is Linux-only. Apple platform classification is a portability record only.
+
+## DSH Agent Verification Environment — 2026-09-16
+
+- Phase 3 implementation/verification (Objective 3 onward) was additionally built and tested inside the DeepSeek Harness agent container: x86_64 Ubuntu 24.04 (glibc), distinct from the Termux/proot primary development device.
+- Build/test toolchain used there: Ubuntu `qt6-base-dev` / `qt6-base-dev-tools` 6.4.2 (providing `/usr/lib/qt6/bin/qmake`), GCC 13.2.0, and the system `ffmpeg` CLI. The package was installed solely to make the existing `scripts/build_and_test.sh` workflow runnable for verification.
+- Verified result in that container: application and test builds succeed; full suite 144 passed / 0 failed / 0 skipped; offscreen smoke SMOKE_EXIT=124.
+- This is a verification environment, not a change to the primary development environment or to product dependencies; linked FFmpeg libraries and QtMultimedia remain deferred (Decision 017).
+

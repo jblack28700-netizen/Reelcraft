@@ -933,4 +933,34 @@ Validate the full Phase-2 review workflow end-to-end against deterministic FFmpe
 - Verification: probe tests pass; full regression 139 passed / 0 failed (136 prior + 3 new; 0 skipped); build success; offscreen smoke SMOKE_EXIT=124.
 - No dependency, ffprobe, schema, Obj-10 contract, FrameExtractor, or production changes; docs updated (NEXT_TASK/CURRENT_STATE/CHANGELOG v0.2.35); one Git checkpoint.
 
+## 2026-09-16 — Phase 3 Objective 3: Replaceable Media-Source Seam & Deterministic Frame Pump
+
+### Objective
+
+Introduce the replaceable decode/media-source seam and a deterministic frame pump over the persistent FFmpeg-subprocess stream, reusing the Objective 2 feasibility evidence, without changing the Objective 10 preview-time contract.
+
+### Work Completed
+
+- Added the abstract `FrameSource` seam (`app/media/FrameSource.{h,cpp}`): `readNextFrame(timeoutMs, &result, &image)` with `ReadResult` Ok/EndOfStream/Error/Timeout, plus `close()`, `isOpen()`, and `errorString()`. Opening is deliberately implementation-specific and not part of the abstract contract (rawvideo requires caller-supplied geometry).
+- Added `FfmpegFrameSource` (`app/media/FfmpegFrameSource.{h,cpp}`): persistent FFmpeg CLI subprocess streaming `rawvideo`/`rgb24`, scaled to caller-supplied geometry; deterministic failures for missing/non-positive geometry, missing/non-file paths, unavailable ffmpeg, non-zero exit, and timeout; `close()`/destructor always terminate then kill and reap the process.
+- Added `FramePump` (`app/media/FramePump.{h,cpp}`): a synchronous, caller-driven consumer. `advance()` requests exactly one frame and emits `frameReady` / `streamEnded` / `streamFailed`; no timer, clock, pacing, buffering policy, threading, or playback state.
+- Registered the three source/header pairs in both `reelcraft.pro` and `tests/tests.pro`.
+- Added 5 tests to `tests/test_project.cpp`: an in-memory `FrameSource` test double proving replaceability and every `ReadResult` branch with no ffmpeg; missing-source failure; ffmpeg streaming order/EOF with bounded waits; deterministic open validation, close, and reopen/restart; and an end-to-end pump-over-ffmpeg-subprocess stream to EOF.
+- No Application/UI, Objective 10, schema, dependency, or `FrameExtractor` changes. Decision 017 already governs the seam; the concrete interface, rawvideo transport, and pump mechanics remain implementation details per its "intentionally NOT decisions" list, so no new decision was recorded.
+
+### Verification
+
+- Focused Objective 3 tests: 7 ran (5 new + init/cleanup), all passed.
+- Full regression: 144 passed, 0 failed, 0 skipped.
+- Application build succeeded; test build succeeded.
+- Official `scripts/build_and_test.sh`: builds succeed, 144/0/0.
+- Offscreen smoke: event loop alive until timeout (SMOKE_EXIT=124).
+
+### Boundary Notes
+
+- Build/verification for this objective ran in the DSH x86_64 Ubuntu 24.04 agent container against Ubuntu `qt6-base-dev` 6.4.2 (installed for verification), not the Termux/proot primary development device; recorded in DEVELOPMENT_ENVIRONMENT.md.
+- No continuous/paced playback, duration metadata/ffprobe, audio, timeline, or viewer playback wiring exists; `FrameExtractor` remains the single-frame preview/validation seam.
+- A production FFmpeg-library or QtMultimedia replacement remains deferred (Decision 017) and can implement `FrameSource` behind the same boundary.
+
+
 

@@ -30,9 +30,9 @@ Status: **Complete — formally closed 2026-09-06 (closeout commit).**
 - Scope per Decision 016: import/manage/select media, deterministic single-frame preview, time stepping/seek, look-around orientation (keyboard + pointer), flat/equirectangular correctness, consistent viewer/project state. Continuous/paced playback, duration-aware transport, and audio are explicitly deferred.
 - Closeout was documentation-only (CURRENT_STATE, PROJECT_HISTORY, DEVELOPMENT_LOG, CHANGELOG v0.2.33); no production source/test/script/schema/dependency/architecture changes.
 
-## Phase 3 — Media Engine (OPEN — opening architecture recorded; implementation NOT authorized)
+## Phase 3 — Media Engine (OPEN — decode/media-source foundation underway)
 
-Status: **Open (decisions recorded 2026-09-06, Decision 017). No media-engine/playback/duration/audio implementation exists.**
+Status: **Open (opening architecture recorded 2026-09-06, Decision 017; decode/media-source foundation implemented 2026-09-16). No continuous playback, duration metadata, or audio implementation exists.**
 
 - Phase 3 opening architecture (approved): persistent FFmpeg streaming subprocess behind a replaceable media/player seam — the currently feasible implementation path in this environment.
 - FrameExtractor remains the deterministic single-frame preview/validation seam (not the permanent engine).
@@ -62,6 +62,28 @@ Prove, with temporary test-only probe helpers (no production changes), that a pe
 
 - Focused probe tests pass; full regression 139/0/0; build success; offscreen smoke SMOKE_EXIT=124.
 
-## Next Objective (Phase 3, Objective 3) — NOT STARTED
+## Phase 3, Objective 3 — Replaceable Media-Source Seam & Deterministic Frame Pump — Complete
 
-Media-engine foundation: introduce the replaceable player/media-source seam and a deterministic frame pump over the persistent-subprocess stream (reusing probe evidence), without changing the Objective 10 contract. Do not begin automatically.
+Status: **Complete — implemented and verified (2026-09-16; automated suite 144 passed, 0 failed).**
+
+### Objective
+
+Introduce the replaceable decode/media-source seam and a deterministic frame pump over the persistent-subprocess stream, reusing Objective 2 evidence, without changing the Objective 10 preview-time contract.
+
+### Scope (implemented)
+
+- `FrameSource` abstract seam (Ok/EndOfStream/Error/Timeout, bounded reads; opening excluded because it is implementation-specific).
+- `FfmpegFrameSource` persistent FFmpeg-subprocess implementation (rawvideo/rgb24, caller-supplied geometry, deterministic open/close/error behavior, guaranteed process cleanup).
+- `FramePump` synchronous, caller-driven consumer emitting `frameReady`/`streamEnded`/`streamFailed`; no timer, clock, pacing, or worker thread.
+- Compiled into the application build and the test build; no Application/UI/Objective-10/schema/dependency changes; `FrameExtractor` unchanged.
+
+### Verification
+
+- Focused seam/pump tests pass, including an in-memory replaceable-source double that exercises every `ReadResult` branch with no FFmpeg subprocess.
+- Full regression 144 passed / 0 failed / 0 skipped; official `scripts/build_and_test.sh` re-run green.
+- Offscreen smoke SMOKE_EXIT=124.
+
+## Next Objective (Phase 3, Objective 4) — NOT STARTED
+
+Player/timing subsystem foundation: introduce the deterministic playhead/playback-state layer above the frame pump, defining its state, clock, and pacing boundaries while preserving the Objective 10 contract and without wiring UI playback. Requires its own scoped objective before implementation. Do not begin automatically.
+

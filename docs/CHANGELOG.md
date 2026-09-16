@@ -510,3 +510,13 @@ Date: 2026-09-06
 - Informational measurement: ~39.9 frames/s unthrottled rawvideo delivery at 160x80, ~1.0 ms inter-frame latency (not a performance gate).
 - Full test suite: 139 passed, 0 failed.
 - No media-engine/playback/duration/audio implementation, dependencies, ffprobe, or Obj-10 contract changes.
+
+## v0.2.36 — Phase 3 Media-Engine Foundation: Replaceable Media Source & Frame Pump
+
+Date: 2026-09-16
+
+- Introduced the replaceable decode/media-source seam (`FrameSource`) and its persistent FFmpeg-subprocess implementation (`FfmpegFrameSource`), plus a deterministic, caller-driven `FramePump` over that stream.
+- The seam is transport-agnostic and replaceable; a future linked-FFmpeg or QtMultimedia backend can implement it without changing consumers. `FrameExtractor` remains the single-frame preview seam.
+- No continuous/paced playback, duration metadata/ffprobe, audio, timeline, or viewer playback wiring yet; the Objective 10 preview-time contract and original-media non-destructiveness are unchanged.
+- Full test suite: 144 passed, 0 failed, 0 skipped.
+

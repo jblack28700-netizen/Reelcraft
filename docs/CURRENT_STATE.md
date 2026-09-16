@@ -831,3 +831,21 @@ Verification:
 - Offscreen launch smoke: event loop alive until timeout (SMOKE_EXIT=124).
 - Test build succeeded.
 - Automated tests: 139 passed, 0 failed (136 prior + 3 probe tests; 0 skipped).
+
+## Phase 3 Objective 3 — Replaceable Media-Source Seam & Deterministic Frame Pump — Complete
+
+Status: Complete (2026-09-16).
+
+- Introduced the replaceable decode/media-source seam `FrameSource` (`app/media/FrameSource.h`): a transport-agnostic abstraction that delivers decoded frames as `QImage` values and reports a distinct `ReadResult` (Ok / EndOfStream / Error / Timeout) with bounded waits. Opening is implementation-specific and deliberately excluded from the abstract contract.
+- Introduced `FfmpegFrameSource` (`app/media/FfmpegFrameSource.{h,cpp}`): the persistent-subprocess implementation proven in Objective 2. It streams `rawvideo`/`rgb24` frames from the FFmpeg CLI, scales to caller-supplied geometry (ffprobe geometry discovery remains deferred), fails deterministically on missing/zero geometry, missing files, or a failed process, and guarantees process cleanup on `close()`.
+- Introduced `FramePump` (`app/media/FramePump.{h,cpp}`): a small deterministic consumer. One explicit `advance()` requests exactly one frame and emits `frameReady` / `streamEnded` / `streamFailed`; it has no timer, no playback clock, no pacing/rate policy, and no worker thread. Callers drive it.
+- The seam is replaceable and directly testable: tests drive `FramePump` from an in-memory `FrameSource` test double with no FFmpeg subprocess, proving every `ReadResult` branch deterministically.
+- Objective 10 preview-time contract unchanged; no Application/UI playback behavior, no continuous/paced playback, no duration metadata, no audio, and no schema/dependency changes. `FrameExtractor` remains the single-frame preview/validation seam.
+- New source files are compiled into the production application build (`reelcraft.pro`) and the test build (`tests/tests.pro`).
+
+Verification:
+- Application build succeeded.
+- Offscreen launch smoke: event loop alive until timeout (SMOKE_EXIT=124).
+- Test build succeeded.
+- Automated tests: 144 passed, 0 failed, 0 skipped (139 prior + 5 seam/pump tests).
+- Official `scripts/build_and_test.sh` workflow re-run green.

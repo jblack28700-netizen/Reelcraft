@@ -10,7 +10,10 @@ SOURCES += \
     ../app/core/MediaItem.cpp \
     ../app/core/Project.cpp \
     ../app/application/Application.cpp \
+    ../app/media/FfmpegFrameSource.cpp \
     ../app/media/FrameExtractor.cpp \
+    ../app/media/FramePump.cpp \
+    ../app/media/FrameSource.cpp \
     ../app/viewer/EquirectView.cpp \
     ../app/viewer/ViewerProjection.cpp \
     ../app/viewer/ViewerScene.cpp \
@@ -22,7 +25,10 @@ HEADERS += \
     ../app/core/MediaItem.h \
     ../app/core/Project.h \
     ../app/application/Application.h \
+    ../app/media/FfmpegFrameSource.h \
     ../app/media/FrameExtractor.h \
+    ../app/media/FramePump.h \
+    ../app/media/FrameSource.h \
     ../app/viewer/EquirectView.h \
     ../app/viewer/ViewerProjection.h \
     ../app/viewer/ViewerScene.h \

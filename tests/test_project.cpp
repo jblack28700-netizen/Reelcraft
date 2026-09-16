@@ -24,7 +24,10 @@
 #include "application/Application.h"
 #include "core/MediaItem.h"
 #include "core/Project.h"
+#include "media/FfmpegFrameSource.h"
 #include "media/FrameExtractor.h"
+#include "media/FramePump.h"
+#include "media/FrameSource.h"
 #include "ui/MainWindow.h"
 #include "ui/ViewerWidget.h"
 #include "viewer/EquirectView.h"
@@ -365,6 +368,67 @@ bool classifyFrameColor(const QImage &frame, int expectedIndex)
     }
 }
 
+// --- Phase 3 Objective 3: replaceable media-source test double (tests only) ---
+// A deterministic in-memory FrameSource implementation. It proves the seam is
+// genuinely replaceable: FramePump is driven exactly through the abstract
+// contract with no ffmpeg subprocess, media file, or timing dependency, and
+// every ReadResult branch can be produced on demand.
+class FakeFrameSource : public FrameSource
+{
+public:
+    enum class Mode { Frames, Error, Timeout };
+
+    void appendFrame(const QImage &frame) { m_frames.append(frame); }
+    void setMode(Mode mode) { m_mode = mode; }
+    void setErrorText(const QString &text) { m_error = text; }
+    int closeCount() const { return m_closeCount; }
+
+    bool readNextFrame(int, ReadResult *result, QImage *outFrame) override
+    {
+        if (m_mode == Mode::Error) {
+            if (result) {
+                *result = ReadResult::Error;
+            }
+            return false;
+        }
+        if (m_mode == Mode::Timeout) {
+            if (result) {
+                *result = ReadResult::Timeout;
+            }
+            return false;
+        }
+        if (m_index >= m_frames.size()) {
+            if (result) {
+                *result = ReadResult::EndOfStream;
+            }
+            return false;
+        }
+        if (outFrame) {
+            *outFrame = m_frames.at(m_index);
+        }
+        ++m_index;
+        if (result) {
+            *result = ReadResult::Ok;
+        }
+        return true;
+    }
+    void close() override
+    {
+        ++m_closeCount;
+        m_open = false;
+    }
+    bool isOpen() const override { return m_open; }
+    QString errorString() const override { return m_error; }
+
+private:
+    QList<QImage> m_frames;
+    int m_index = 0;
+    int m_closeCount = 0;
+    bool m_open = true;
+    Mode m_mode = Mode::Frames;
+    QString m_error;
+};
+
 } // namespace
 
 class TestMainWindow : public MainWindow
@@ -521,6 +585,11 @@ private slots:
     void persistentStreamProbeDeliversFramesInOrder();
     void persistentStreamProbeErrorOnMissingFile();
     void persistentStreamProbeKillAndRestartLifecycle();
+    void framePumpDeliversFramesAndEndFromReplaceableSource();
+    void framePumpHandlesErrorTimeoutAndMissingSource();
+    void fmpegFrameSourceStreamsFramesInOrder();
+    void fmpegFrameSourceValidatesAndRestartsCleanly();
+    void framePumpStreamsFfmpegSourceToEnd();
 };
 
 void ProjectTest::initTestCase()
@@ -4302,6 +4371,248 @@ void ProjectTest::persistentStreamProbeKillAndRestartLifecycle()
         second.waitForFinished(3000);
     }
     QVERIFY(second.state() == QProcess::NotRunning);
+}
+
+// --- Phase 3 Objective 3: replaceable media-source seam + deterministic frame pump ---
+
+void ProjectTest::framePumpDeliversFramesAndEndFromReplaceableSource()
+{
+    // Replaceable-seam proof: an in-memory FrameSource drives FramePump with no
+    // ffmpeg subprocess, media file, or timing dependency.
+    FakeFrameSource source;
+    QImage red(4, 3, QImage::Format_RGB32);
+    red.fill(QColor(230, 0, 0));
+    QImage green(4, 3, QImage::Format_RGB32);
+    green.fill(QColor(0, 230, 0));
+    source.appendFrame(red);
+    source.appendFrame(green);
+
+    FramePump pump;
+    pump.setSource(&source);
+    QVERIFY(pump.source() == static_cast<FrameSource *>(&source));
+
+    QList<QImage> received;
+    int ended = 0;
+    int failed = 0;
+    QObject::connect(&pump, &FramePump::frameReady,
+                     [&received](const QImage &image) { received.append(image); });
+    QObject::connect(&pump, &FramePump::streamEnded, [&ended]() { ++ended; });
+    QObject::connect(&pump, &FramePump::streamFailed,
+                     [&failed](const QString &) { ++failed; });
+
+    FrameSource::ReadResult result = FrameSource::ReadResult::Error;
+    QVERIFY(pump.advance(1000, &result));
+    QVERIFY(result == FrameSource::ReadResult::Ok);
+    QVERIFY(pump.advance(1000, &result));
+    QVERIFY(result == FrameSource::ReadResult::Ok);
+    QCOMPARE(static_cast<int>(received.size()), 2);
+    QVERIFY(imagesIdentical(received.at(0), red));
+    QVERIFY(imagesIdentical(received.at(1), green));
+
+    // End of a finite source is reported exactly once and delivers no frame.
+    QVERIFY(!pump.advance(1000, &result));
+    QVERIFY(result == FrameSource::ReadResult::EndOfStream);
+    QCOMPARE(ended, 1);
+    QCOMPARE(failed, 0);
+    QCOMPARE(static_cast<int>(received.size()), 2);
+}
+
+void ProjectTest::framePumpHandlesErrorTimeoutAndMissingSource()
+{
+    // Error branch: the source error text is relayed through streamFailed.
+    FakeFrameSource errorSource;
+    errorSource.setMode(FakeFrameSource::Mode::Error);
+    errorSource.setErrorText(QStringLiteral("synthetic decode failure"));
+    FramePump errorPump;
+    errorPump.setSource(&errorSource);
+    int errorFailures = 0;
+    QString failureMessage;
+    QObject::connect(&errorPump, &FramePump::streamFailed,
+                     [&errorFailures, &failureMessage](const QString &text) {
+                         ++errorFailures;
+                         failureMessage = text;
+                     });
+    FrameSource::ReadResult result = FrameSource::ReadResult::Ok;
+    QVERIFY(!errorPump.advance(1000, &result));
+    QVERIFY(result == FrameSource::ReadResult::Error);
+    QCOMPARE(errorFailures, 1);
+    QCOMPARE(failureMessage, QStringLiteral("synthetic decode failure"));
+
+    // Timeout branch: no signal is emitted; the caller may advance again.
+    FakeFrameSource timeoutSource;
+    timeoutSource.setMode(FakeFrameSource::Mode::Timeout);
+    FramePump timeoutPump;
+    timeoutPump.setSource(&timeoutSource);
+    int timeoutSignals = 0;
+    QObject::connect(&timeoutPump, &FramePump::frameReady,
+                     [&timeoutSignals](const QImage &) { ++timeoutSignals; });
+    QObject::connect(&timeoutPump, &FramePump::streamEnded,
+                     [&timeoutSignals]() { ++timeoutSignals; });
+    QObject::connect(&timeoutPump, &FramePump::streamFailed,
+                     [&timeoutSignals](const QString &) { ++timeoutSignals; });
+    QVERIFY(!timeoutPump.advance(1000, &result));
+    QVERIFY(result == FrameSource::ReadResult::Timeout);
+    QCOMPARE(timeoutSignals, 0);
+
+    // Missing source: deterministic failure, never a crash or a frame.
+    FramePump emptyPump;
+    int emptySignals = 0;
+    QString emptyMessage;
+    QObject::connect(&emptyPump, &FramePump::streamFailed,
+                     [&emptySignals, &emptyMessage](const QString &text) {
+                         ++emptySignals;
+                         emptyMessage = text;
+                     });
+    QVERIFY(!emptyPump.advance(1000, &result));
+    QVERIFY(result == FrameSource::ReadResult::Error);
+    QCOMPARE(emptySignals, 1);
+    QVERIFY(!emptyMessage.isEmpty());
+}
+
+void ProjectTest::fmpegFrameSourceStreamsFramesInOrder()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg not available; skipping decode-dependent test.");
+    }
+
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    QString videoPath;
+    constexpr int kFrames = 25;
+    constexpr int kWidth = 160;
+    constexpr int kHeight = 80;
+    QVERIFY(createStreamProbeVideo(tempDir.path(),
+                                   FrameExtractor::defaultExecutablePath(),
+                                   kFrames, 5, &videoPath));
+
+    FfmpegFrameSource source;
+    QVERIFY2(source.open(videoPath, kWidth, kHeight),
+             qPrintable(source.errorString()));
+    QVERIFY(source.isOpen());
+    QVERIFY(source.errorString().isEmpty());
+
+    for (int i = 0; i < kFrames; ++i) {
+        FrameSource::ReadResult result = FrameSource::ReadResult::Error;
+        QImage frame;
+        QVERIFY2(source.readNextFrame(30000, &result, &frame),
+                 qPrintable(QStringLiteral("frame %1 failed: %2")
+                                .arg(i).arg(source.errorString())));
+        QVERIFY(result == FrameSource::ReadResult::Ok);
+        QCOMPARE(frame.size(), QSize(kWidth, kHeight));
+        QVERIFY2(classifyFrameColor(frame, i),
+                 qPrintable(QStringLiteral("frame %1 color mismatch").arg(i)));
+    }
+
+    // The stream reaches end-of-stream deterministically after the last frame.
+    FrameSource::ReadResult endResult = FrameSource::ReadResult::Error;
+    QImage extra;
+    QVERIFY(!source.readNextFrame(30000, &endResult, &extra));
+    QVERIFY(endResult == FrameSource::ReadResult::EndOfStream);
+    QVERIFY(source.errorString().isEmpty());
+
+    source.close();
+    QVERIFY(!source.isOpen());
+}
+
+void ProjectTest::fmpegFrameSourceValidatesAndRestartsCleanly()
+{
+    FfmpegFrameSource source;
+    FrameSource::ReadResult result = FrameSource::ReadResult::Error;
+    QImage frame;
+
+    // Rawvideo carries no geometry metadata and ffprobe discovery is deferred,
+    // so opening without explicit geometry must fail deterministically.
+    QVERIFY(!source.open(QStringLiteral("/nonexistent/clip.mp4"), 0, 0));
+    QVERIFY(!source.isOpen());
+    QVERIFY(!source.errorString().isEmpty());
+    QVERIFY(!source.readNextFrame(100, &result, &frame));
+    QVERIFY(result == FrameSource::ReadResult::Error);
+
+    // Missing file with valid geometry also fails deterministically.
+    QVERIFY(!source.open(QStringLiteral("/nonexistent/clip.mp4"), 160, 80));
+    QVERIFY(!source.isOpen());
+    QVERIFY(source.errorString().contains(QStringLiteral("does not exist")));
+
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg not available; skipping stream restart portion.");
+    }
+
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    QString videoPath;
+    QVERIFY(createStreamProbeVideo(tempDir.path(),
+                                   FrameExtractor::defaultExecutablePath(),
+                                   6, 5, &videoPath));
+
+    QVERIFY2(source.open(videoPath, 160, 80), qPrintable(source.errorString()));
+    QVERIFY(source.readNextFrame(30000, &result, &frame));
+    QVERIFY(result == FrameSource::ReadResult::Ok);
+    QVERIFY(classifyFrameColor(frame, 0));
+
+    // close() releases the process and reading afterwards fails cleanly.
+    source.close();
+    QVERIFY(!source.isOpen());
+    QVERIFY(!source.readNextFrame(100, &result, &frame));
+    QVERIFY(result == FrameSource::ReadResult::Error);
+
+    // The same instance can be reopened and streams from the start again.
+    QVERIFY2(source.open(videoPath, 160, 80), qPrintable(source.errorString()));
+    QVERIFY(source.readNextFrame(30000, &result, &frame));
+    QVERIFY(result == FrameSource::ReadResult::Ok);
+    QVERIFY(classifyFrameColor(frame, 0));
+    source.close();
+    QVERIFY(!source.isOpen());
+}
+
+void ProjectTest::framePumpStreamsFfmpegSourceToEnd()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg not available; skipping decode-dependent test.");
+    }
+
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    QString videoPath;
+    constexpr int kFrames = 12;
+    QVERIFY(createStreamProbeVideo(tempDir.path(),
+                                   FrameExtractor::defaultExecutablePath(),
+                                   kFrames, 5, &videoPath));
+
+    FfmpegFrameSource source;
+    QVERIFY2(source.open(videoPath, 160, 80), qPrintable(source.errorString()));
+
+    FramePump pump;
+    pump.setSource(&source);
+
+    QList<QImage> frames;
+    int ended = 0;
+    int failed = 0;
+    QObject::connect(&pump, &FramePump::frameReady,
+                     [&frames](const QImage &image) { frames.append(image); });
+    QObject::connect(&pump, &FramePump::streamEnded, [&ended]() { ++ended; });
+    QObject::connect(&pump, &FramePump::streamFailed,
+                     [&failed](const QString &) { ++failed; });
+
+    FrameSource::ReadResult result = FrameSource::ReadResult::Error;
+    for (int i = 0; i < kFrames; ++i) {
+        QVERIFY2(pump.advance(30000, &result),
+                 qPrintable(QStringLiteral("pump advance %1 failed: %2")
+                                .arg(i).arg(source.errorString())));
+        QVERIFY(result == FrameSource::ReadResult::Ok);
+    }
+    QCOMPARE(static_cast<int>(frames.size()), kFrames);
+    for (int i = 0; i < kFrames; ++i) {
+        QVERIFY2(classifyFrameColor(frames.at(i), i),
+                 qPrintable(QStringLiteral("pumped frame %1 color mismatch").arg(i)));
+    }
+
+    QVERIFY(!pump.advance(30000, &result));
+    QVERIFY(result == FrameSource::ReadResult::EndOfStream);
+    QCOMPARE(ended, 1);
+    QCOMPARE(failed, 0);
+
+    source.close();
+    QVERIFY(!source.isOpen());
 }
 
 QTEST_MAIN(ProjectTest)
