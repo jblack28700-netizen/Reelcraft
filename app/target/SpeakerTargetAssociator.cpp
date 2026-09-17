@@ -102,6 +102,19 @@ bool SpeakerTargetAssociator::associate(const SpeakerInterval &interval,
         return true; // unassociated
     }
 
+    // 1b. Provider attribution hint (e.g. an audio-visual active-speaker
+    // model). Honoured only when the hinted target is actually visible; a hint
+    // for a non-visible target falls through and never invents a target.
+    if (!interval.targetIdHint.isEmpty()) {
+        for (const TargetTrack &track : candidates) {
+            if (track.id() == interval.targetIdHint) {
+                *outTargetId = track.id();
+                *outMethod = QStringLiteral("provider-hint");
+                return true;
+            }
+        }
+    }
+
     // 2. Spatial (direction of arrival), unique only.
     if (interval.hasAzimuth && std::isfinite(interval.azimuthDeg)) {
         double best = 1.0e9;

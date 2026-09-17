@@ -2,7 +2,7 @@
 
 ## Current Version
 
-0.2.43
+0.2.44
 
 ## Current Branch
 
@@ -10,7 +10,7 @@ main
 
 ## Current Stage
 
-Phase 4 — 360 Reframing Engine (deterministic vertical slice), Target/Subject Resolution, real detector integration, structured target identity/selection, optional appearance-based re-identification, and optional audio/speaker evidence implemented and verified. Phase 3 Media Engine remains open; its player-lifecycle objective is intentionally superseded for now by the human-approved 360 priority.
+Phase 4 — 360 Reframing Engine (deterministic vertical slice), Target/Subject Resolution, real detector integration, structured target identity/selection, optional appearance-based re-identification, optional audio/speaker evidence, and an audio-visual provider-attribution seam implemented and verified. Phase 3 Media Engine remains open; its player-lifecycle objective is intentionally superseded for now by the human-approved 360 priority.
 
 ## Project Status
 
@@ -990,7 +990,22 @@ Verification:
 - Real footage (audio+video proxy; original untouched): Silero VAD detects speech in the 360 clip; with an explicit speaker->target binding the evidence associates to the visible presenter; `SpeakerReframePlanner` produced a `ReframePlan` rendered by the existing renderer.
 - Architecture decision: Decision 023.
 
-Next: automatic audio-visual speaker attribution (diarization/active-speaker), then GPU optimization and UI integration.
+## Phase 4 Objective 7 — Audio-Visual Provider Attribution Seam — Complete
+
+Status: Complete (2026-09-17). Objective 7 was scoped under the explicit efficiency guardrail: deliver the minimum reliable "follow the speaker" capability, not maximum perception sophistication. The outcome is a completed provider-attribution seam plus an evidence-based decision not to ship an unreliable model-backed provider.
+
+- `SpeakerInterval` and `SpeakerSegment` gained an optional `targetIdHint`: an existing target track id that an audio-visual/diarization provider believes is speaking. `SpeakerTargetAssociator` honours it only when the hinted target is visible and only after an explicit creator binding (explicit > visible provider hint > spatial DoA > single visible > ambiguous/unassociated), recording the method as `provider-hint`. A non-visible hint falls through; a hint never invents a target and never overrides the creator.
+- `SpeakerTimeline` carries the hint from the originating intervals onto the coalesced segment (first non-empty wins; cleared for overlap/silence), so `SpeakerEvidenceAnalyzer` honours it end to end.
+- Feasibility investigation (recorded; no model shipped): the real clip's audio is **mono**, so direction-of-arrival attribution is impossible; a face-detection + mouth-motion/audio-envelope correlation probe at 12 fps gave max correlation 0.250 for the speaker vs 0.192 for the listener (weak, not a reliable discriminator); and no permissively licensed, clearly commercial audio-visual active-speaker model was identified (TalkNet/LoCoNet/AV-HuBERT research-grade/unclear weights; pyannote gated; SpeechBrain/torchreid heavy with VoxCeleb provenance).
+- Because no reliable, permissively licensed provider exists in this environment, no provider is shipped; the seam is complete and model-free tested, so a licensed provider can be added later without touching the core.
+
+Verification:
+- 5 new model-free tests (hint JSON round-trip/backward compatibility, visible hint attribution, non-visible hint fallback, explicit binding precedence, analyzer/segment propagation). Full model-free suite: 300 passed, 0 failed, 1 skipped.
+- No detector, geometry, identity-resolution, or renderer changes; audio remains evidence-only below appearance in the precedence hierarchy.
+
+Architecture decision: Decision 024.
+
+Next per the human-approved priority: end-to-end 360 user-command testing (natural-language/structured command -> plan -> deterministic render on real footage), rather than further perception subsystems. A real audio-visual/diarization provider and GPU optimization remain future work behind the same seam.
 
 
 

@@ -51,6 +51,9 @@ QJsonObject SpeakerInterval::toJsonObject() const
     if (hasAzimuth) {
         object.insert(QStringLiteral("azimuthDeg"), azimuthDeg);
     }
+    if (!targetIdHint.isEmpty()) {
+        object.insert(QStringLiteral("targetIdHint"), targetIdHint);
+    }
     return object;
 }
 
@@ -87,6 +90,7 @@ bool SpeakerInterval::readFromJsonObject(const QJsonObject &object,
         interval.azimuthDeg = azimuthValue.toDouble();
         interval.hasAzimuth = true;
     }
+    interval.targetIdHint = object.value(QStringLiteral("targetIdHint")).toString();
     if (!interval.isValid(error)) {
         return false;
     }
@@ -306,6 +310,9 @@ QJsonObject SpeakerSegment::toJsonObject() const
     object.insert(QStringLiteral("targetId"), targetId);
     object.insert(QStringLiteral("verdict"), speakerVerdictToString(verdict));
     object.insert(QStringLiteral("confidence"), confidence);
+    if (!targetIdHint.isEmpty()) {
+        object.insert(QStringLiteral("targetIdHint"), targetIdHint);
+    }
     return object;
 }
 
@@ -334,6 +341,7 @@ bool SpeakerSegment::readFromJsonObject(const QJsonObject &object,
     segment.verdict = speakerVerdictFromString(
         object.value(QStringLiteral("verdict")).toString());
     segment.confidence = object.value(QStringLiteral("confidence")).toDouble(0.0);
+    segment.targetIdHint = object.value(QStringLiteral("targetIdHint")).toString();
     if (!segment.isValid(error)) {
         return false;
     }

@@ -1056,6 +1056,11 @@ private slots:
     void speakerAssociatorSingleVisible();
     void speakerAssociatorMultipleVisibleIsAmbiguous();
     void speakerAssociatorSpatialAzimuth();
+    void speakerIntervalProviderHintJson();
+    void speakerAssociatorProviderHint();
+    void speakerAssociatorProviderHintNotVisibleFallsBackToSpatial();
+    void speakerAssociatorExplicitBeatsProviderHint();
+    void speakerAnalyzerProviderHintAssociatesTarget();
     void speakerTimelineSingleSpeaker();
     void speakerTimelineSpeakerChange();
     void speakerTimelineShortPauseIsHeld();
@@ -8759,6 +8764,128 @@ void ProjectTest::speakerAssociatorSpatialAzimuth()
                                  &ambiguous, &method, &error));
     QCOMPARE(target, QStringLiteral("t2"));
     QCOMPARE(method, QStringLiteral("spatial"));
+}
+
+void ProjectTest::speakerIntervalProviderHintJson()
+{
+    // The optional provider attribution hint survives a JSON round-trip.
+    SpeakerInterval interval = makeSpeakerInterval(100, 900);
+    interval.targetIdHint = QStringLiteral("t2");
+    SpeakerInterval restored;
+    QString error;
+    QVERIFY(SpeakerInterval::readFromJsonObject(interval.toJsonObject(),
+                                                &restored, &error));
+    QCOMPARE(restored.targetIdHint, QStringLiteral("t2"));
+
+    // Absent hint decodes to an empty string (backward compatible).
+    const SpeakerInterval plain = makeSpeakerInterval(0, 500);
+    QVERIFY(!plain.toJsonObject().contains(QStringLiteral("targetIdHint")));
+    SpeakerInterval plainBack;
+    QVERIFY(SpeakerInterval::readFromJsonObject(plain.toJsonObject(), &plainBack,
+                                                &error));
+    QVERIFY(plainBack.targetIdHint.isEmpty());
+}
+
+void ProjectTest::speakerAssociatorProviderHint()
+{
+    // A visible provider hint attributes directly, without an explicit binding
+    // and despite several plausible visible people.
+    SpeakerTargetAssociator associator;
+    const QList<TargetTrack> tracks = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 0.0, 0.0) }),
+        makeIdTrack(QStringLiteral("t2"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 50.0, 0.0) })
+    };
+    SpeakerInterval interval = makeSpeakerInterval(0, 500);
+    interval.targetIdHint = QStringLiteral("t2");
+    QString target;
+    QString method;
+    bool ambiguous = false;
+    QString error;
+    QVERIFY(associator.associate(interval, tracks,
+                                 SpeakerTargetAssociator::Config{}, &target,
+                                 &ambiguous, &method, &error));
+    QCOMPARE(target, QStringLiteral("t2"));
+    QCOMPARE(method, QStringLiteral("provider-hint"));
+    QVERIFY(!ambiguous);
+}
+
+void ProjectTest::speakerAssociatorProviderHintNotVisibleFallsBackToSpatial()
+{
+    // A hint for a target that is not visible never invents a target; the
+    // deterministic spatial rule still applies.
+    SpeakerTargetAssociator associator;
+    const QList<TargetTrack> tracks = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, -10.0, 0.0) }),
+        makeIdTrack(QStringLiteral("t2"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 40.0, 0.0) })
+    };
+    SpeakerInterval interval = makeSpeakerInterval(0, 500);
+    interval.targetIdHint = QStringLiteral("t9");
+    interval.hasAzimuth = true;
+    interval.azimuthDeg = 35.0;
+    QString target;
+    QString method;
+    bool ambiguous = false;
+    QString error;
+    QVERIFY(associator.associate(interval, tracks,
+                                 SpeakerTargetAssociator::Config{}, &target,
+                                 &ambiguous, &method, &error));
+    QCOMPARE(target, QStringLiteral("t2"));
+    QCOMPARE(method, QStringLiteral("spatial"));
+}
+
+void ProjectTest::speakerAssociatorExplicitBeatsProviderHint()
+{
+    // An explicit creator binding always outranks a provider hint.
+    SpeakerTargetAssociator associator;
+    associator.bind(QStringLiteral("spk1"), QStringLiteral("t1"));
+    const QList<TargetTrack> tracks = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 0.0, 0.0) }),
+        makeIdTrack(QStringLiteral("t2"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 50.0, 0.0) })
+    };
+    SpeakerInterval interval = makeSpeakerInterval(0, 500);
+    interval.targetIdHint = QStringLiteral("t2");
+    QString target;
+    QString method;
+    bool ambiguous = false;
+    QString error;
+    QVERIFY(associator.associate(interval, tracks,
+                                 SpeakerTargetAssociator::Config{}, &target,
+                                 &ambiguous, &method, &error));
+    QCOMPARE(target, QStringLiteral("t1"));
+    QCOMPARE(method, QStringLiteral("explicit"));
+}
+
+void ProjectTest::speakerAnalyzerProviderHintAssociatesTarget()
+{
+    // An audio-visual provider can attribute the speaker directly through the
+    // existing evidence protocol; the target must already exist as a track.
+    ScriptedSpeakerProvider provider;
+    SpeakerInterval hinted = makeSpeakerInterval(0, 2000);
+    hinted.targetIdHint = QStringLiteral("t2");
+    provider.setIntervals({ hinted });
+    const QList<TargetTrack> tracks = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, -20.0, 0.0) }),
+        makeIdTrack(QStringLiteral("t2"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 40.0, 0.0) }),
+        makeIdTrack(QStringLiteral("t3"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 80.0, 0.0) })
+    };
+    SpeakerEvidenceAnalyzer analyzer;
+    const auto result = analyzer.analyze(
+        QStringLiteral("dummy"), 0, 2000, tracks, &provider,
+        SpeakerTargetAssociator());
+    QVERIFY(result.analysis.available);
+    QCOMPARE(result.evidence.size(), 1);
+    QCOMPARE(result.evidence.at(0).targetId, QStringLiteral("t2"));
+    QVERIFY(result.evidence.at(0).verdict == SpeakerVerdict::Active);
+    QCOMPARE(result.segments.at(0).targetId, QStringLiteral("t2"));
 }
 
 void ProjectTest::speakerTimelineSingleSpeaker()

@@ -316,7 +316,7 @@ Keep the appearance provider replaceable; add active-speaker/audio-visual associ
 
 ### Status
 
-Open — intentional boundary; not a defect.
+Open — attribution seam complete; no reliable, permissively licensed model-backed provider available (updated 2026-09-17, Objective 7).
 
 ### Description
 
@@ -326,13 +326,21 @@ Audio never changes identity resolution: `TargetIdentityRegistry::annotateSpeake
 
 Weight licensing was checked: Silero VAD is MIT (code and the ONNX weights). pyannote diarization models are gated and the runtime is heavy; SpeechBrain/torchreid speaker embeddings carry VoxCeleb weight provenance; cloud APIs and audio-visual active-speaker models were deferred.
 
+### Objective 7 investigation (2026-09-17)
+
+The provider-attribution seam is now complete: an `AudioVisual`/`Diarization` provider can attach a `targetIdHint` (an existing target track id) to a speech interval, and `SpeakerTargetAssociator` honours it deterministically (explicit binding > visible hint > spatial DoA > single visible > ambiguous/unassociated). No model-backed provider is shipped, because the available evidence does not support a reliable one in this environment:
+
+- The real 360 footage audio is **mono** in both the original and the derived proxy, so direction-of-arrival attribution is impossible.
+- A face-detection + mouth-motion/audio-envelope correlation probe (12 fps, 48 frames, lags −3..+3, OpenCV YuNet) gave max correlation 0.250 for the speaker vs 0.192 for the listener — a weak separation that is not a reliable discriminator.
+- No permissively licensed, clearly commercial audio-visual active-speaker model was identified (TalkNet/LoCoNet/AV-HuBERT research-grade/unclear weights; pyannote gated and PyTorch-heavy; SpeechBrain/torchreid VoxCeleb provenance).
+
 ### Impact
 
-"Follow whoever is speaking" works when the creator identifies the speaker once (or when only one person is visible). Fully automatic attribution among multiple people requires a diarization or audio-visual active-speaker model and remains unresolved otherwise.
+"Follow whoever is speaking" works when the creator identifies the speaker once (or when only one person is visible). Fully automatic attribution among multiple people requires a diarization or audio-visual active-speaker provider; the seam is ready for one, and until one is supplied the result is honestly reported as ambiguous/unassociated rather than guessed.
 
 ### Planned Resolution
 
-Add an optional diarization/audio-visual provider behind the existing `SpeakerEvidenceProvider` seam (Objective 7), keeping models optional and the unit suite model-free.
+Add an optional diarization/audio-visual provider behind the existing `SpeakerEvidenceProvider` seam that supplies `targetIdHint`; keep models optional and the unit suite model-free. Re-evaluate licensed audio-visual models and (if ever multi-channel audio is available) direction-of-arrival association.
 
 ---
 

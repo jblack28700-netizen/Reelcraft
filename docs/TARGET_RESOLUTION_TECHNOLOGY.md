@@ -246,3 +246,27 @@ invocation (process-per-view) is intentionally unoptimized.
   active-speaker models (research/unclear weight licensing).
 - **Limitations:** VAD gives activity, not identity; automatic attribution with
   multiple visible people requires an explicit binding or a future provider.
+
+## 14. Audio-Visual Provider Attribution Seam (2026-09-17, Objective 7)
+
+- **Interface extension:** `SpeakerInterval` and `SpeakerSegment` gained an
+  optional `targetIdHint` — an existing target track id that an
+  audio-visual/diarization provider attributes to the speech. This is the
+  minimal extension that lets a future provider attribute directly through the
+  existing `SpeakerEvidenceProvider` file/JSON protocol; no new component or
+  runtime is added.
+- **Association precedence:** explicit creator/structured binding > visible
+  provider hint (`provider-hint`) > spatial direction-of-arrival >
+  single-visible-person > ambiguous/unassociated. A hint for a non-visible
+  target falls through; a hint never invents a target and never overrides the
+  creator. `SpeakerTimeline` carries the hint onto the coalesced segment
+  (first non-empty wins; cleared for overlap/silence).
+- **Feasibility boundary (no provider shipped):** the real footage audio is
+  mono (no direction of arrival); a mouth-motion/audio-envelope correlation
+  probe scored 0.250 (speaker) vs 0.192 (listener) — not reliable; and no
+  permissively licensed, clearly commercial audio-visual active-speaker model
+  was identified. Shipping a heuristic would violate the "minimum reliable
+  capability" guardrail.
+- **Selected provider:** none. A future licensed provider supplies
+  `targetIdHint`; the C++ core remains model-free and the unit suite stays
+  model-free.

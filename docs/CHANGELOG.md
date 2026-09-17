@@ -592,4 +592,14 @@ Date: 2026-09-17
 - 31 new model-free tests; full suite 295 passed, 0 failed, 1 skipped. Real speech detection and speaker-associated rendering verified on real 360 footage (audio+video proxy; original untouched). Decision 023 recorded; Decisions 017-022 preserved.
 - "Follow whoever is speaking" works through the structured selection layer; automatic audio-visual attribution without an explicit binding, GPU optimization, and UI integration remain future work.
 
+## v0.2.44 — Audio-Visual Provider Attribution Seam
+
+Date: 2026-09-17
+
+- Completed the audio-visual **provider-attribution seam** under the objective's efficiency guardrail: `SpeakerInterval`/`SpeakerSegment` gained an optional `targetIdHint` (an existing target track id an audio-visual/diarization provider attributes), and `SpeakerTargetAssociator` precedence is now explicit creator binding > visible provider hint (`provider-hint`) > spatial DoA > single visible > ambiguous/unassociated. A non-visible hint falls through; a hint never invents a target and never overrides the creator.
+- `SpeakerTimeline` propagates the hint onto the coalesced segment (first non-empty wins; cleared for overlap/silence); `SpeakerEvidenceAnalyzer` honours it end to end.
+- Documented the feasibility boundary that prevents shipping a model-backed automatic provider here: the real footage audio is mono (no direction of arrival); a face-detection + mouth-motion/audio-envelope correlation probe scored 0.250 (speaker) vs 0.192 (listener) — not a reliable discriminator; and no permissively licensed, clearly commercial audio-visual active-speaker model was identified. The seam is complete so a licensed provider can be added later without core changes.
+- 5 new model-free tests; full model-free suite 300 passed, 0 failed, 1 skipped. Decision 024 recorded; Decisions 017-023 preserved.
+- Next per the human-approved priority: end-to-end 360 user-command testing rather than further perception subsystems.
+
 

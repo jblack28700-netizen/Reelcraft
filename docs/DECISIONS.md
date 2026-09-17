@@ -751,3 +751,32 @@ Audio is placed below appearance and is deliberately **not allowed to trigger an
 - "Follow whoever is speaking" now works through the structured selection layer. Automatic audio-visual speaker attribution without an explicit binding (diarization / active-speaker models) remains future work.
 - No changes to the detector, geometry, identity resolution, or renderer; Decisions 017-022 preserved.
 
+
+# Decision 024 — Audio-Visual Provider Attribution Seam and the Feasibility Boundary for Automatic Speaker Attribution
+
+**Status:** Accepted (2026-09-17, 360 Reframing Objective 7)
+
+## Context
+
+Decision 023 gave Reelcraft optional audio/speaker evidence, but with a VAD-only provider the audio layer can say *when* speech occurs, not *who* is speaking. Objective 7 asked for automatic audio-visual speaker attribution — diarization or an audio-visual active-speaker model attributing speech to visible tracks without a creator binding — behind the existing replaceable seam, under an explicit efficiency guardrail: deliver the *minimum reliable capability* for "follow the person who is speaking", not maximum perception sophistication.
+
+Feasibility was investigated on the project's real 360 footage before building anything:
+
+- **The audio is mono** in both the original `360_TEST_4K.mp4` and the derived A/V proxy, so direction-of-arrival / spatial (beamforming) attribution is impossible.
+- A lightweight **face-detection + mouth-region-motion vs audio-envelope correlation** probe was run at 12 fps (48 frames, 4 s, lags −3..+3) on the two visible presenters (OpenCV YuNet face detector, MIT). The presenter identified as speaking reached max correlation 0.250; the other presenter reached 0.192 — a weak separation well inside noise, and the likely listener had *higher* motion energy. Naive motion/audio correlation is not a reliable discriminator on this footage.
+- **Licensing:** no permissively licensed, clearly commercial audio-visual active-speaker model was identified. TalkNet, LoCoNet, and AV-HuBERT are research-grade and/or their weights' licensing is unclear; pyannote diarization models are gated behind access conditions and add a PyTorch stack; SpeechBrain/torchreid speaker embeddings are heavy with VoxCeleb weight provenance. This confirms the licensing finding of Decision 023.
+
+## Decisions
+
+- **Complete the seam, not a speculative perception subsystem.** A provider may now attach an optional **attribution hint** (`targetIdHint`) to a `SpeakerInterval`: a specific existing target track id that the provider believes is speaking. This is the minimal protocol extension that lets a future diarization or audio-visual provider attribute directly through the existing `SpeakerEvidenceProvider` boundary; no new C++ component, runtime, or dependency is added.
+- **Deterministic consumption with a safe precedence.** `SpeakerTargetAssociator` honours the hint only when the hinted target is visible, and only after an explicit creator binding: explicit creator/structured binding > visible provider hint > spatial direction-of-arrival > single-visible-person > unassociated/ambiguous. A hint for a non-visible target is ignored and falls through; a hint never invents a target and never overrides the creator. The association method is recorded as `provider-hint`.
+- **The hint is carried through the timeline.** `SpeakerTimeline` propagates the hint from the originating intervals onto the coalesced `SpeakerSegment` (first non-empty hint wins; cleared for overlap and silence segments), so `SpeakerEvidenceAnalyzer` can honour it when it associates the stable segment. The existing hysteresis, verdicts, and evidence-only identity rule are unchanged.
+- **No model-backed provider is shipped, and this is deliberate.** Reelcraft does not ship a motion-correlation or diarization provider because none available in this environment is both reliably accurate and permissively licensed. Shipping one would violate the objective's "minimum reliable capability" guardrail; the objective's own contingency (complete the seam and tests, document exactly what prevented real attribution) is followed instead.
+- **Objective 7 outcome.** The reliable "follow the speaker" capability remains the Objective 6 path (an explicit one-time creator speaker→target binding, or the single-visible-person rule, on real 360 footage). Automatic attribution among multiple visible people is available to any future provider that supplies a `targetIdHint`; without one it is honestly reported as ambiguous/unassociated rather than guessed.
+
+## Consequences
+
+- 5 new model-free tests: hint JSON round-trip and backward compatibility; a visible hint attributing despite several visible people; a non-visible hint falling through to the spatial rule; an explicit binding defeating a hint; and the analyzer/timeline path carrying the hint end to end. Full model-free suite: 300 passed / 0 failed / 1 skipped.
+- No detector, geometry, identity-resolution, or renderer changes; audio remains evidence-only and below appearance in the precedence hierarchy; Decisions 017–023 preserved.
+- Per the human-approved priority, the next work is end-to-end 360 user-command testing rather than further perception subsystems. A real audio-visual/diarization provider and GPU optimization are recorded as future work behind the same seam.
+

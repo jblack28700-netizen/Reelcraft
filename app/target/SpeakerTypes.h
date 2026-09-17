@@ -30,6 +30,11 @@ struct SpeakerInterval
     // association; NaN/absent when the provider does not supply it.
     double azimuthDeg = 0.0;
     bool hasAzimuth = false;
+    // Optional provider attribution hint: a specific target track id supplied
+    // by an audio-visual active-speaker provider. It is only honoured when that
+    // target is visible; it never invents a target and never overrides an
+    // explicit creator binding.
+    QString targetIdHint;
 
     bool isValid(QString *error = nullptr) const;
     QJsonObject toJsonObject() const;
@@ -94,6 +99,9 @@ struct SpeakerSegment
     QString targetId;    // associated target, empty when unassociated
     SpeakerVerdict verdict = SpeakerVerdict::Silence;
     double confidence = 0.0;
+    // Optional provider attribution hint carried from the originating interval
+    // so association can honour a direct audio-visual attribution.
+    QString targetIdHint;
 
     bool isValid(QString *error = nullptr) const;
     QJsonObject toJsonObject() const;

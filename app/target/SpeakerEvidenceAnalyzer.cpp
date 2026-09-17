@@ -105,7 +105,8 @@ SpeakerEvidenceAnalyzer::Result SpeakerEvidenceAnalyzer::analyze(
         QString associationError;
         const SpeakerInterval interval{ segment.startMs, segment.endMs,
                                         segment.speakerId, segment.confidence,
-                                        false, 0.0, false };
+                                        false, 0.0, false,
+                                        segment.targetIdHint };
         associator.associate(interval, visible, m_config.association, &targetId,
                              &ambiguous, &method, &associationError);
 

@@ -254,8 +254,29 @@ Identity precedence is unchanged: explicit creator selection > tracker continuit
 ### Not implemented
 Automatic audio-visual speaker attribution without an explicit binding (diarization / active-speaker models); GPU/CUDA optimization; UI integration.
 
-## Next Objective (360 Reframing Objective 7) — NOT STARTED
+## 360 Reframing Objective 7 — Audio-Visual Provider Attribution Seam — Complete
 
-Automatic audio-visual speaker attribution: use diarization or an audio-visual active-speaker model to attribute speech to visible tracks without a creator binding, behind the existing replaceable provider seam, keeping models optional and the unit suite model-free. Requires its own scoped objective.
+Status: **Complete — implemented and verified (2026-09-17).**
+
+### Objective
+
+Provide automatic audio-visual speaker attribution without a creator binding — using diarization or an audio-visual active-speaker model — behind the existing replaceable provider seam, under the explicit efficiency guardrail: the minimum reliable capability for "follow the person who is speaking", not maximum perception sophistication.
+
+### Scope (implemented)
+
+- `SpeakerInterval`/`SpeakerSegment` optional `targetIdHint`: an existing target track id an audio-visual/diarization provider attributes. `SpeakerTargetAssociator` precedence becomes explicit creator binding > visible provider hint > spatial DoA > single visible > ambiguous/unassociated; method `provider-hint`. A non-visible hint falls through; a hint never invents a target and never overrides the creator.
+- `SpeakerTimeline` propagates the hint onto the coalesced segment (first non-empty wins; cleared for overlap/silence); `SpeakerEvidenceAnalyzer` honours it end to end.
+- 5 new model-free tests; full model-free suite 300 passed / 0 failed / 1 skipped.
+
+### Feasibility boundary (why no model-backed provider is shipped)
+
+- Real footage audio is **mono** → no direction of arrival; spatial attribution impossible.
+- A face-detection + mouth-motion/audio-envelope correlation probe at 12 fps gave max correlation 0.250 (speaker) vs 0.192 (listener) — weak, not a reliable discriminator.
+- No permissively licensed, clearly commercial audio-visual active-speaker model identified (TalkNet/LoCoNet/AV-HuBERT research-grade/unclear weights; pyannote gated; SpeechBrain/torchreid heavy with VoxCeleb provenance).
+- The seam and tests are complete, so a licensed provider can be dropped in later without core changes. Architecture decision: Decision 024.
+
+## Next Objective — End-to-End 360 User-Command Testing — NOT STARTED
+
+Per the human-approved priority, the next objective is end-to-end 360 user-command testing rather than adding further perception subsystems: exercise the full path (real 360 source -> intent/structured command -> target resolution/identity -> `ReframePlan` -> deterministic render) on real footage end to end, identify integration gaps and failure modes, and only then resume perception or GPU work. Requires its own scoped objective.
 
 

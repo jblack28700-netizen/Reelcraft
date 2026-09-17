@@ -1253,6 +1253,42 @@ Identity was geometric only (Decision 021), so a person could not be re-acquired
 
 - Decision 023 recorded. Decisions 017-022 preserved unchanged.
 
+---
+
+## 2026-09-17 — 360 Reframing Objective 7: Audio-Visual Provider Attribution Seam
+
+### Objective and guardrail
+
+Provide automatic audio-visual speaker attribution behind the existing replaceable provider seam, under the explicit efficiency guardrail: the minimum reliable "follow the speaker" capability, using existing components, no speculative infrastructure, and real-media tests only for unresolved questions.
+
+### Work completed
+
+- `app/target/SpeakerTypes.{h,cpp}`: optional `targetIdHint` on `SpeakerInterval` and `SpeakerSegment` (JSON round-trip; absent field decodes to empty, backward compatible).
+- `app/target/SpeakerTargetAssociator.{h,cpp}`: honours a visible provider hint as `provider-hint`, after an explicit creator binding and before the spatial rule; a non-visible hint falls through and never invents a target.
+- `app/target/SpeakerTimeline.{h,cpp}`: carries the hint from originating intervals onto the coalesced segment (first non-empty wins; cleared for overlap/silence).
+- `app/target/SpeakerEvidenceAnalyzer.cpp`: passes `segment.targetIdHint` into association, so the hint reaches the timeline/evidence path end to end.
+- 5 new model-free tests.
+
+### Feasibility research (negative result, recorded as the reason no provider ships)
+
+- Real footage audio is mono in the original and the A/V proxy → direction-of-arrival/spatial attribution impossible.
+- `cv2.FaceDetectorYN` + OpenCV Zoo YuNet (MIT) detected faces in both presenter tangent views, but a mouth-region-motion vs audio-envelope correlation probe at 12 fps (48 frames, 4 s, lags −3..+3) scored max correlation 0.250 for the speaking presenter vs 0.192 for the other — weak and not a reliable discriminator (the listener even had higher motion energy).
+- No permissively licensed, clearly commercial audio-visual active-speaker model was identified (TalkNet/LoCoNet/AV-HuBERT research-grade/unclear weights; pyannote gated; SpeechBrain/torchreid heavy with VoxCeleb provenance).
+
+### Verification
+
+- Model-free suite: 300 passed, 0 failed, 1 skipped. New tests: hint JSON round-trip/backward compatibility, visible-hint attribution among multiple people, non-visible-hint fallback to spatial, explicit binding precedence over a hint, and analyzer/timeline propagation.
+- No detector, geometry, identity-resolution, or renderer changes; audio remains evidence-only below appearance.
+
+### Boundary notes / not implemented
+
+- No model-backed automatic attribution is shipped: the available models are either unreliable on this mono footage or not clearly licensed for commercial use. The seam is complete so a licensed provider can be added later.
+- GPU optimization and UI integration remain future work.
+
+### Decisions
+
+- Decision 024 recorded. Decisions 017-023 preserved unchanged.
+
 
 
 

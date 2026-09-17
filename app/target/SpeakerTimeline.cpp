@@ -10,6 +10,7 @@ struct Run
     qint64 startMs = 0;
     qint64 endMs = 0;
     double confidence = 0.0;
+    QString targetIdHint;
 };
 
 struct StateSegment
@@ -17,6 +18,7 @@ struct StateSegment
     qint64 startMs = 0;
     qint64 endMs = 0;
     QStringList speakers;
+    QString targetIdHint;
 };
 
 double confidenceFor(const QList<Run> &runs, const QStringList &speakers,
@@ -68,6 +70,9 @@ QList<SpeakerSegment> SpeakerTimeline::build(const QList<SpeakerInterval> &inter
                 run.startMs = qMin(run.startMs, interval.startMs);
                 run.endMs = qMax(run.endMs, interval.endMs);
                 run.confidence = qMax(run.confidence, interval.confidence);
+                if (run.targetIdHint.isEmpty()) {
+                    run.targetIdHint = interval.targetIdHint;
+                }
                 merged = true;
                 break;
             }
@@ -78,6 +83,7 @@ QList<SpeakerSegment> SpeakerTimeline::build(const QList<SpeakerInterval> &inter
             run.startMs = interval.startMs;
             run.endMs = interval.endMs;
             run.confidence = interval.confidence;
+            run.targetIdHint = interval.targetIdHint;
             runs.append(run);
         }
     }
@@ -134,8 +140,14 @@ QList<SpeakerSegment> SpeakerTimeline::build(const QList<SpeakerInterval> &inter
                 if (!segment.speakers.contains(filtered.at(index).speakerId)) {
                     segment.speakers.append(filtered.at(index).speakerId);
                 }
+                if (segment.targetIdHint.isEmpty()) {
+                    segment.targetIdHint = filtered.at(index).targetIdHint;
+                }
             }
             std::stable_sort(segment.speakers.begin(), segment.speakers.end());
+            if (segment.speakers.size() > 1) {
+                segment.targetIdHint.clear(); // no single speaker to attribute
+            }
             if (!raw.isEmpty() && raw.last().endMs == segment.startMs
                 && raw.last().speakers == segment.speakers) {
                 raw.last().endMs = segment.endMs;
@@ -169,6 +181,7 @@ QList<SpeakerSegment> SpeakerTimeline::build(const QList<SpeakerInterval> &inter
             result.endMs = segment.endMs;
             result.speakerId = speaker;
             result.verdict = SpeakerVerdict::Active;
+            result.targetIdHint = segment.targetIdHint;
             result.confidence =
                 confidenceFor(filtered, segment.speakers, segment.startMs,
                               segment.endMs);
@@ -213,6 +226,9 @@ QList<SpeakerSegment> SpeakerTimeline::build(const QList<SpeakerInterval> &inter
             coalesced.last().endMs = qMax(coalesced.last().endMs, segment.endMs);
             coalesced.last().confidence =
                 qMax(coalesced.last().confidence, segment.confidence);
+            if (coalesced.last().targetIdHint.isEmpty()) {
+                coalesced.last().targetIdHint = segment.targetIdHint;
+            }
         } else {
             coalesced.append(segment);
         }

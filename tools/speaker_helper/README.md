@@ -36,6 +36,13 @@ rule; otherwise the result stays unassociated/ambiguous.
 - Cloud speaker APIs: rejected (no cloud/API dependence requirement).
 - Audio-visual active-speaker models (TalkNet/LoCoNet/AV-HuBERT): research-grade
   and/or unclear weight licensing; deferred.
+- Objective 7 (2026-09-17) investigated automatic attribution directly: the real
+  footage audio is mono (no direction of arrival), a face-detection +
+  mouth-motion/audio-envelope correlation probe was not a reliable
+  discriminator (0.250 speaker vs 0.192 listener), and no permissively
+  licensed, clearly commercial audio-visual active-speaker model was found. The
+  provider seam was therefore completed (see below) without shipping a
+  model-backed provider. Decision 024.
 
 ## Install
 
@@ -71,6 +78,24 @@ silero_vad_helper.py <request.json> <response.json> [--model PATH]
   "intervals": [ { "startMs": 0, "endMs": 2100, "speakerId": "spk1",
                    "confidence": 0.92, "overlap": false } ], "error": "" }
 ```
+
+## Provider attribution hint (future audio-visual / diarization providers)
+
+A provider that can name the *person* (diarization + face mapping, or an
+audio-visual active-speaker model) may add an optional `targetIdHint` to each
+interval — the id of an existing target track it attributes:
+
+```json
+{ "startMs": 0, "endMs": 2100, "speakerId": "spk1", "confidence": 0.92,
+  "overlap": false, "targetIdHint": "t2" }
+```
+
+`SpeakerTargetAssociator` honours the hint only when that target is visible and
+only after an explicit creator binding: explicit creator/structured binding >
+visible provider hint (`provider-hint`) > spatial direction-of-arrival >
+single-visible-person > ambiguous/unassociated. A hint for a non-visible target
+falls through, and a hint never invents a target or overrides the creator. The
+hint is carried through `SpeakerTimeline` onto the coalesced segment.
 
 ## Limitations
 
