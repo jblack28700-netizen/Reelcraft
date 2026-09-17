@@ -344,6 +344,26 @@ Add an optional diarization/audio-visual provider behind the existing `SpeakerEv
 
 ---
 
+# Issue — Generated renders are session state (2026-09-17)
+
+### Status
+
+Open — intentional boundary; not a defect.
+
+### Description
+
+The application-level command path (Objective 9) records each command in a structured `ReframeCommandOutcome` (source, instruction, effective range, output path, dimensions, frame count, errors), but that record and the generated output file are session state: they are not persisted in the project schema, and the application does not re-list prior renders after restarting or reopening a project. There is also no duration/ffprobe metadata, so a command without its own time range uses the caller-supplied fallback range rather than the whole clip.
+
+### Impact
+
+After restarting or reopening a project, previously generated renders are not shown in the application. Long clips require the user to set the range explicitly (or use the UI fallback) until duration probing exists.
+
+### Planned Resolution
+
+Add a small project output section (or reuse the existing media/attributes pattern) to persist render records, and implement the deferred ffprobe duration metadata so range-less commands can default to the whole clip. Do not build a large persistence system before the project schema supports it.
+
+---
+
 # Issue Management Rules
 
 For each future issue:

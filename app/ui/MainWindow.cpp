@@ -1,9 +1,11 @@
 #include "MainWindow.h"
 
 #include <QFileDialog>
+#include <QDoubleSpinBox>
 #include <QEvent>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QListWidgetItem>
 #include <QPushButton>
@@ -56,6 +58,22 @@ MainWindow::MainWindow(QWidget *parent)
 
     m_previewTimeLabel = new QLabel(QStringLiteral("Time: 0.0 s"), central);
 
+    m_commandEdit = new QLineEdit(central);
+    m_commandEdit->setPlaceholderText(
+        QStringLiteral("e.g. From 00:00 to 00:10, follow person 1"));
+    m_commandStartSeconds = new QDoubleSpinBox(central);
+    m_commandStartSeconds->setRange(0.0, 36000.0);
+    m_commandStartSeconds->setDecimals(2);
+    m_commandStartSeconds->setPrefix(QStringLiteral("start s: "));
+    m_commandStartSeconds->setValue(0.0);
+    m_commandEndSeconds = new QDoubleSpinBox(central);
+    m_commandEndSeconds->setRange(0.0, 36000.0);
+    m_commandEndSeconds->setDecimals(2);
+    m_commandEndSeconds->setPrefix(QStringLiteral("end s: "));
+    m_commandEndSeconds->setValue(10.0);
+    m_runCommandButton = new QPushButton(QStringLiteral("Run 360 Command"), central);
+    m_commandResultLabel = new QLabel(QStringLiteral("No reframe command run."), central);
+
     m_mediaListWidget = new QListWidget(central);
     m_mediaListWidget->setObjectName("mediaListWidget");
     m_mediaListWidget->setMinimumHeight(80);
@@ -82,6 +100,11 @@ MainWindow::MainWindow(QWidget *parent)
     m_previewTimeLabel->setObjectName("previewTimeLabel");
     m_backgroundButton->setObjectName("backgroundDemoButton");
     m_resetViewportButton->setObjectName("resetViewportButton");
+    m_commandEdit->setObjectName("reframeCommandEdit");
+    m_commandStartSeconds->setObjectName("reframeStartSeconds");
+    m_commandEndSeconds->setObjectName("reframeEndSeconds");
+    m_runCommandButton->setObjectName("runReframeCommandButton");
+    m_commandResultLabel->setObjectName("reframeResultLabel");
 
     m_viewerWidget = new ViewerWidget(central);
     m_viewerWidget->setObjectName("viewerWidget");
@@ -109,6 +132,11 @@ MainWindow::MainWindow(QWidget *parent)
     layout->addWidget(m_activeMediaLabel);
     layout->addWidget(m_backgroundButton);
     layout->addWidget(m_resetViewportButton);
+    layout->addWidget(m_commandEdit);
+    layout->addWidget(m_commandStartSeconds);
+    layout->addWidget(m_commandEndSeconds);
+    layout->addWidget(m_runCommandButton);
+    layout->addWidget(m_commandResultLabel);
     layout->addWidget(m_statusLabel);
 
     setCentralWidget(central);
@@ -184,6 +212,14 @@ MainWindow::MainWindow(QWidget *parent)
             });
 
     connect(m_backgroundButton, &QPushButton::clicked, this, &MainWindow::backgroundDemoRequested);
+
+    connect(m_runCommandButton, &QPushButton::clicked, this, [this]() {
+        const qint64 startMs = static_cast<qint64>(
+            qRound64(m_commandStartSeconds->value() * 1000.0));
+        const qint64 endMs = static_cast<qint64>(
+            qRound64(m_commandEndSeconds->value() * 1000.0));
+        emit reframeCommandRequested(m_commandEdit->text(), startMs, endMs);
+    });
 
     m_newProjectButton->installEventFilter(this);
     m_saveButton->installEventFilter(this);
@@ -325,6 +361,19 @@ void MainWindow::showFramePreview(const QImage &image)
     }
     m_viewerWidget->setFlatSourceMode(flat);
     m_viewerWidget->setSourceImage(image);
+}
+
+void MainWindow::showReframeCommandResult(const ReframeCommandOutcome &outcome)
+{
+    if (outcome.ok) {
+        m_commandResultLabel->setText(
+            QStringLiteral("Reframe command succeeded: %1 (%2 frame(s))")
+                .arg(outcome.outputPath)
+                .arg(outcome.frameCount));
+    } else {
+        m_commandResultLabel->setText(
+            QStringLiteral("Reframe command failed: %1").arg(outcome.error));
+    }
 }
 
 void MainWindow::showPreviewTime(double seconds)

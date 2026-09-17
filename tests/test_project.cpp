@@ -12,6 +12,8 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QMouseEvent>
+#include <QDoubleSpinBox>
+#include <QLineEdit>
 #include <QPushButton>
 #include <QKeyEvent>
 #include <QProcess>
@@ -968,6 +970,24 @@ private slots:
     void reframeCommandRunnerMissingDetectorIsHonest();
     void reframeCommandRunnerRejectsInvalidRange();
     void reframeCommandRunnerIsDeterministic();
+    void applicationReframeCommandRequiresProject();
+    void applicationReframeCommandRequiresActiveMedia();
+    void applicationReframeCommandRejectsEmptyCommand();
+    void applicationReframeCommandRejectsMissingSourceFile();
+    void applicationReframeCommandRejectsInvalidOutputDirectory();
+    void applicationReframeCommandRejectsSourceAsOutput();
+    void applicationReframeCommandDelegatesRequestAndMapsOutcome();
+    void applicationReframeCommandSuccessModelFree();
+    void applicationReframeCommandUnresolvedSubjectIsHonest();
+    void applicationReframeCommandAmbiguousSubjectIsHonest();
+    void applicationReframeCommandMissingDetectorIsHonest();
+    void applicationReframeCommandInvalidRangeIsHonest();
+    void applicationReframeCommandRenderFailurePropagates();
+    void applicationReframeCommandIsDeterministic();
+    void applicationReframeCommandDoesNotModifySource();
+    void mainWindowReframeCommandInputEmitsRequest();
+    void mainWindowShowsReframeCommandResult();
+    void realApplicationCommandIntegration();
     void equirectDirectionFromCenterAndSides();
     void equirectPixelRoundTrip();
     void equirectAngularDistanceHandlesSeam();
@@ -998,6 +1018,7 @@ private slots:
     void targetResolverRejectsInvalidInput();
     void targetResolverIsDeterministic();
     void targetResolverSequenceBuildsTrajectory();
+    void targetResolverSequenceSkipsUndecodableSample();
     void targetResolverFeedsReframePlanBuilder();
     void targetProcessDetectorParsesResponse();
     void targetProcessDetectorRunsHelper();
@@ -6568,6 +6589,64 @@ void ProjectTest::targetResolverSequenceBuildsTrajectory()
     QVERIFY(qAbs(observations.at(1).yawDeg) < 6.0);
 }
 
+namespace {
+
+// A provider that fails one specific timestamp (an undecodable/boundary frame)
+// and succeeds for the rest, used to prove sequence resolution is resilient.
+class FailingTimestampProvider : public ReframeFrameProvider
+{
+public:
+    FailingTimestampProvider(QImage image, qint64 failingTimeMs)
+        : m_image(image), m_failingTimeMs(failingTimeMs)
+    {
+    }
+
+    bool frameAt(qint64 timeMs, QImage *outFrame, QString *error) override
+    {
+        if (error) {
+            error->clear();
+        }
+        if (!outFrame) {
+            return false;
+        }
+        if (timeMs == m_failingTimeMs) {
+            if (error) {
+                *error = QStringLiteral("no frame decoded");
+            }
+            return false;
+        }
+        *outFrame = m_image;
+        return true;
+    }
+
+private:
+    QImage m_image;
+    qint64 m_failingTimeMs = 0;
+};
+
+} // namespace
+
+void ProjectTest::targetResolverSequenceSkipsUndecodableSample()
+{
+    const QImage frame = buildTargetEquirect(
+        360, 180, { EquirectDisk{ 20.0, 0.0, 10.0, QColor(255, 0, 0) } });
+    FailingTimestampProvider provider(frame, 1000);
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+    TargetResolver resolver(smallResolverConfig());
+    TargetQuery query;
+    query.label = QStringLiteral("person");
+
+    QList<TargetTrack> tracks;
+    QString error;
+    QVERIFY2(resolver.resolveSequence(&provider, { 0, 1000, 2000 }, query,
+                                      &detector, &tracks, &error),
+             qPrintable(error));
+    QVERIFY(!tracks.isEmpty());
+    QVERIFY(resolver.notes().join(QStringLiteral("\n"))
+                .contains(QStringLiteral("could not be decoded")));
+}
+
 void ProjectTest::targetResolverFeedsReframePlanBuilder()
 {
     const QImage frame = buildTargetEquirect(
@@ -6963,6 +7042,502 @@ void ProjectTest::reframeCommandRunnerIsDeterministic()
                      - b.plan.keyframes().at(i).yawDeg)
                 < 1e-12);
     }
+}
+
+// ================= 360 application command orchestration (Phase 4, Obj 9) =========
+// Application-level tests: source selection, validation, delegation to the
+// existing command runner, structured result/error propagation, and the minimal
+// command UI. All inputs are injected/model-free (no model, no decodes).
+
+namespace {
+
+QString writeTempMediaFile(QTemporaryDir &directory)
+{
+    const QString path = directory.filePath(QStringLiteral("clip.bin"));
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly)) {
+        return QString();
+    }
+    file.write("reelcraft-media");
+    file.close();
+    return path;
+}
+
+// Creates a project and imports + activates one temporary media file.
+bool setupActiveMedia(Application &app, QTemporaryDir &directory,
+                      QString *outMediaPath)
+{
+    const QString path = writeTempMediaFile(directory);
+    if (path.isEmpty()) {
+        return false;
+    }
+    app.newProject();
+    if (!app.importMediaFile(path)) {
+        return false;
+    }
+    const QString id = app.mediaItems().first().id();
+    if (!app.setActiveMedia(id)) {
+        return false;
+    }
+    if (outMediaPath) {
+        *outMediaPath = path;
+    }
+    return true;
+}
+
+ReframeCommandExecutor prepareExecutor()
+{
+    return [](const ReframeCommandRequest &request, TargetDetector *detector,
+              ReframeFrameProvider *provider) {
+        return ReframeCommandRunner::prepare(request, detector, provider);
+    };
+}
+
+} // namespace
+
+void ProjectTest::applicationReframeCommandRequiresProject()
+{
+    Application app;
+    ReframeCommandOutcome captured;
+    QObject::connect(&app, &Application::reframeCommandFinished,
+                     [&captured](const ReframeCommandOutcome &outcome) {
+                         captured = outcome;
+                     });
+    QVERIFY(!app.runReframeCommand(QStringLiteral("follow me"), 0, 2000));
+    QVERIFY(!captured.ok);
+    QVERIFY(captured.error.contains(QStringLiteral("project")));
+    QCOMPARE(app.lastReframeCommandOutcome().error, captured.error);
+}
+
+void ProjectTest::applicationReframeCommandRequiresActiveMedia()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    app.newProject();
+    const QString path = writeTempMediaFile(directory);
+    QVERIFY(!path.isEmpty());
+    QVERIFY(app.importMediaFile(path));
+    QVERIFY(!app.runReframeCommand(QStringLiteral("follow me"), 0, 2000));
+    QVERIFY(app.lastReframeCommandOutcome().error.contains(
+        QStringLiteral("active media")));
+}
+
+void ProjectTest::applicationReframeCommandRejectsEmptyCommand()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    QVERIFY(!app.runReframeCommand(QStringLiteral("   "), 0, 2000));
+    QVERIFY(app.lastReframeCommandOutcome().error.contains(
+        QStringLiteral("Enter a reframe command")));
+}
+
+void ProjectTest::applicationReframeCommandRejectsMissingSourceFile()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QString media;
+    QVERIFY(setupActiveMedia(app, directory, &media));
+    QVERIFY(QFile::remove(media));
+    QVERIFY(!app.runReframeCommand(QStringLiteral("follow me"), 0, 2000));
+    QVERIFY(app.lastReframeCommandOutcome().error.contains(
+        QStringLiteral("unavailable")));
+}
+
+void ProjectTest::applicationReframeCommandRejectsInvalidOutputDirectory()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    QVERIFY(!app.runReframeCommandTo(
+        QStringLiteral("pan right"), 0, 2000,
+        QStringLiteral("/nonexistent_reelcraft_dir_xyz/out.mp4")));
+    QVERIFY(app.lastReframeCommandOutcome().error.contains(
+        QStringLiteral("output directory")));
+}
+
+void ProjectTest::applicationReframeCommandRejectsSourceAsOutput()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QString media;
+    QVERIFY(setupActiveMedia(app, directory, &media));
+    QVERIFY(!app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000, media));
+    QVERIFY(app.lastReframeCommandOutcome().error.contains(
+        QStringLiteral("must differ")));
+}
+
+void ProjectTest::applicationReframeCommandDelegatesRequestAndMapsOutcome()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QString media;
+    QVERIFY(setupActiveMedia(app, directory, &media));
+    const QString outputPath = directory.filePath(QStringLiteral("out.mp4"));
+
+    bool called = false;
+    ReframeCommandRequest capturedRequest;
+    app.setReframeCommandExecutor(
+        [&called, &capturedRequest](const ReframeCommandRequest &request,
+                                    TargetDetector *, ReframeFrameProvider *) {
+            called = true;
+            capturedRequest = request;
+            ReframeCommandResult result;
+            result.ok = true;
+            result.frameCount = 7;
+            result.outputPath = request.outputPath;
+            result.plan.setSourceRange(ReframePlan::TimeRange{ 500, 1500 });
+            result.plan.setOutput(ReframePlan::OutputSpec{ 640, 360, 2.0 });
+            CameraKeyframe keyframe;
+            keyframe.timeMs = 500;
+            keyframe.yawDeg = 30.0;
+            keyframe.rollDeg = 0.0;
+            keyframe.fieldOfViewDeg = 90.0;
+            keyframe.interpolation = CameraKeyframe::Interpolation::Linear;
+            result.plan.setKeyframes({ keyframe });
+            result.intent.hasTimeRange = true;
+            result.intent.startMs = 500;
+            result.intent.endMs = 1500;
+            return result;
+        });
+
+    ReframeCommandOutcome capturedOutcome;
+    QObject::connect(&app, &Application::reframeCommandFinished,
+                     [&capturedOutcome](const ReframeCommandOutcome &outcome) {
+                         capturedOutcome = outcome;
+                     });
+
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                    outputPath));
+    QVERIFY(called);
+    QCOMPARE(capturedRequest.instruction, QStringLiteral("pan right"));
+    QCOMPARE(capturedRequest.sourcePath, media);
+    QCOMPARE(capturedRequest.sourceMediaId, app.activeMediaId());
+    QCOMPARE(capturedRequest.defaultRange.startMs, qint64(0));
+    QCOMPARE(capturedRequest.defaultRange.endMs, qint64(2000));
+    QCOMPARE(capturedRequest.outputPath,
+             QFileInfo(outputPath).absoluteFilePath());
+
+    QVERIFY(capturedOutcome.ok);
+    QCOMPARE(capturedOutcome.frameCount, 7);
+    QCOMPARE(capturedOutcome.startMs, qint64(500));
+    QCOMPARE(capturedOutcome.endMs, qint64(1500));
+    QCOMPARE(capturedOutcome.outputWidth, 640);
+    QCOMPARE(capturedOutcome.outputHeight, 360);
+    QCOMPARE(capturedOutcome.sourceMediaId, app.activeMediaId());
+    QVERIFY(capturedOutcome.toJsonObject().value(QStringLiteral("ok")).toBool());
+}
+
+void ProjectTest::applicationReframeCommandSuccessModelFree()
+{
+    const QImage frame = buildTargetEquirect(
+        360, 180, { EquirectDisk{ 45.0, 0.0, 10.0, QColor(255, 0, 0) } });
+    StaticEquirectProvider provider(frame);
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setTargetDetector(&detector);
+    app.setCommandFrameProvider(&provider);
+    app.setReframeCommandExecutor(prepareExecutor());
+    app.setReframeDefaultOutput(160, 90, 2.0);
+
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("look at the person"), 0, 1000,
+                                    directory.filePath(QStringLiteral("out.mp4"))));
+    const ReframeCommandOutcome &outcome = app.lastReframeCommandOutcome();
+    QVERIFY(outcome.ok);
+    QCOMPARE(outcome.resolvedTargets.size(), 1);
+    QCOMPARE(outcome.resolvedTargets.at(0).id, QStringLiteral("person"));
+    QVERIFY(qAbs(outcome.resolvedTargets.at(0).yawDeg - 45.0) < 6.0);
+    QCOMPARE(outcome.startMs, qint64(0));
+    QCOMPARE(outcome.endMs, qint64(1000));
+    QCOMPARE(outcome.outputWidth, 160);
+    QCOMPARE(outcome.outputHeight, 90);
+    QCOMPARE(outcome.sourceMediaId, app.activeMediaId());
+}
+
+void ProjectTest::applicationReframeCommandUnresolvedSubjectIsHonest()
+{
+    QImage frame(360, 180, QImage::Format_ARGB32);
+    frame.fill(QColor(0, 0, 0));
+    StaticEquirectProvider provider(frame);
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setTargetDetector(&detector);
+    app.setCommandFrameProvider(&provider);
+    app.setReframeCommandExecutor(prepareExecutor());
+
+    QVERIFY(!app.runReframeCommandTo(QStringLiteral("look at the person"), 0, 1000,
+                                     directory.filePath(QStringLiteral("out.mp4"))));
+    const ReframeCommandOutcome &outcome = app.lastReframeCommandOutcome();
+    QVERIFY(!outcome.ok);
+    QVERIFY(outcome.resolvedTargets.isEmpty());
+    QCOMPARE(outcome.unresolvedReferences,
+             QStringList{ QStringLiteral("person") });
+    QVERIFY(outcome.error.contains(QStringLiteral("Unresolved")));
+}
+
+void ProjectTest::applicationReframeCommandAmbiguousSubjectIsHonest()
+{
+    const QImage frame = buildTargetEquirect(
+        360, 180, { EquirectDisk{ 40.0, 0.0, 10.0, QColor(255, 0, 0) },
+                    EquirectDisk{ -40.0, 0.0, 10.0, QColor(0, 0, 255) } });
+    StaticEquirectProvider provider(frame);
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+    detector.addSpec(QColor(0, 0, 255), QStringLiteral("person"));
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setTargetDetector(&detector);
+    app.setCommandFrameProvider(&provider);
+    app.setReframeCommandExecutor(prepareExecutor());
+
+    QVERIFY(!app.runReframeCommandTo(QStringLiteral("look at the person"), 0, 1000,
+                                     directory.filePath(QStringLiteral("out.mp4"))));
+    const ReframeCommandOutcome &outcome = app.lastReframeCommandOutcome();
+    QVERIFY(!outcome.ok);
+    QVERIFY(outcome.resolvedTargets.isEmpty());
+    QVERIFY(outcome.unresolvedReferences.contains(QStringLiteral("person")));
+}
+
+void ProjectTest::applicationReframeCommandMissingDetectorIsHonest()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    // No detector is installed: a subject command must not be guessed.
+    app.setReframeCommandExecutor(prepareExecutor());
+    QVERIFY(!app.runReframeCommandTo(QStringLiteral("look at the person"), 0, 1000,
+                                     directory.filePath(QStringLiteral("out.mp4"))));
+    QVERIFY(app.lastReframeCommandOutcome().error.contains(
+        QStringLiteral("detector")));
+}
+
+void ProjectTest::applicationReframeCommandInvalidRangeIsHonest()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandExecutor(prepareExecutor());
+    QVERIFY(!app.runReframeCommandTo(QStringLiteral("follow person 1"), 1000, 0,
+                                     directory.filePath(QStringLiteral("out.mp4"))));
+    QVERIFY(app.lastReframeCommandOutcome().error.contains(QStringLiteral("range")));
+}
+
+void ProjectTest::applicationReframeCommandRenderFailurePropagates()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    const QString outputPath = directory.filePath(QStringLiteral("out.mp4"));
+    app.setReframeCommandExecutor(
+        [](const ReframeCommandRequest &, TargetDetector *,
+           ReframeFrameProvider *) {
+            ReframeCommandResult result;
+            result.ok = false;
+            result.error = QStringLiteral("simulated render failure");
+            return result;
+        });
+
+    bool signalFired = false;
+    QObject::connect(&app, &Application::reframeCommandFinished,
+                     [&signalFired](const ReframeCommandOutcome &) {
+                         signalFired = true;
+                     });
+
+    QVERIFY(!app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                     outputPath));
+    QVERIFY(signalFired);
+    const ReframeCommandOutcome &outcome = app.lastReframeCommandOutcome();
+    QVERIFY(!outcome.ok);
+    QCOMPARE(outcome.error, QStringLiteral("simulated render failure"));
+    QCOMPARE(outcome.outputPath, QFileInfo(outputPath).absoluteFilePath());
+}
+
+void ProjectTest::applicationReframeCommandIsDeterministic()
+{
+    const QImage frame = buildTargetEquirect(
+        360, 180, { EquirectDisk{ 30.0, 0.0, 10.0, QColor(255, 0, 0) } });
+    StaticEquirectProvider provider(frame);
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setTargetDetector(&detector);
+    app.setCommandFrameProvider(&provider);
+    QList<ReframeCommandRequest> requests;
+    app.setReframeCommandExecutor(
+        [&requests](const ReframeCommandRequest &request, TargetDetector *d,
+                    ReframeFrameProvider *p) {
+            requests.append(request);
+            return ReframeCommandRunner::prepare(request, d, p);
+        });
+    const QString outputPath = directory.filePath(QStringLiteral("out.mp4"));
+
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("look at the person"), 0, 1000,
+                                    outputPath));
+    const ReframeCommandOutcome first = app.lastReframeCommandOutcome();
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("look at the person"), 0, 1000,
+                                    outputPath));
+    const ReframeCommandOutcome second = app.lastReframeCommandOutcome();
+
+    QCOMPARE(first.resolvedTargets.size(), second.resolvedTargets.size());
+    QVERIFY(qAbs(first.resolvedTargets.at(0).yawDeg
+                 - second.resolvedTargets.at(0).yawDeg) < 1e-12);
+    QCOMPARE(first.outputWidth, second.outputWidth);
+    QCOMPARE(requests.size(), 2);
+    QCOMPARE(requests.at(0).instruction, requests.at(1).instruction);
+    QCOMPARE(requests.at(0).sourcePath, requests.at(1).sourcePath);
+    QCOMPARE(requests.at(0).outputPath, requests.at(1).outputPath);
+    QCOMPARE(requests.at(0).defaultRange.startMs,
+             requests.at(1).defaultRange.startMs);
+}
+
+void ProjectTest::applicationReframeCommandDoesNotModifySource()
+{
+    const QImage frame = buildTargetEquirect(
+        360, 180, { EquirectDisk{ 20.0, 0.0, 10.0, QColor(255, 0, 0) } });
+    StaticEquirectProvider provider(frame);
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QString media;
+    QVERIFY(setupActiveMedia(app, directory, &media));
+    app.setTargetDetector(&detector);
+    app.setCommandFrameProvider(&provider);
+    app.setReframeCommandExecutor(prepareExecutor());
+
+    const QFileInfo before(media);
+    const qint64 sizeBefore = before.size();
+    const QDateTime modifiedBefore = before.lastModified();
+
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("look at the person"), 0, 1000,
+                                    directory.filePath(QStringLiteral("out.mp4"))));
+
+    const QFileInfo after(media);
+    QCOMPARE(after.size(), sizeBefore);
+    QCOMPARE(after.lastModified(), modifiedBefore);
+}
+
+void ProjectTest::mainWindowReframeCommandInputEmitsRequest()
+{
+    TestMainWindow window;
+    QSignalSpy spy(&window, &MainWindow::reframeCommandRequested);
+    auto *edit = window.findChild<QLineEdit *>("reframeCommandEdit");
+    auto *start = window.findChild<QDoubleSpinBox *>("reframeStartSeconds");
+    auto *end = window.findChild<QDoubleSpinBox *>("reframeEndSeconds");
+    auto *button = window.findChild<QPushButton *>("runReframeCommandButton");
+    QVERIFY(edit);
+    QVERIFY(start);
+    QVERIFY(end);
+    QVERIFY(button);
+
+    edit->setText(QStringLiteral("follow person 1"));
+    start->setValue(2.0);
+    end->setValue(5.0);
+    button->click();
+
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.first().at(0).toString(), QStringLiteral("follow person 1"));
+    QCOMPARE(spy.first().at(1).toLongLong(), qint64(2000));
+    QCOMPARE(spy.first().at(2).toLongLong(), qint64(5000));
+}
+
+void ProjectTest::mainWindowShowsReframeCommandResult()
+{
+    TestMainWindow window;
+    ReframeCommandOutcome success;
+    success.ok = true;
+    success.outputPath = QStringLiteral("/tmp/reframe_out.mp4");
+    success.frameCount = 12;
+    window.showReframeCommandResult(success);
+
+    auto *label = window.findChild<QLabel *>("reframeResultLabel");
+    QVERIFY(label);
+    QVERIFY(label->text().contains(QStringLiteral("succeeded")));
+    QVERIFY(label->text().contains(QStringLiteral("12")));
+
+    ReframeCommandOutcome failure;
+    failure.ok = false;
+    failure.error = QStringLiteral("unresolved subject reference");
+    window.showReframeCommandResult(failure);
+    QVERIFY(label->text().contains(QStringLiteral("failed")));
+    QVERIFY(label->text().contains(QStringLiteral("unresolved subject reference")));
+}
+
+// Real application command path (Objective 9; skipped unless configured).
+void ProjectTest::realApplicationCommandIntegration()
+{
+    const QString python = qEnvironmentVariable("REELCRAFT_TARGET_DETECTOR_PY");
+    const QString script = qEnvironmentVariable("REELCRAFT_TARGET_DETECTOR_SCRIPT");
+    const QString model = qEnvironmentVariable("REELCRAFT_TARGET_YOLOX_MODEL");
+    const QString clip = qEnvironmentVariable("REELCRAFT_TARGET_CLIP");
+    if (python.isEmpty() || script.isEmpty() || model.isEmpty() || clip.isEmpty()) {
+        QSKIP("real application command integration not configured "
+              "(set REELCRAFT_TARGET_DETECTOR_PY/_SCRIPT, "
+              "REELCRAFT_TARGET_YOLOX_MODEL, REELCRAFT_TARGET_CLIP)");
+    }
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable");
+    }
+
+    ProcessTargetDetector detector(python,
+                                   { script, QStringLiteral("--model"), model });
+    QTemporaryDir outputDirectory;
+    QString outputPath = qEnvironmentVariable("REELCRAFT_COMMAND_OUTPUT");
+    if (outputPath.isEmpty()) {
+        QVERIFY(outputDirectory.isValid());
+        outputPath = outputDirectory.filePath(QStringLiteral("app_command.mp4"));
+    }
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(clip));
+    QVERIFY(app.setActiveMedia(app.mediaItems().first().id()));
+    app.setTargetDetector(&detector);
+    app.setReframeDefaultOutput(640, 360, 2.0);
+
+    const bool ok =
+        app.runReframeCommandTo(QStringLiteral("follow person 1"), 0, 12000,
+                                outputPath);
+    const ReframeCommandOutcome &outcome = app.lastReframeCommandOutcome();
+    qInfo("application command: ok=%d frames=%d output=%s", ok ? 1 : 0,
+          outcome.frameCount, qPrintable(outcome.outputPath));
+    for (const QString &note : outcome.notes) {
+        qInfo("  app command note: %s", qPrintable(note));
+    }
+    QVERIFY2(outcome.ok, qPrintable(outcome.error));
+    QCOMPARE(outcome.resolvedTargets.size(), 1);
+    QCOMPARE(outcome.sourceMediaId, app.activeMediaId());
+    QVERIFY(outcome.frameCount > 0);
+    QVERIFY(QFileInfo::exists(outcome.outputPath));
+    QVERIFY(QFileInfo(outcome.outputPath).size() > 0);
 }
 
 

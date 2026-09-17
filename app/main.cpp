@@ -1,6 +1,9 @@
 #include <QApplication>
 
+#include <memory>
+
 #include "application/Application.h"
+#include "target/ProcessTargetDetector.h"
 #include "ui/MainWindow.h"
 #include "ui/ViewerWidget.h"
 #include "viewer/ViewportState.h"
@@ -42,6 +45,10 @@ int main(int argc, char *argv[])
                      &window, &MainWindow::showProject);
     QObject::connect(&application, &Application::backgroundCompleted,
                      &window, &MainWindow::showStatus);
+    QObject::connect(&window, &MainWindow::reframeCommandRequested,
+                     &application, &Application::runReframeCommand);
+    QObject::connect(&application, &Application::reframeCommandFinished,
+                     &window, &MainWindow::showReframeCommandResult);
     QObject::connect(&application, &Application::mediaListChanged,
                      &window, &MainWindow::showMediaList);
     QObject::connect(&application, &Application::activeMediaChanged,
@@ -81,6 +88,25 @@ int main(int argc, char *argv[])
                          &application, &Application::adjustViewportPitch);
         QObject::connect(window.viewerWidget(), &ViewerWidget::viewportFovDeltaRequested,
                          &application, &Application::adjustViewportFieldOfView);
+    }
+
+    // Optional external target detector for subject-referencing commands
+    // ("follow person 1", "follow me"). The model/runtime stay external and
+    // replaceable; without it, subject commands report a clear detector error.
+    std::unique_ptr<TargetDetector> commandDetector;
+    const QString detectorPython =
+        qEnvironmentVariable("REELCRAFT_TARGET_DETECTOR_PY");
+    const QString detectorScript =
+        qEnvironmentVariable("REELCRAFT_TARGET_DETECTOR_SCRIPT");
+    const QString detectorModel =
+        qEnvironmentVariable("REELCRAFT_TARGET_YOLOX_MODEL");
+    if (!detectorPython.isEmpty() && !detectorScript.isEmpty()
+        && !detectorModel.isEmpty()) {
+        commandDetector = std::make_unique<ProcessTargetDetector>(
+            detectorPython,
+            QStringList{ detectorScript, QStringLiteral("--model"),
+                         detectorModel });
+        application.setTargetDetector(commandDetector.get());
     }
 
     return app.exec();

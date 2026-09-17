@@ -3,10 +3,13 @@
 #include <QImage>
 #include <QMainWindow>
 
+#include "application/ReframeCommandOutcome.h"
 #include "core/MediaItem.h"
 #include "core/Project.h"
 
 class QLabel;
+class QLineEdit;
+class QDoubleSpinBox;
 class QListWidget;
 class QPushButton;
 class QKeyEvent;
@@ -50,6 +53,9 @@ public slots:
     // Updates the preview time readout (seconds).
     void showPreviewTime(double seconds);
 
+    // Presents the structured result of a 360 reframe command (Objective 9).
+    void showReframeCommandResult(const ReframeCommandOutcome &outcome);
+
 signals:
     void newProjectRequested();
     void saveProjectRequested(const QString &filePath);
@@ -60,6 +66,8 @@ signals:
     void previewFrameRequested();
     void previewStepRequested(double deltaSeconds);
     void setMediaProjectionRequested(const QString &mediaId, const QString &projectionValue);
+    void reframeCommandRequested(const QString &instruction, qint64 startMs,
+                                 qint64 endMs);
     void backgroundDemoRequested();
     void resetViewportRequested();
     void viewportYawDeltaRequested(double delta);
@@ -93,6 +101,13 @@ private:
 
     QLabel *m_previewTimeLabel = nullptr;
     QListWidget *m_mediaListWidget = nullptr;
+
+    // 360 reframe command interface (Objective 9).
+    QLineEdit *m_commandEdit = nullptr;
+    QDoubleSpinBox *m_commandStartSeconds = nullptr;
+    QDoubleSpinBox *m_commandEndSeconds = nullptr;
+    QPushButton *m_runCommandButton = nullptr;
+    QLabel *m_commandResultLabel = nullptr;
 
     ViewerWidget *m_viewerWidget = nullptr;
 

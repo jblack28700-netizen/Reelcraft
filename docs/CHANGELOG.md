@@ -612,4 +612,14 @@ Date: 2026-09-17
 - New env-gated `realUserCommandIntegration` test exercises the full command path on real 360 footage with the Apache-2.0 YOLOX detector; the normal suite stays model-free.
 - Decision 025 records the composition boundary; Decisions 017-024 preserved.
 
+## v0.2.46 — Application-Level 360 Command Orchestration
+
+Date: 2026-09-17
+
+- Wired the 360 command path into the application. `Application::runReframeCommand()` / `runReframeCommandTo()` select the active media, validate application state and the output location, build a `ReframeCommandRequest`, delegate to the existing `ReframeCommandRunner`, and expose a structured `ReframeCommandOutcome` (source reference, instruction, effective range, output spec/path, frame count, notes, unresolved references, resolved targets; JSON-serializable). No runner logic is duplicated and the source media is never modified.
+- Added optional, non-owned detector/frame-provider inputs and an injectable command-executor seam; `main.cpp` builds a `ProcessTargetDetector` from `REELCRAFT_TARGET_*` when configured, so subject commands work in the product without linking an ML runtime.
+- Added a minimal command UI to `MainWindow` (command input, start/end seconds, run button, result label) wired through `reframeCommandRequested`/`reframeCommandFinished`.
+- 17 new model-free application tests (validation, delegation, outcome/error propagation, determinism, source non-modification, UI). Full model-free suite 326 passed / 0 failed / 3 skipped. New env-gated `realApplicationCommandIntegration`.
+- Hardened `TargetResolver::resolveSequence`: a single undecodable sample (for example the exact end of a clip) is now recorded and skipped instead of aborting the whole sequence, so range-end sampling cannot fail resolution.
+- Decision 026 records the orchestration boundary; Decisions 017-025 preserved.
 

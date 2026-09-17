@@ -4,10 +4,20 @@
 #include <QImage>
 #include <QList>
 
+#include <functional>
+
+#include "application/ReframeCommandOutcome.h"
 #include "core/MediaItem.h"
 #include "core/Project.h"
+#include "reframe/ReframeCommandRunner.h"
 
 class ViewportState;
+
+// The application-level command execution function. It defaults to
+// ReframeCommandRunner::run; tests inject a fake or a prepare-only executor so
+// application orchestration stays model-free and deterministic.
+using ReframeCommandExecutor = std::function<ReframeCommandResult(
+    const ReframeCommandRequest &, TargetDetector *, ReframeFrameProvider *)>;
 
 class Application : public QObject
 {
@@ -96,6 +106,37 @@ public slots:
     // media id. Re-emits mediaListChanged so presentation routing updates.
     bool declareMediaProjection(const QString &mediaId, const QString &projectionValue);
 
+    // --- 360 reframe command orchestration (Objective 9) --------------------
+    // Runs a natural-language reframe command against the ACTIVE media through
+    // the existing ReframeCommandRunner. The application owns input/lifecycle
+    // validation, output-path handling, and structured user feedback; command
+    // interpretation/resolution/planning/execution are delegated (no duplicate
+    // logic). startMs/endMs are the fallback source range used when the command
+    // does not specify one and must be a valid range. The original media is
+    // never modified. Emits reframeCommandFinished() for success and failure.
+    bool runReframeCommand(const QString &instruction, qint64 startMs, qint64 endMs);
+
+    // As above, but with an explicit output path. An empty path derives a
+    // deterministic default next to the source (<base>_reframe.mp4).
+    bool runReframeCommandTo(const QString &instruction, qint64 startMs,
+                             qint64 endMs, const QString &outputPath);
+
+    // The most recent command outcome (session state; not persisted).
+    const ReframeCommandOutcome &lastReframeCommandOutcome() const;
+
+    // Optional, replaceable command inputs. The application does NOT own them.
+    void setTargetDetector(TargetDetector *detector);
+    TargetDetector *targetDetector() const;
+    void setCommandFrameProvider(ReframeFrameProvider *provider);
+    ReframeFrameProvider *commandFrameProvider() const;
+
+    // Test/DI seam: the command executor defaults to ReframeCommandRunner::run.
+    void setReframeCommandExecutor(const ReframeCommandExecutor &executor);
+    void resetReframeCommandExecutor();
+
+    // Default output specification used when the command does not specify one.
+    void setReframeDefaultOutput(int width, int height, double fps);
+
 signals:
     void projectChanged(const Project &project);
     void backgroundCompleted(const QString &message);
@@ -114,8 +155,13 @@ signals:
     // Emitted whenever the current preview time position changes.
     void previewTimeChanged(double seconds);
 
+    // Emitted after every 360 reframe command attempt (success or failure) with
+    // structured, application-visible information.
+    void reframeCommandFinished(const ReframeCommandOutcome &outcome);
+
 private:
     bool decodePreviewFrameAt(double targetSeconds);
+    QString defaultReframeOutputPath(const MediaItem &media) const;
 
     QJsonArray mediaJson() const;
     void restoreMediaFromJson(const QJsonArray &media);
@@ -130,4 +176,13 @@ private:
     QList<MediaItem> m_mediaItems;
     QString m_activeMediaId;
     double m_previewTimeSeconds = 0.0;
+
+    // 360 reframe command orchestration (Objective 9).
+    ReframeCommandExecutor m_commandExecutor;
+    TargetDetector *m_targetDetector = nullptr;
+    ReframeFrameProvider *m_commandFrameProvider = nullptr;
+    ReframeCommandOutcome m_lastReframeOutcome;
+    int m_reframeOutputWidth = 1920;
+    int m_reframeOutputHeight = 1080;
+    double m_reframeOutputFps = 30.0;
 };

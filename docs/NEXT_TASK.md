@@ -290,8 +290,23 @@ Exercise the full 360 command path end to end on real footage — user instructi
 - 8 new model-free tests; full model-free suite 308 passed / 0 failed / 2 skipped. New env-gated `realUserCommandIntegration` exercises the command path on real footage.
 - Architecture decision: Decision 025.
 
-## Next Objective — Application-Level 360 Command Orchestration — NOT STARTED
+## 360 Reframing Objective 9 — Application-Level 360 Command Orchestration — Complete
 
-Make the 360 command path usable from the product: have `Application` own the command runner, source media, and output, preserve the Objective 10 preview-time contract, and expose a deterministic run/preview boundary (an event-loop driver invokes execution; the viewer stays presentation-only). Speaker-aware commands and GPU optimization remain further candidates. Requires its own scoped objective; do not begin automatically.
+Status: **Complete — implemented and verified (2026-09-17).**
+
+### Objective
+Wire the library-level `ReframeCommandRunner` into the Reelcraft application so a user can submit a natural-language 360 editing command and the application executes the existing deterministic pipeline, while the application owns inputs, lifecycle, output handling, user feedback, and errors.
+
+### Scope (implemented)
+- `Application::runReframeCommand()` / `runReframeCommandTo()`: active-media selection, application-state and output-location validation, request construction, delegation to the default `ReframeCommandRunner::run` executor, and mapping into the application-visible `ReframeCommandOutcome`.
+- `app/application/ReframeCommandOutcome.h`: structured success/failure, source/instruction/range/output/dimensions/frame count/notes/unresolved/resolved-targets; JSON-serializable; emitted via `reframeCommandFinished`.
+- Optional, non-owned detector/provider inputs; `main.cpp` builds a `ProcessTargetDetector` from `REELCRAFT_TARGET_*`. Injectable executor seam for model-free tests.
+- Minimal UI command input/range/run/result in `MainWindow`.
+- 17 new model-free tests; full model-free suite 325 passed / 0 failed / 3 skipped. New env-gated `realApplicationCommandIntegration`.
+- Architecture decision: Decision 026.
+
+## Next Objective — Persisted Outputs and Duration-Aware Ranges — NOT STARTED
+
+Persist generated renders (or add a project output section) and add duration-aware full-clip ranges via the deferred ffprobe duration metadata, so range-less commands can default to the whole clip. Speaker-aware commands and GPU optimization remain further candidates. Requires its own scoped objective; do not begin automatically.
 
 

@@ -54,6 +54,7 @@ SOURCES += \
 
 HEADERS += \
     app/application/Application.h \
+    app/application/ReframeCommandOutcome.h \
     app/core/MediaItem.h \
     app/core/Project.h \
     app/media/FfmpegFrameSource.h \

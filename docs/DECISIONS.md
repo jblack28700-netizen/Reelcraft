@@ -805,3 +805,26 @@ Objectives 1–7 built the 360 pipeline as separate layers: a structured `Refram
 - A new env-gated `realUserCommandIntegration` test exercises the full command path on real 360 footage with the Apache-2.0 YOLOX detector (command -> resolve -> plan -> render); the normal suite stays model-free. Real-run evidence is recorded in `CURRENT_STATE.md` and `DEVELOPMENT_LOG.md`.
 - This is the composition layer future work builds on (speaker-aware commands, Application/UI wiring); it does not change the detector, geometry, identity, appearance, speaker, planner, or renderer internals. Decisions 017–024 preserved.
 
+# Decision 026 — Application-Level 360 Command Orchestration Boundary
+
+**Status:** Accepted (2026-09-17, 360 Reframing Objective 9)
+
+## Context
+
+Objective 8 delivered `ReframeCommandRunner`, a library-level composition entry point that turns an instruction plus a 360 source into a validated `ReframePlan` and a rendered flat video. It was not reachable from the product: `Application` owned project/media/viewport and `MainWindow` exposed media/preview/viewport controls, but nothing accepted a 360 editing command or surfaced its result. Objective 9 wires the command path into the application without duplicating the runner's logic and without expanding into general UI work.
+
+## Decisions
+
+- **The application owns orchestration, not interpretation.** `Application::runReframeCommand()` (and `runReframeCommandTo()` for an explicit output path) resolves the active media, validates application state and the output location, builds a `ReframeCommandRequest`, delegates to the command executor, and maps the `ReframeCommandResult` into an application-visible `ReframeCommandOutcome`. Parsing, subject resolution, identity/selection, planning, and execution stay in `ReframeCommandRunner`; no logic is duplicated.
+- **Structured, application-visible result.** `ReframeCommandOutcome` (`app/application/ReframeCommandOutcome.h`) records success/failure, the source media reference, the instruction, the effective time range, the output specification and path, the frame count, notes, unresolved references, and resolved target directions. It is JSON-serializable and emitted through `reframeCommandFinished()` for success and failure alike. Runner errors propagate verbatim; nothing is silently substituted or fabricated.
+- **Injectable, optional inputs.** The target detector and command frame provider are non-owned, replaceable inputs (`setTargetDetector`, `setCommandFrameProvider`); the application does not own their lifetime. `main.cpp` builds a `ProcessTargetDetector` from `REELCRAFT_TARGET_DETECTOR_PY`/`_SCRIPT`/`REELCRAFT_TARGET_YOLOX_MODEL` when configured, so subject-referencing commands work in the product without linking an ML runtime; otherwise they report a clear detector error.
+- **Test/DI execution seam.** The command executor is a `std::function` defaulting to `ReframeCommandRunner::run`; tests inject a fake or a prepare-only executor, keeping application tests model-free and deterministic. This is the only new application boundary.
+- **Minimal UI, no redesign.** `MainWindow` gained one command input, a start/end seconds pair, a run button, and a result label, emitting `reframeCommandRequested(instruction, startMs, endMs)`; `main.cpp` connects it to `Application::runReframeCommand` and connects `reframeCommandFinished` to `MainWindow::showReframeCommandResult`.
+- **Outputs are session state; the source is never modified.** Each outcome records the output path; generated renders are not persisted in the project schema (the project has no output section and duration/metadata probing remains deferred). The application refuses to run when the output path equals the source path and never writes to the source.
+- **Range-less commands need a caller default.** Because no duration/ffprobe metadata exists, the UI supplies a fallback start/end range; a command that contains its own time range overrides it (the runner decides). A range-less command with an invalid fallback range fails honestly.
+
+## Consequences
+
+- 17 new model-free application tests cover project/active-media/empty-command validation, missing source, invalid output directory, source-equals-output, request delegation and outcome mapping, model-free subject resolution, unresolved/ambiguous honesty, missing detector, invalid range, render-failure propagation, determinism, source non-modification, the UI request signal, and result presentation; a resolver-robustness test proves an undecodable sample no longer aborts sequence resolution. Full model-free suite: 326 passed / 0 failed / 3 skipped.
+- A new env-gated `realApplicationCommandIntegration` exercises the application command path on real 360 footage with the Apache-2.0 YOLOX detector; the normal suite stays model-free. Real-run evidence is recorded in `CURRENT_STATE.md` and `DEVELOPMENT_LOG.md`.
+- `ReframeCommandRunner` and everything below it are unchanged; Decisions 017–025 preserved. Persisting rendered outputs and full-clip (duration-aware) ranges remain future work.

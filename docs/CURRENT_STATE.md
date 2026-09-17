@@ -2,7 +2,7 @@
 
 ## Current Version
 
-0.2.45
+0.2.46
 
 ## Current Branch
 
@@ -10,7 +10,7 @@ main
 
 ## Current Stage
 
-Phase 4 — 360 Reframing Engine (deterministic vertical slice), Target/Subject Resolution, real detector integration, structured target identity/selection, optional appearance-based re-identification, optional audio/speaker evidence, an audio-visual provider-attribution seam, and end-to-end user-command execution implemented and verified. Phase 3 Media Engine remains open; its player-lifecycle objective is intentionally superseded for now by the human-approved 360 priority.
+Phase 4 — 360 Reframing Engine (deterministic vertical slice), Target/Subject Resolution, real detector integration, structured target identity/selection, optional appearance-based re-identification, optional audio/speaker evidence, an audio-visual provider-attribution seam, end-to-end user-command execution, and application-level command orchestration implemented and verified. Phase 3 Media Engine remains open; its player-lifecycle objective is intentionally superseded for now by the human-approved 360 priority.
 
 ## Project Status
 
@@ -1014,7 +1014,18 @@ Status: Complete (2026-09-17). Provides a single composition entry point for the
 - Real footage (`realUserCommandIntegration`, audio+video proxy; original untouched): the command "follow person 1" resolved to track t1 (ordinal) at yaw -27.80 and rendered a held-camera flat 640x360 clip (24 frames).
 - Architecture decision: Decision 025.
 
-Next: Application-level 360 command orchestration (make the command path usable from the product). Speaker-aware commands and GPU optimization remain further candidates. A real audio-visual/diarization provider also remains future work behind the Objective 7 seam.
+## Phase 4 Objective 9 — Application-Level 360 Command Orchestration — Complete
+
+Status: Complete (2026-09-17). Wires the library-level `ReframeCommandRunner` into the application so a user can submit a 360 editing command and have the product execute the deterministic pipeline.
+
+- `Application::runReframeCommand()`/`runReframeCommandTo()` resolve the active media, validate application state and the output location, build a `ReframeCommandRequest`, delegate to the command executor (default `ReframeCommandRunner::run`), and map the result into an application-visible `ReframeCommandOutcome` (`app/application/ReframeCommandOutcome.h`). No runner logic is duplicated; the source is never modified.
+- The target detector and frame provider are optional, non-owned, replaceable inputs; `main.cpp` builds a `ProcessTargetDetector` from the `REELCRAFT_TARGET_*` environment when configured. The executor is an injectable seam so application tests stay model-free.
+- Minimal UI: `MainWindow` gained a command input, start/end seconds, a run button, and a result label; `reframeCommandRequested`/`reframeCommandFinished` connect it to the application.
+- 17 new model-free application tests (plus a resolver-robustness test); full model-free suite 326 passed, 0 failed, 3 skipped. New env-gated `realApplicationCommandIntegration`.
+- Real footage (`realApplicationCommandIntegration`, audio+video proxy; original untouched): the command "follow person 1" resolved to track t1 (ordinal), rendered 24 frames to a 640x360 clip, and the range-end 12000 ms sample was honestly recorded as undecodable and skipped.
+- Architecture decision: Decision 026.
+
+Next: persist generated renders (or a project output section) and add duration-aware full-clip ranges (the deferred ffprobe duration metadata). Speaker-aware commands and GPU optimization remain further candidates.
 
 
 

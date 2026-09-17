@@ -179,12 +179,15 @@ bool TargetResolver::resolveSequence(ReframeFrameProvider *provider,
         QImage frame;
         QString providerError;
         if (!provider->frameAt(timeMs, &frame, &providerError)) {
-            if (error) {
-                *error = QStringLiteral("Frame at %1 ms failed: %2")
-                             .arg(timeMs)
-                             .arg(providerError);
-            }
-            return false;
+            // A single undecodable sample (for example the exact end of a clip,
+            // or one corrupt frame) must not abort the whole sequence: record it
+            // and continue. If no sample resolves, the result is honestly empty.
+            m_notes.append(QStringLiteral("Frame at %1 ms could not be decoded: %2")
+                               .arg(timeMs)
+                               .arg(providerError.isEmpty()
+                                        ? QStringLiteral("unknown error")
+                                        : providerError));
+            continue;
         }
         if (!resolveFrame(frame, timeMs, query, detector, nullptr, error)) {
             return false;

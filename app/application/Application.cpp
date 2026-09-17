@@ -1,6 +1,8 @@
 #include "Application.h"
 
 #include <QtConcurrent/QtConcurrent>
+#include <QDir>
+#include <QFileInfo>
 #include <QSet>
 #include <QThread>
 
@@ -11,6 +13,7 @@ Application::Application(QObject *parent)
     : QObject(parent),
       m_viewportState(new ViewportState(this))
 {
+    resetReframeCommandExecutor();
 }
 
 void Application::initialize()
@@ -437,4 +440,177 @@ int Application::unavailableMediaCount() const
 bool Application::hasUnavailableMedia() const
 {
     return unavailableMediaCount() > 0;
+}
+
+bool Application::runReframeCommand(const QString &instruction, qint64 startMs,
+                                    qint64 endMs)
+{
+    return runReframeCommandTo(instruction, startMs, endMs, QString());
+}
+
+bool Application::runReframeCommandTo(const QString &instruction, qint64 startMs,
+                                      qint64 endMs, const QString &outputPath)
+{
+    ReframeCommandOutcome outcome;
+    outcome.instruction = instruction.trimmed();
+    outcome.startMs = startMs;
+    outcome.endMs = endMs;
+    outcome.outputWidth = m_reframeOutputWidth;
+    outcome.outputHeight = m_reframeOutputHeight;
+    outcome.outputFps = m_reframeOutputFps;
+
+    // Every path (success and failure) records and emits the structured
+    // outcome; nothing is silently substituted.
+    const auto finish = [this, &outcome]() {
+        m_lastReframeOutcome = outcome;
+        emit reframeCommandFinished(m_lastReframeOutcome);
+        return m_lastReframeOutcome.ok;
+    };
+
+    if (!m_hasProject) {
+        outcome.error = QStringLiteral(
+            "Open or create a project before running a reframe command.");
+        return finish();
+    }
+    if (outcome.instruction.isEmpty()) {
+        outcome.error = QStringLiteral("Enter a reframe command.");
+        return finish();
+    }
+    const MediaItem *media = activeMediaItem();
+    if (!media) {
+        outcome.error = QStringLiteral(
+            "Select an active media item before running a reframe command.");
+        return finish();
+    }
+    if (!media->referenceExists()) {
+        outcome.error = QStringLiteral(
+            "The active media file is unavailable: %1").arg(media->path());
+        return finish();
+    }
+    outcome.sourceMediaId = media->id();
+    outcome.sourcePath = media->path();
+
+    QString resolvedOutput = outputPath.trimmed();
+    if (resolvedOutput.isEmpty()) {
+        resolvedOutput = defaultReframeOutputPath(*media);
+    }
+    const QFileInfo outputInfo(resolvedOutput);
+    const QDir outputDir = outputInfo.absoluteDir();
+    if (!outputDir.exists()) {
+        outcome.error = QStringLiteral(
+            "The output directory does not exist: %1")
+                            .arg(outputDir.absolutePath());
+        return finish();
+    }
+    if (outputInfo.absoluteFilePath()
+        == QFileInfo(media->path()).absoluteFilePath()) {
+        outcome.error = QStringLiteral(
+            "The output path must differ from the source media path.");
+        return finish();
+    }
+    outcome.outputPath = outputInfo.absoluteFilePath();
+
+    // Delegate interpretation, resolution, planning, and execution to the
+    // library-level composition boundary (no duplicated logic here).
+    ReframeCommandRequest request;
+    request.sourcePath = media->path();
+    request.sourceMediaId = media->id();
+    request.instruction = outcome.instruction;
+    request.outputPath = outcome.outputPath;
+    request.defaultRange = ReframePlan::TimeRange{ startMs, endMs };
+    request.defaultOutput = ReframePlan::OutputSpec{
+        m_reframeOutputWidth, m_reframeOutputHeight, m_reframeOutputFps };
+
+    const ReframeCommandResult result =
+        m_commandExecutor(request, m_targetDetector, m_commandFrameProvider);
+
+    outcome.notes = result.notes;
+    outcome.unresolvedReferences = result.unresolvedReferences;
+    outcome.resolvedTargets = result.resolvedTargets;
+    if (result.intent.hasTimeRange) {
+        outcome.startMs = result.intent.startMs;
+        outcome.endMs = result.intent.endMs;
+    }
+    const ReframePlan::OutputSpec planOutput = result.plan.output();
+    if (planOutput.isValid()) {
+        outcome.outputWidth = planOutput.width;
+        outcome.outputHeight = planOutput.height;
+        outcome.outputFps = planOutput.fps;
+    }
+
+    if (!result.ok) {
+        outcome.ok = false;
+        outcome.error = result.error.isEmpty()
+            ? QStringLiteral("The reframe command failed.")
+            : result.error;
+        return finish();
+    }
+    outcome.ok = true;
+    outcome.frameCount = result.frameCount;
+    if (!result.outputPath.isEmpty()) {
+        outcome.outputPath = result.outputPath;
+    }
+    return finish();
+}
+
+const ReframeCommandOutcome &Application::lastReframeCommandOutcome() const
+{
+    return m_lastReframeOutcome;
+}
+
+void Application::setTargetDetector(TargetDetector *detector)
+{
+    m_targetDetector = detector;
+}
+
+TargetDetector *Application::targetDetector() const
+{
+    return m_targetDetector;
+}
+
+void Application::setCommandFrameProvider(ReframeFrameProvider *provider)
+{
+    m_commandFrameProvider = provider;
+}
+
+ReframeFrameProvider *Application::commandFrameProvider() const
+{
+    return m_commandFrameProvider;
+}
+
+void Application::setReframeCommandExecutor(
+    const ReframeCommandExecutor &executor)
+{
+    if (executor) {
+        m_commandExecutor = executor;
+    }
+}
+
+void Application::resetReframeCommandExecutor()
+{
+    m_commandExecutor = [](const ReframeCommandRequest &request,
+                           TargetDetector *detector,
+                           ReframeFrameProvider *provider) {
+        return ReframeCommandRunner::run(request, detector, provider);
+    };
+}
+
+void Application::setReframeDefaultOutput(int width, int height, double fps)
+{
+    if (width > 0) {
+        m_reframeOutputWidth = width;
+    }
+    if (height > 0) {
+        m_reframeOutputHeight = height;
+    }
+    if (fps > 0.0) {
+        m_reframeOutputFps = fps;
+    }
+}
+
+QString Application::defaultReframeOutputPath(const MediaItem &media) const
+{
+    const QFileInfo info(media.path());
+    return info.absoluteDir().filePath(
+        info.completeBaseName() + QStringLiteral("_reframe.mp4"));
 }

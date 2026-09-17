@@ -62,6 +62,8 @@ Do not assume that planned architecture has already been implemented; read `CURR
 
 An end-to-end 360 **user-command execution** path is implemented (Decision 025): `app/reframe/ReframeCommandRunner` composes the parsed instruction, the replaceable detector/tracker, identity/selection, the validated `ReframePlan`, and the deterministic renderer behind a single entry point (`prepare()` = decision stage; `run()` = decision + execution). Unresolved or ambiguous subject references are reported, never fabricated; a direction-only command needs no detector. The normal suite stays model-free; an env-gated `realUserCommandIntegration` test exercises the path on real footage.
 
+That command path is now reachable from the application (Decision 026): `Application::runReframeCommand()`/`runReframeCommandTo()` select the active media, validate application state and the output location, delegate to `ReframeCommandRunner`, and emit a structured `ReframeCommandOutcome`; a minimal `MainWindow` command input/range/run/result surface and `main.cpp` wiring complete the user-visible flow. The detector and frame provider are optional, non-owned inputs (a `ProcessTargetDetector` is built from `REELCRAFT_TARGET_*` when configured). Generated renders are session state (not yet persisted), and range-less commands use a caller-supplied fallback range until duration metadata exists.
+
 ---
 
 # 4. Current Development Camera

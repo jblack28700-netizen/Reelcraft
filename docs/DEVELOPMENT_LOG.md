@@ -1316,3 +1316,39 @@ Provide a single end-to-end 360 command path — user instruction -> parsed inte
 ### Decisions
 
 - Decision 025 recorded. Decisions 017-024 preserved unchanged.
+---
+
+## 2026-09-17 — 360 Reframing Objective 9: Application-Level 360 Command Orchestration
+
+### Objective
+
+Wire the library-level `ReframeCommandRunner` into the application so a user can submit a natural-language 360 editing command and the product executes the existing deterministic pipeline, with the application owning inputs, lifecycle, output handling, user feedback, and errors.
+
+### Work completed
+
+- `app/application/ReframeCommandOutcome.h`: structured, application-visible command result (source reference, instruction, effective range, output spec/path, frame count, notes, unresolved references, resolved targets; JSON-serializable).
+- `Application::runReframeCommand()` / `runReframeCommandTo()`: active-media and application-state validation, output-location validation (directory exists; output != source), request construction, delegation to the injected executor (default `ReframeCommandRunner::run`), and result mapping; emits `reframeCommandFinished`.
+- Optional non-owned `TargetDetector`/`ReframeFrameProvider` inputs and an injectable `ReframeCommandExecutor` seam; `main.cpp` builds a `ProcessTargetDetector` from the `REELCRAFT_TARGET_*` environment.
+- Minimal `MainWindow` command UI (input, start/end seconds, run button, result label) and `main.cpp` wiring.
+- 17 new model-free application tests; new env-gated `realApplicationCommandIntegration`.
+
+### Verification
+
+- Model-free suite: 326 passed, 0 failed, 3 skipped (~60 s).
+- Standalone application build and test build both succeed.
+- Real footage (audio+video proxy; original untouched): `realApplicationCommandIntegration` ran "follow person 1" through the application path; it resolved to track t1 (ordinal) and rendered 24 frames to a 640x360 clip. The derived range-end sample (12000 ms) was honestly recorded as undecodable and skipped, proving the robustness fix.
+- Change-impact: the new application boundary and UI wiring were added; the only lower-layer change is the resolver robustness fix below.
+
+### Failure recovery
+
+- The first real application validation failed during target resolution: the runner's derived sample timestamps include the exact range end (12000 ms), and the 12 s proxy has no decodable frame past ~11.95 s. `TargetResolver::resolveSequence` previously aborted on the first undecodable sample; it now records the sample in its notes and continues, so one boundary/corrupt frame no longer fails the whole sequence (hard detector/invalid-frame errors remain fatal). A model-free `targetResolverSequenceSkipsUndecodableSample` test covers it.
+
+### Boundary notes / not implemented
+
+- Generated renders are session state: `ReframeCommandOutcome` is not persisted in the project schema. A dedicated project output section remains future work.
+- No duration/ffprobe metadata: range-less commands use the UI-supplied fallback range rather than the whole clip.
+- Speaker-aware commands, GPU optimization, and output persistence remain future work.
+
+### Decisions
+
+- Decision 026 recorded. Decisions 017-025 preserved unchanged.

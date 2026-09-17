@@ -57,6 +57,7 @@ HEADERS += \
     ../app/core/MediaItem.h \
     ../app/core/Project.h \
     ../app/application/Application.h \
+    ../app/application/ReframeCommandOutcome.h \
     ../app/media/FfmpegFrameSource.h \
     ../app/media/FrameExtractor.h \
     ../app/media/FramePump.h \
