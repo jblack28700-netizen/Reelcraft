@@ -92,9 +92,17 @@ bool FfmpegFrameSource::readNextFrame(int timeoutMs, ReadResult *result,
     timer.start();
     bool processStopped = false;
 
+    // Read any buffered output before waiting; once the process has stopped,
+    // drain everything it wrote before reporting end-of-stream so a slow
+    // (paced) consumer never loses frames that were written before exit.
     while (m_pendingBytes.size() < need && timer.elapsed() < timeoutMs) {
+        if (m_process.bytesAvailable() > 0) {
+            m_pendingBytes += m_process.readAll();
+            continue;
+        }
         if (m_process.waitForReadyRead(150)) {
             m_pendingBytes += m_process.readAll();
+            continue;
         }
         if (m_process.state() == QProcess::NotRunning) {
             processStopped = true;

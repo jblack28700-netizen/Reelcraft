@@ -13,8 +13,10 @@
 #include "core/MediaItem.h"
 #include "core/Project.h"
 #include "media/MediaDurationProbe.h"
+#include "playback/Player.h"
 #include "reframe/ReframeCommandRunner.h"
 
+class QTimer;
 class ViewportState;
 class SpeakerEvidenceProvider;
 
@@ -30,12 +32,19 @@ using ReframeCommandExecutor = std::function<ReframeCommandResult(
 using ReframePreviewDecoder =
     std::function<bool(const QString &path, QImage *out, QString *error)>;
 
+// Builds a playback source for one persisted rendered result. The default opens
+// an FfmpegFrameSource using the record's geometry; tests inject an in-memory
+// source so playback orchestration stays model-free.
+using PlaybackSourceFactory = std::function<std::unique_ptr<FrameSource>(
+    const ReframeCommandOutcome &record, QString *error)>;
+
 class Application : public QObject
 {
     Q_OBJECT
 
 public:
     explicit Application(QObject *parent = nullptr);
+    ~Application() override;
 
     void initialize();
 
@@ -192,6 +201,41 @@ public slots:
     void setReframePreviewDecoder(const ReframePreviewDecoder &decoder);
     void resetReframePreviewDecoder();
 
+    // --- rendered-result playback (Objective 13) ----------------------------
+    // Continuous deterministic playback of a PERSISTED 360 -> flat rendered
+    // result, using the existing media/player seams. The Application owns the
+    // source/pump/player for the selected record and drives Player::tick() from
+    // its own timer; the Player owns no event loop. General media playback,
+    // audio, timeline editing, and duration metadata are out of scope.
+    //
+    // startReframeOutputPlayback() opens (or replaces) the indexed render
+    // record and plays it; if that same record is currently paused it resumes.
+    // It returns false with a reason on invalid index, missing output, unknown
+    // dimensions, or source-open failure.
+    bool startReframeOutputPlayback(int index);
+    bool pauseReframeOutputPlayback();
+    bool resumeReframeOutputPlayback();
+    void stopReframeOutputPlayback();
+
+    // Event-loop driver entry point. Normally invoked by the owned timer;
+    // exposed so tests can drive playback deterministically. Returns the number
+    // of frames presented.
+    int tickReframeOutputPlayback();
+
+    bool isReframeOutputPlaybackActive() const;
+    bool isReframeOutputPlaying() const;
+    qint64 reframeOutputPlaybackFrameCount() const;
+    qint64 reframeOutputPlaybackPositionMs() const;
+    int reframeOutputPlaybackRecordIndex() const;
+
+    // Injectable test seams (non-owning). The source factory defaults to an
+    // FfmpegFrameSource opened with the record's geometry; the clock/pacing
+    // default to the Player's owned SystemClock/DefaultPacingPolicy.
+    void setPlaybackSourceFactory(const PlaybackSourceFactory &factory);
+    void resetPlaybackSourceFactory();
+    void setPlaybackClock(Clock *clock);
+    void setPlaybackPacing(PacingPolicy *pacing);
+
 signals:
     void projectChanged(const Project &project);
     void backgroundCompleted(const QString &message);
@@ -223,6 +267,19 @@ signals:
 
     // Emitted after previewReframeOutput() decodes a frame successfully.
     void reframeOutputPreviewReady(const QImage &image);
+
+    // Emitted for each presented playback frame (a flat rendered result).
+    void reframePlaybackFrameReady(const QImage &image);
+
+    // Emitted when rendered-result playback starts, pauses, or stops
+    // (playing=true only while frames are actually advancing).
+    void reframePlaybackStateChanged(bool playing);
+
+    // Emitted when the playback position advances (frame count, position ms).
+    void reframePlaybackPositionChanged(qint64 frameCount, qint64 positionMs);
+
+    // Emitted when a rendered result reaches its end.
+    void reframePlaybackEnded();
 
 private:
     bool decodePreviewFrameAt(double targetSeconds);
@@ -263,4 +320,17 @@ private:
     CreatorTargetSelection m_creatorSelection;
     bool m_hasCreatorSelection = false;
     ReframePreviewDecoder m_previewDecoder;
+
+    // Objective 13: rendered-result playback. The Application owns the playback
+    // objects and the event-loop driver; the Player owns no timer/thread.
+    PlaybackSourceFactory m_playbackSourceFactory;
+    Clock *m_playbackClock = nullptr;
+    PacingPolicy *m_playbackPacing = nullptr;
+    QTimer *m_playbackTimer = nullptr;
+    std::unique_ptr<FrameSource> m_playbackSource;
+    std::unique_ptr<FramePump> m_playbackPump;
+    std::unique_ptr<Player> m_playbackPlayer;
+    int m_playbackRecordIndex = -1;
+
+    int playbackIntervalMsForFps(double fps) const;
 };

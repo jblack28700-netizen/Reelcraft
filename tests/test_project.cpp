@@ -1023,6 +1023,16 @@ private slots:
     void mainWindowPreviewRenderButtonEmitsRequest();
     void mainWindowShowsReframeOutputPreviewFlat();
     void mainWindowShowsProviderStatus();
+    void applicationPlaybackStartsAndPresentsFrames();
+    void applicationPlaybackRequiresValidRecord();
+    void applicationPlaybackReplaceAndLifecycleDisposal();
+    void applicationPlaybackEndOfStreamEnds();
+    void applicationPlaybackPreservesSingleFramePreview();
+    void applicationPlaybackSourceFactoryFailureIsHonest();
+    void applicationPlaybackDecodeErrorStops();
+    void mainWindowPlaybackButtonsEmitRequests();
+    void mainWindowShowsPlaybackStateAndPosition();
+    void realReframePlaybackIntegration();
     void realApplicationCommandIntegration();
     void equirectDirectionFromCenterAndSides();
     void equirectPixelRoundTrip();
@@ -8546,6 +8556,464 @@ void ProjectTest::mainWindowShowsProviderStatus()
     QVERIFY(label);
     QVERIFY(label->text().contains(QStringLiteral("detector=configured")));
     QVERIFY(label->text().contains(QStringLiteral("speaker=not configured")));
+}
+
+// ================= 360 rendered-result playback (Phase 4, Obj 13) ================
+// Model-free tests for continuous playback of a persisted 360->flat rendered
+// result, driven by injected sources/clock/pacing (no models, no real media).
+
+namespace {
+
+// A small in-memory playback source that lets a test observe how many times it
+// was closed (the Application must always dispose the source).
+class PlaybackSourceDouble : public FrameSource
+{
+public:
+    enum class Mode { Frames, Error };
+
+    PlaybackSourceDouble(const QList<QImage> &frames, int *closeCount)
+        : m_frames(frames), m_closeCount(closeCount)
+    {
+    }
+
+    void setMode(Mode mode) { m_mode = mode; }
+    void setErrorText(const QString &text) { m_error = text; }
+
+    bool readNextFrame(int, ReadResult *result, QImage *outFrame) override
+    {
+        if (m_mode == Mode::Error) {
+            if (result) {
+                *result = ReadResult::Error;
+            }
+            return false;
+        }
+        if (m_index >= m_frames.size()) {
+            if (result) {
+                *result = ReadResult::EndOfStream;
+            }
+            return false;
+        }
+        if (outFrame) {
+            *outFrame = m_frames.at(m_index);
+        }
+        ++m_index;
+        if (result) {
+            *result = ReadResult::Ok;
+        }
+        return true;
+    }
+    void close() override
+    {
+        if (m_closeCount) {
+            ++(*m_closeCount);
+        }
+        m_open = false;
+    }
+    bool isOpen() const override { return m_open; }
+    QString errorString() const override { return m_error; }
+
+private:
+    QList<QImage> m_frames;
+    int m_index = 0;
+    int *m_closeCount = nullptr;
+    bool m_open = true;
+    Mode m_mode = Mode::Frames;
+    QString m_error;
+};
+
+// Creates a rendered render record (via the injected executor) whose output
+// file exists, so the Application will accept it for playback.
+bool createPlayableRecord(Application &app, const QString &outputPath)
+{
+    QFile file(outputPath);
+    if (!file.open(QIODevice::WriteOnly)) {
+        return false;
+    }
+    file.write("x");
+    file.close();
+    return true;
+}
+
+} // namespace
+
+void ProjectTest::applicationPlaybackStartsAndPresentsFrames()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandExecutor(successExecutor());
+    const QString outputPath = directory.filePath(QStringLiteral("render.mp4"));
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                    outputPath));
+    QVERIFY(createPlayableRecord(app, outputPath));
+
+    QList<QImage> frames{ playerTestFrame(0), playerTestFrame(1),
+                          playerTestFrame(2) };
+    int closeCount = 0;
+    ReframeCommandOutcome capturedRecord;
+    app.setPlaybackSourceFactory(
+        [&frames, &closeCount, &capturedRecord](
+            const ReframeCommandOutcome &record, QString *)
+            -> std::unique_ptr<FrameSource> {
+            capturedRecord = record;
+            return std::unique_ptr<FrameSource>(
+                new PlaybackSourceDouble(frames, &closeCount));
+        });
+    ManualClock clock;
+    RecordingPacingPolicy pacing(1);
+    app.setPlaybackClock(&clock);
+    app.setPlaybackPacing(&pacing);
+
+    int presented = 0;
+    QObject::connect(&app, &Application::reframePlaybackFrameReady,
+                     [&presented](const QImage &) { ++presented; });
+
+    QVERIFY(app.startReframeOutputPlayback(0));
+    QVERIFY(app.isReframeOutputPlaybackActive());
+    QVERIFY(app.isReframeOutputPlaying());
+    QCOMPARE(app.reframeOutputPlaybackRecordIndex(), 0);
+    QCOMPARE(capturedRecord.outputWidth, 320);
+    QCOMPARE(capturedRecord.outputHeight, 180);
+
+    clock.advance(1000);
+    QCOMPARE(app.tickReframeOutputPlayback(), 1);
+    QCOMPARE(presented, 1);
+
+    QVERIFY(app.pauseReframeOutputPlayback());
+    QVERIFY(!app.isReframeOutputPlaying());
+    clock.advance(10000);
+    QCOMPARE(app.tickReframeOutputPlayback(), 0);
+    QCOMPARE(presented, 1);
+
+    // Playing the same paused record resumes rather than restarting.
+    QVERIFY(app.startReframeOutputPlayback(0));
+    QVERIFY(app.isReframeOutputPlaying());
+    clock.advance(1000);
+    QCOMPARE(app.tickReframeOutputPlayback(), 1);
+    QCOMPARE(presented, 2);
+
+    app.stopReframeOutputPlayback();
+    QVERIFY(!app.isReframeOutputPlaybackActive());
+    QCOMPARE(closeCount, 1);
+}
+
+void ProjectTest::applicationPlaybackRequiresValidRecord()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+
+    QVERIFY(!app.startReframeOutputPlayback(0)); // no records
+    QVERIFY(!app.startReframeOutputPlayback(-1));
+
+    app.setReframeCommandExecutor(successExecutor());
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                    directory.filePath(QStringLiteral("missing.mp4"))));
+    // The recorded output file does not exist.
+    QVERIFY(!app.startReframeOutputPlayback(0));
+    QVERIFY(!app.isReframeOutputPlaybackActive());
+}
+
+void ProjectTest::applicationPlaybackReplaceAndLifecycleDisposal()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandExecutor(successExecutor());
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                    directory.filePath(QStringLiteral("a.mp4"))));
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                    directory.filePath(QStringLiteral("b.mp4"))));
+    QVERIFY(createPlayableRecord(app, directory.filePath(QStringLiteral("a.mp4"))));
+    QVERIFY(createPlayableRecord(app, directory.filePath(QStringLiteral("b.mp4"))));
+    QCOMPARE(app.reframeOutputs().size(), 2);
+
+    int firstClose = 0;
+    int secondClose = 0;
+    int calls = 0;
+    app.setPlaybackSourceFactory(
+        [&calls, &firstClose, &secondClose](const ReframeCommandOutcome &, QString *)
+            -> std::unique_ptr<FrameSource> {
+            ++calls;
+            QList<QImage> frames{ playerTestFrame(0), playerTestFrame(1) };
+            int *counter = (calls == 1) ? &firstClose : &secondClose;
+            return std::unique_ptr<FrameSource>(
+                new PlaybackSourceDouble(frames, counter));
+        });
+
+    QVERIFY(app.startReframeOutputPlayback(0));
+    QCOMPARE(calls, 1);
+    QVERIFY(app.startReframeOutputPlayback(1));
+    QCOMPARE(calls, 2);
+    QCOMPARE(firstClose, 1); // the first source was disposed
+
+    app.newProject();
+    QCOMPARE(secondClose, 1); // project lifecycle disposed the second source
+    QVERIFY(!app.isReframeOutputPlaybackActive());
+}
+
+void ProjectTest::applicationPlaybackEndOfStreamEnds()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandExecutor(successExecutor());
+    const QString outputPath = directory.filePath(QStringLiteral("render.mp4"));
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                    outputPath));
+    QVERIFY(createPlayableRecord(app, outputPath));
+
+    QList<QImage> frames{ playerTestFrame(0), playerTestFrame(1) };
+    app.setPlaybackSourceFactory(
+        [&frames](const ReframeCommandOutcome &, QString *)
+            -> std::unique_ptr<FrameSource> {
+            return std::unique_ptr<FrameSource>(
+                new PlaybackSourceDouble(frames, nullptr));
+        });
+    ManualClock clock;
+    RecordingPacingPolicy pacing(1);
+    app.setPlaybackClock(&clock);
+    app.setPlaybackPacing(&pacing);
+
+    bool ended = false;
+    QObject::connect(&app, &Application::reframePlaybackEnded,
+                     [&ended]() { ended = true; });
+
+    QVERIFY(app.startReframeOutputPlayback(0));
+    for (int i = 0; i < 6 && !ended; ++i) {
+        clock.advance(1000);
+        app.tickReframeOutputPlayback();
+    }
+    QVERIFY(ended);
+    QVERIFY(!app.isReframeOutputPlaying());
+}
+
+void ProjectTest::applicationPlaybackPreservesSingleFramePreview()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandExecutor(successExecutor());
+    const QString outputPath = directory.filePath(QStringLiteral("render.mp4"));
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                    outputPath));
+    QVERIFY(createPlayableRecord(app, outputPath));
+
+    QImage fake(6, 4, QImage::Format_ARGB32);
+    fake.fill(QColor(1, 2, 3));
+    app.setReframePreviewDecoder(
+        [&fake](const QString &, QImage *out, QString *) {
+            *out = fake;
+            return true;
+        });
+    QImage preview;
+    QObject::connect(&app, &Application::reframeOutputPreviewReady,
+                     [&preview](const QImage &image) { preview = image; });
+    QVERIFY(app.previewReframeOutput(0));
+    QCOMPARE(preview.size(), fake.size());
+
+    const double previewTimeBefore = app.previewTimeSeconds();
+    QList<QImage> frames{ playerTestFrame(0), playerTestFrame(1) };
+    app.setPlaybackSourceFactory(
+        [&frames](const ReframeCommandOutcome &, QString *)
+            -> std::unique_ptr<FrameSource> {
+            return std::unique_ptr<FrameSource>(
+                new PlaybackSourceDouble(frames, nullptr));
+        });
+    ManualClock clock;
+    RecordingPacingPolicy pacing(1);
+    app.setPlaybackClock(&clock);
+    app.setPlaybackPacing(&pacing);
+
+    QVERIFY(app.startReframeOutputPlayback(0));
+    clock.advance(1000);
+    app.tickReframeOutputPlayback();
+    app.stopReframeOutputPlayback();
+
+    // The Objective 10 preview-time contract is untouched by playback.
+    QCOMPARE(app.previewTimeSeconds(), previewTimeBefore);
+    // The single-frame preview path still works after playback.
+    QVERIFY(app.previewReframeOutput(0));
+}
+
+void ProjectTest::applicationPlaybackSourceFactoryFailureIsHonest()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandExecutor(successExecutor());
+    const QString outputPath = directory.filePath(QStringLiteral("render.mp4"));
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                    outputPath));
+    QVERIFY(createPlayableRecord(app, outputPath));
+
+    app.setPlaybackSourceFactory(
+        [](const ReframeCommandOutcome &, QString *error)
+            -> std::unique_ptr<FrameSource> {
+            if (error) {
+                *error = QStringLiteral("no source");
+            }
+            return nullptr;
+        });
+    QString status;
+    QObject::connect(&app, &Application::backgroundCompleted,
+                     [&status](const QString &message) { status = message; });
+    QVERIFY(!app.startReframeOutputPlayback(0));
+    QVERIFY(status.contains(QStringLiteral("Could not open")));
+    QVERIFY(!app.isReframeOutputPlaybackActive());
+}
+
+void ProjectTest::applicationPlaybackDecodeErrorStops()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandExecutor(successExecutor());
+    const QString outputPath = directory.filePath(QStringLiteral("render.mp4"));
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                    outputPath));
+    QVERIFY(createPlayableRecord(app, outputPath));
+
+    int closeCount = 0;
+    app.setPlaybackSourceFactory(
+        [&closeCount](const ReframeCommandOutcome &, QString *)
+            -> std::unique_ptr<FrameSource> {
+            PlaybackSourceDouble *source =
+                new PlaybackSourceDouble({}, &closeCount);
+            source->setMode(PlaybackSourceDouble::Mode::Error);
+            source->setErrorText(QStringLiteral("decode boom"));
+            return std::unique_ptr<FrameSource>(source);
+        });
+    ManualClock clock;
+    RecordingPacingPolicy pacing(1);
+    app.setPlaybackClock(&clock);
+    app.setPlaybackPacing(&pacing);
+
+    bool errored = false;
+    QObject::connect(&app, &Application::backgroundCompleted,
+                     [&errored](const QString &message) {
+                         if (message.contains(QStringLiteral("Playback failed"))) {
+                             errored = true;
+                         }
+                     });
+    QVERIFY(app.startReframeOutputPlayback(0));
+    clock.advance(1000);
+    app.tickReframeOutputPlayback();
+    QVERIFY(errored);
+    QVERIFY(!app.isReframeOutputPlaying());
+}
+
+void ProjectTest::mainWindowPlaybackButtonsEmitRequests()
+{
+    TestMainWindow window;
+    QSignalSpy playSpy(&window, &MainWindow::playReframeOutputRequested);
+    QSignalSpy pauseSpy(&window, &MainWindow::pauseReframeOutputPlaybackRequested);
+    QSignalSpy stopSpy(&window, &MainWindow::stopReframeOutputPlaybackRequested);
+
+    auto *list = window.findChild<QListWidget *>("reframeOutputsList");
+    auto *play = window.findChild<QPushButton *>("playRenderButton");
+    auto *pause = window.findChild<QPushButton *>("pauseRenderButton");
+    auto *stop = window.findChild<QPushButton *>("stopRenderButton");
+    QVERIFY(list);
+    QVERIFY(play);
+    QVERIFY(pause);
+    QVERIFY(stop);
+
+    ReframeCommandOutcome first;
+    first.ok = true;
+    first.instruction = QStringLiteral("pan right");
+    first.outputPath = QStringLiteral("/tmp/a.mp4");
+    ReframeCommandOutcome second;
+    second.ok = true;
+    second.instruction = QStringLiteral("follow person 1");
+    second.outputPath = QStringLiteral("/tmp/b.mp4");
+    window.showReframeOutputs({ first, second });
+    list->setCurrentRow(1);
+    play->click();
+    pause->click();
+    stop->click();
+
+    QCOMPARE(playSpy.count(), 1);
+    QCOMPARE(playSpy.first().at(0).toInt(), 1);
+    QCOMPARE(pauseSpy.count(), 1);
+    QCOMPARE(stopSpy.count(), 1);
+}
+
+void ProjectTest::mainWindowShowsPlaybackStateAndPosition()
+{
+    TestMainWindow window;
+    auto *label = window.findChild<QLabel *>("playbackPositionLabel");
+    QVERIFY(label);
+
+    window.showReframePlaybackState(true);
+    QVERIFY(label->text().contains(QStringLiteral("playing")));
+
+    window.showReframePlaybackPosition(3, 150);
+    QVERIFY(label->text().contains(QStringLiteral("frame 3")));
+    QVERIFY(label->text().contains(QStringLiteral("150")));
+}
+
+// Real rendered-result playback (Objective 13; skipped unless configured).
+// Renders a real 360 clip to a flat result through the existing deterministic
+// pipeline, then plays that result back through the Application. No ML is used.
+void ProjectTest::realReframePlaybackIntegration()
+{
+    const QString clip = qEnvironmentVariable("REELCRAFT_TARGET_CLIP");
+    if (clip.isEmpty()) {
+        QSKIP("real rendered-result playback not configured "
+              "(set REELCRAFT_TARGET_CLIP)");
+    }
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable");
+    }
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString outputPath = qEnvironmentVariable("REELCRAFT_PLAYBACK_OUTPUT");
+    if (outputPath.isEmpty()) {
+        outputPath = directory.filePath(QStringLiteral("playback_render.mp4"));
+    }
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(clip));
+    QVERIFY(app.setActiveMedia(app.mediaItems().first().id()));
+    app.setReframeDefaultOutput(320, 180, 10.0);
+
+    QVERIFY2(app.runReframeCommandTo(QStringLiteral("look forward"), 0, 2000,
+                                     outputPath),
+             qPrintable(app.lastReframeCommandOutcome().error));
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    QCOMPARE(app.reframeOutputs().at(0).outputWidth, 320);
+    QCOMPARE(app.reframeOutputs().at(0).outputHeight, 180);
+
+    int frames = 0;
+    bool ended = false;
+    QObject::connect(&app, &Application::reframePlaybackFrameReady,
+                     [&frames](const QImage &) { ++frames; });
+    QObject::connect(&app, &Application::reframePlaybackEnded,
+                     [&ended]() { ended = true; });
+
+    QVERIFY2(app.startReframeOutputPlayback(0), "playback did not start");
+    qInfo("rendered playback started: output=%s", qPrintable(outputPath));
+
+    // The Application's own timer drives ticks while the event loop runs.
+    for (int i = 0; i < 120 && !ended; ++i) {
+        QTest::qWait(50);
+    }
+    qInfo("real rendered playback: frames=%d ended=%d", frames, ended ? 1 : 0);
+    QVERIFY(frames > 0);
+    QVERIFY(ended);
+
+    app.stopReframeOutputPlayback();
+    QVERIFY(!app.isReframeOutputPlaybackActive());
 }
 
 // Real application command path (Objective 9; skipped unless configured).

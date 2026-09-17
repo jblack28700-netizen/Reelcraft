@@ -70,6 +70,8 @@ Speaker-aware commands are implemented (Decision 028, Objective 11): `ReframeCom
 
 The 360 command workflow is now usable from the application (Decision 029, Objective 12): `Application::selectCreatorTargetFromViewport()` seeds the creator "me" identity from the viewport direction and preview time (passed into every command request, cleared on new/open project), and `Application::previewReframeOutput()` decodes the first frame of a persisted render record through an injectable decoder seam (defaulting to the external-FFmpeg `FrameExtractor`) for flat viewer presentation. The minimal UI adds creator-selection controls, a render-preview action, and a provider status line. The creator selection is session state, and continuous playback remains the deferred Phase 3 player-lifecycle objective.
 
+Rendered-result playback is now implemented (Decision 030, Objective 13): `Application` owns the playback `FrameSource`/`FramePump`/`Player` for a selected persisted render (default `FfmpegFrameSource` opened with the record's geometry) and drives `Player::tick()` from its own `QTimer`; the Player owns no event loop. `startReframeOutputPlayback`/`pauseReframeOutputPlayback`/`resumeReframeOutputPlayback`/`stopReframeOutputPlayback` are deterministic, frames are emitted as `reframePlaybackFrameReady` and presented flat, and the existing `FrameSource`/`FramePump`/`Player`/`Playhead`/`Clock`/`PacingPolicy` seams are reused (no parallel playback architecture). Playback is limited to persisted rendered results; general/active-media playback, audio, timeline editing, and duration metadata remain out of scope, and the Objective 10 preview-time contract is unchanged.
+
 ---
 
 # 4. Current Development Camera

@@ -72,6 +72,10 @@ public slots:
     // (Objective 12). The providers are external and optional.
     void showProviderStatus(bool hasDetector, bool hasSpeaker);
 
+    // Updates the rendered-result playback state readout (Objective 13).
+    void showReframePlaybackState(bool playing);
+    void showReframePlaybackPosition(qint64 frameCount, qint64 positionMs);
+
 signals:
     void newProjectRequested();
     void saveProjectRequested(const QString &filePath);
@@ -87,6 +91,9 @@ signals:
     void selectCreatorTargetRequested();
     void clearCreatorTargetRequested();
     void previewReframeOutputRequested(int index);
+    void playReframeOutputRequested(int index);
+    void pauseReframeOutputPlaybackRequested();
+    void stopReframeOutputPlaybackRequested();
     void backgroundDemoRequested();
     void resetViewportRequested();
     void viewportYawDeltaRequested(double delta);
@@ -135,6 +142,12 @@ private:
     QLabel *m_creatorSelectionLabel = nullptr;
     QPushButton *m_previewRenderButton = nullptr;
     QLabel *m_providersLabel = nullptr;
+
+    // Objective 13: rendered-result playback controls.
+    QPushButton *m_playRenderButton = nullptr;
+    QPushButton *m_pauseRenderButton = nullptr;
+    QPushButton *m_stopRenderButton = nullptr;
+    QLabel *m_playbackPositionLabel = nullptr;
 
     ViewerWidget *m_viewerWidget = nullptr;
 

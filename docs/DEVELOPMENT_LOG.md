@@ -1451,3 +1451,40 @@ Human-selected scope (Decision 029): make the existing 360 command path usable f
 ### Decisions
 
 - Decision 029 recorded. Decisions 017-028 preserved unchanged.
+---
+
+## 2026-09-17 — 360 Reframing Objective 13: 360 Rendered-Result Playback
+
+### Objective
+
+Human-selected scope (Decision 030): turn the Objective 12 single-frame rendered-result preview into deterministic continuous playback of persisted 360 -> flat rendered results, using the existing Phase 3 media/player seams.
+
+### Work completed
+
+- `Application`: owns/creates/replaces/disposes the playback `FrameSource` (default `FfmpegFrameSource` opened with the rendered record's geometry), `FramePump`, and `Player` for the selected result; `startReframeOutputPlayback(index)` (resumes a paused same-record), `pauseReframeOutputPlayback()`, `resumeReframeOutputPlayback()`, `stopReframeOutputPlayback()`, `tickReframeOutputPlayback()`, plus active/playing/position/frame-count/index accessors.
+- Event-loop driver: the Application owns a `QTimer` that invokes `Player::tick()`; the Player owns no timer/thread. Injectable `PlaybackSourceFactory` and `Clock`/`PacingPolicy` keep tests model-free; the frame interval derives from the record's output fps (fallback 40 ms), with the driver interval clamped.
+- Signals `reframePlaybackFrameReady`, `reframePlaybackStateChanged`, `reframePlaybackPositionChanged`, and `reframePlaybackEnded`. Lifecycle disposal on new/open project and when replacing the selected result; the source is always closed.
+- `MainWindow`: Play/Pause/Stop Render controls and a playback position readout; `main.cpp` wires the new signals. Playback frames reuse the existing flat presentation path.
+- 9 new model-free tests; new env-gated `realReframePlaybackIntegration`.
+
+### Verification
+
+- Model-free suite: 368 passed, 0 failed, 5 skipped.
+- Focused Objective 13 tests: 9 passed.
+- Test build and standalone application build both succeed.
+- Real media: `realReframePlaybackIntegration` renders a real 360 clip to a flat result through the existing pipeline and plays it back (all 20 frames; see the failure recovery below).
+- Change-impact: the media/player seams, deterministic renderer, command runner, perception/identity/speaker layers, and the Objective 10 preview-time contract are unchanged; only Application-level orchestration and the minimal UI were added.
+
+### Failure recovery
+
+- The first real-media completion run played only ~10 of the rendered clip's 20 frames. Diagnosis: a tight read of the completed clip returned all 20 frames, but paced playback ended early with the ffmpeg process exiting 0 after a partial frame. Root cause: `FfmpegFrameSource::readNextFrame` broke out of its read loop when the process was no longer running even though output remained buffered in the pipe, so a slow/paced consumer lost the tail. Fix: read any buffered output first, and drain remaining output before deciding end-of-stream. The real validation then played all 20 frames. This is a correctness fix inside the existing media seam (no architecture change).
+
+### Boundary notes / not implemented
+
+- Playback is limited to persisted rendered results; general/active-media playback, audio, timeline editing, and duration/ffprobe work remain out of scope.
+- The creator "me" selection is still session state (not persisted).
+- GPU optimization remains future work.
+
+### Decisions
+
+- Decision 030 recorded. Decisions 017-029 preserved unchanged.

@@ -5,10 +5,13 @@
 #include <QFileInfo>
 #include <QSet>
 #include <QThread>
+#include <QTimer>
 
+#include <cmath>
 #include <memory>
 
 #include "media/FfprobeDurationProbe.h"
+#include "media/FfmpegFrameSource.h"
 #include "media/FrameExtractor.h"
 #include "viewer/ViewportState.h"
 
@@ -20,6 +23,31 @@ Application::Application(QObject *parent)
     m_durationProbe = m_ownedDurationProbe.get();
     resetReframeCommandExecutor();
     resetReframePreviewDecoder();
+    resetPlaybackSourceFactory();
+
+    // The Application owns the playback event-loop driver; the Player does not.
+    m_playbackTimer = new QTimer(this);
+    connect(m_playbackTimer, &QTimer::timeout, this,
+            &Application::tickReframeOutputPlayback);
+}
+
+Application::~Application()
+{
+    // Stop the driver and release the source deterministically without emitting
+    // signals during destruction.
+    if (m_playbackTimer) {
+        m_playbackTimer->stop();
+    }
+    if (m_playbackPlayer) {
+        disconnect(m_playbackPlayer.get(), nullptr, this, nullptr);
+        m_playbackPlayer->stop();
+        m_playbackPlayer.reset();
+    }
+    m_playbackPump.reset();
+    if (m_playbackSource) {
+        m_playbackSource->close();
+        m_playbackSource.reset();
+    }
 }
 
 void Application::initialize()
@@ -66,6 +94,7 @@ const MediaItem *Application::activeMediaItem() const
 
 void Application::newProject()
 {
+    stopReframeOutputPlayback();
     m_currentProject = Project();
     m_hasProject = true;
     const bool hadActiveMedia = !m_activeMediaId.isEmpty();
@@ -131,6 +160,7 @@ bool Application::openProject(const QString &filePath)
         m_creatorSelection = CreatorTargetSelection();
         emit creatorSelectionChanged(false);
     }
+    stopReframeOutputPlayback();
     m_currentProject = loaded;
     m_hasProject = true;
     resetViewport();
@@ -832,4 +862,212 @@ void Application::restoreReframeOutputsFromJson(const QJsonArray &outputs)
             m_reframeOutputs.append(outcome);
         }
     }
+}
+
+int Application::playbackIntervalMsForFps(double fps) const
+{
+    if (fps > 0.0) {
+        const int interval = static_cast<int>(std::lround(1000.0 / fps));
+        return interval > 0 ? interval : 1;
+    }
+    return 40; // matches the Player's default 25 fps pacing
+}
+
+bool Application::startReframeOutputPlayback(int index)
+{
+    if (index < 0 || index >= m_reframeOutputs.size()) {
+        emit backgroundCompleted(
+            QStringLiteral("Select a generated render to play."));
+        return false;
+    }
+    const ReframeCommandOutcome &record = m_reframeOutputs.at(index);
+    if (record.outputPath.isEmpty() || !QFileInfo::exists(record.outputPath)) {
+        emit backgroundCompleted(QStringLiteral(
+            "The render output is unavailable: %1").arg(record.outputPath));
+        return false;
+    }
+    if (record.outputWidth <= 0 || record.outputHeight <= 0) {
+        emit backgroundCompleted(QStringLiteral(
+            "The render dimensions are unknown; cannot play it back."));
+        return false;
+    }
+
+    // The same paused record resumes rather than restarting.
+    if (m_playbackPlayer && m_playbackRecordIndex == index
+        && m_playbackPlayer->isPaused()) {
+        return resumeReframeOutputPlayback();
+    }
+
+    stopReframeOutputPlayback();
+
+    QString error;
+    std::unique_ptr<FrameSource> source = m_playbackSourceFactory(record, &error);
+    if (!source || !source->isOpen()) {
+        emit backgroundCompleted(
+            QStringLiteral("Could not open the render for playback: %1")
+                .arg(error.isEmpty() ? QStringLiteral("source unavailable")
+                                     : error));
+        return false;
+    }
+    m_playbackSource = std::move(source);
+    m_playbackPump = std::make_unique<FramePump>();
+    m_playbackPump->setSource(m_playbackSource.get());
+    m_playbackPlayer = std::make_unique<Player>(
+        m_playbackPump.get(), m_playbackClock, m_playbackPacing);
+    m_playbackRecordIndex = index;
+
+    connect(m_playbackPlayer.get(), &Player::framePresented, this,
+            [this](const QImage &image, qint64, qint64) {
+                emit reframePlaybackFrameReady(image);
+            });
+    connect(m_playbackPlayer.get(), &Player::stateChanged, this,
+            [this](Player::State state) {
+                if (state != Player::State::Playing && m_playbackTimer) {
+                    m_playbackTimer->stop();
+                }
+                emit reframePlaybackStateChanged(state == Player::State::Playing);
+            });
+    connect(m_playbackPlayer.get(), &Player::positionChanged, this,
+            [this](qint64 frameCount, qint64 positionMs) {
+                emit reframePlaybackPositionChanged(frameCount, positionMs);
+            });
+    connect(m_playbackPlayer.get(), &Player::playbackEnded, this, [this]() {
+        if (m_playbackTimer) {
+            m_playbackTimer->stop();
+        }
+        emit reframePlaybackEnded();
+    });
+    connect(m_playbackPlayer.get(), &Player::errorOccurred, this,
+            [this](const QString &message) {
+                if (m_playbackTimer) {
+                    m_playbackTimer->stop();
+                }
+                emit backgroundCompleted(
+                    QStringLiteral("Playback failed: %1").arg(message));
+            });
+
+    const int intervalMs = playbackIntervalMsForFps(record.outputFps);
+    m_playbackPlayer->setFrameIntervalMs(intervalMs);
+    m_playbackPlayer->play();
+    if (m_playbackTimer) {
+        m_playbackTimer->start(qBound(10, intervalMs, 100));
+    }
+    return true;
+}
+
+bool Application::pauseReframeOutputPlayback()
+{
+    if (!m_playbackPlayer || !m_playbackPlayer->isPlaying()) {
+        return false;
+    }
+    if (m_playbackTimer) {
+        m_playbackTimer->stop();
+    }
+    m_playbackPlayer->pause();
+    return true;
+}
+
+bool Application::resumeReframeOutputPlayback()
+{
+    if (!m_playbackPlayer || !m_playbackPlayer->isPaused()) {
+        return false;
+    }
+    m_playbackPlayer->play();
+    if (m_playbackTimer && m_playbackRecordIndex >= 0
+        && m_playbackRecordIndex < m_reframeOutputs.size()) {
+        const int intervalMs = playbackIntervalMsForFps(
+            m_reframeOutputs.at(m_playbackRecordIndex).outputFps);
+        m_playbackTimer->start(qBound(10, intervalMs, 100));
+    }
+    return true;
+}
+
+void Application::stopReframeOutputPlayback()
+{
+    const bool wasActive = m_playbackPlayer != nullptr;
+    if (m_playbackTimer) {
+        m_playbackTimer->stop();
+    }
+    if (m_playbackPlayer) {
+        disconnect(m_playbackPlayer.get(), nullptr, this, nullptr);
+        m_playbackPlayer->stop();
+        m_playbackPlayer.reset();
+    }
+    m_playbackPump.reset();
+    if (m_playbackSource) {
+        m_playbackSource->close();
+        m_playbackSource.reset();
+    }
+    m_playbackRecordIndex = -1;
+    if (wasActive) {
+        emit reframePlaybackStateChanged(false);
+    }
+}
+
+int Application::tickReframeOutputPlayback()
+{
+    if (!m_playbackPlayer) {
+        return 0;
+    }
+    return m_playbackPlayer->tick();
+}
+
+bool Application::isReframeOutputPlaybackActive() const
+{
+    return m_playbackPlayer != nullptr;
+}
+
+bool Application::isReframeOutputPlaying() const
+{
+    return m_playbackPlayer && m_playbackPlayer->isPlaying();
+}
+
+qint64 Application::reframeOutputPlaybackFrameCount() const
+{
+    return m_playbackPlayer ? m_playbackPlayer->frameCount() : 0;
+}
+
+qint64 Application::reframeOutputPlaybackPositionMs() const
+{
+    return m_playbackPlayer ? m_playbackPlayer->positionMs() : 0;
+}
+
+int Application::reframeOutputPlaybackRecordIndex() const
+{
+    return m_playbackRecordIndex;
+}
+
+void Application::setPlaybackSourceFactory(const PlaybackSourceFactory &factory)
+{
+    if (factory) {
+        m_playbackSourceFactory = factory;
+    }
+}
+
+void Application::resetPlaybackSourceFactory()
+{
+    m_playbackSourceFactory =
+        [](const ReframeCommandOutcome &record, QString *error)
+        -> std::unique_ptr<FrameSource> {
+        std::unique_ptr<FfmpegFrameSource> source =
+            std::make_unique<FfmpegFrameSource>();
+        if (!source->open(record.outputPath, record.outputWidth,
+                          record.outputHeight)) {
+            if (error) {
+                *error = source->errorString();
+            }
+            return nullptr;
+        }
+        return source;
+    };
+}
+
+void Application::setPlaybackClock(Clock *clock)
+{
+    m_playbackClock = clock;
+}
+
+void Application::setPlaybackPacing(PacingPolicy *pacing)
+{
+    m_playbackPacing = pacing;
 }

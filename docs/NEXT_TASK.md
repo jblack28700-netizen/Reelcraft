@@ -347,8 +347,23 @@ Human-selected scope (Decision 029): make the existing 360 command path usable f
 - 11 new model-free tests; full model-free suite 359 passed / 0 failed / 4 skipped.
 - Architecture decision: Decision 029.
 
-## Next Objective — GPU Optimization, Playback, or Creator-Selection Persistence — NOT STARTED
+## 360 Reframing Objective 13 — 360 Rendered-Result Playback — Complete
 
-The remaining leading candidates are GPU optimization of the ML helpers (behind the existing replaceable seams), the deferred Phase 3 Application-level player-lifecycle objective (continuous playback of rendered results), and persisting the creator "me" selection in the project. Requires its own scoped objective; do not begin automatically.
+Status: **Complete — implemented and verified (2026-09-17).**
+
+### Objective
+Human-selected scope (Decision 030): turn the Objective 12 single-frame rendered-result preview into deterministic continuous playback of persisted 360 -> flat rendered results, using the existing Phase 3 media/player seams.
+
+### Scope (implemented)
+- `Application` owns/creates/replaces/disposes the playback `FrameSource` (default `FfmpegFrameSource` with the record's geometry), `FramePump`, and `Player` for the selected rendered result; `startReframeOutputPlayback`/`pauseReframeOutputPlayback`/`resumeReframeOutputPlayback`/`stopReframeOutputPlayback`/`tickReframeOutputPlayback`.
+- The Application owns the event-loop driver (a `QTimer`); the Player owns no timer/thread. Reuses `FrameSource`/`FfmpegFrameSource`/`FramePump`/`Player`/`Playhead`/`Clock`/`PacingPolicy`; no parallel playback architecture.
+- Playback frames are emitted and presented flat; state/position/end signals report progress. The Objective 10 preview-time contract and the single-frame preview are preserved.
+- Minimal UI: Play/Pause/Stop Render controls and a position readout.
+- 9 new model-free tests; full model-free suite 368 passed / 0 failed / 5 skipped. New env-gated `realReframePlaybackIntegration`.
+- Architecture decision: Decision 030.
+
+## Next Objective — GPU Optimization, Creator-Selection Persistence, or General Playback — NOT STARTED
+
+The remaining leading candidates are GPU optimization of the ML helpers (behind the existing replaceable seams), persisting the creator "me" selection in the project, and extending playback beyond rendered results to active-media/general playback. Requires its own scoped objective; do not begin automatically.
 
 

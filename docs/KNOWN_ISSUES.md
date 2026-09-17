@@ -388,7 +388,7 @@ Revisit when a permissively licensed audio-visual active-speaker or diarization 
 
 ---
 
-# Issue — Creator selection and render playback are session-only (2026-09-17)
+# Issue — Creator selection is session-only (updated 2026-09-17, Objective 13)
 
 ### Status
 
@@ -396,15 +396,15 @@ Open — intentional boundary; not a defect.
 
 ### Description
 
-The Objective 12 creator "me" selection (`Application::selectCreatorTargetFromViewport()`) is session state: it is not persisted in the project, so reopening a project requires re-selecting the creator target. Generated renders can be previewed as a single flat frame but not played or scrubbed inside Reelcraft; continuous playback is the deferred Phase 3 Application-level player-lifecycle objective, and Objective 12 deliberately reuses the existing single-frame FFmpeg seam rather than building a parallel player.
+The Objective 12 creator "me" selection (`Application::selectCreatorTargetFromViewport()`) is session state: it is not persisted in the project, so reopening a project requires re-selecting the creator target. Continuous playback of a persisted rendered result is now implemented (Objective 13, Decision 030); only general/active-media playback, audio, timeline editing, and duration metadata remain out of scope.
 
 ### Impact
 
-After reopening a project the creator must re-select "me"; reviewing a rendered result frame-by-frame in the app is not yet possible.
+After reopening a project the creator must re-select "me". General source-media playback and scrubbing are still unavailable.
 
 ### Planned Resolution
 
-Persist the creator selection additively in the project (mirroring `reframeOutputs`), and resume the Phase 3 player-lifecycle objective where it serves the 360 workflow (previewing/playing rendered results). Do not build a parallel player.
+Persist the creator selection additively in the project (mirroring `reframeOutputs`), and extend playback to active media in a future objective where it serves the 360 workflow, reusing the existing media/player seams. Do not build a parallel player.
 
 ---
 

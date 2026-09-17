@@ -80,6 +80,10 @@ MainWindow::MainWindow(QWidget *parent)
     m_clearCreatorButton = new QPushButton(QStringLiteral("Clear Me"), central);
     m_creatorSelectionLabel = new QLabel(QStringLiteral("Creator target 'me': none"), central);
     m_providersLabel = new QLabel(QStringLiteral("Providers: detector=no, speaker=no"), central);
+    m_playRenderButton = new QPushButton(QStringLiteral("Play Render"), central);
+    m_pauseRenderButton = new QPushButton(QStringLiteral("Pause Render"), central);
+    m_stopRenderButton = new QPushButton(QStringLiteral("Stop Render"), central);
+    m_playbackPositionLabel = new QLabel(QStringLiteral("Playback: stopped"), central);
 
     m_mediaListWidget = new QListWidget(central);
     m_mediaListWidget->setObjectName("mediaListWidget");
@@ -118,6 +122,10 @@ MainWindow::MainWindow(QWidget *parent)
     m_clearCreatorButton->setObjectName("clearCreatorButton");
     m_creatorSelectionLabel->setObjectName("creatorSelectionLabel");
     m_providersLabel->setObjectName("providersLabel");
+    m_playRenderButton->setObjectName("playRenderButton");
+    m_pauseRenderButton->setObjectName("pauseRenderButton");
+    m_stopRenderButton->setObjectName("stopRenderButton");
+    m_playbackPositionLabel->setObjectName("playbackPositionLabel");
 
     m_viewerWidget = new ViewerWidget(central);
     m_viewerWidget->setObjectName("viewerWidget");
@@ -156,6 +164,10 @@ MainWindow::MainWindow(QWidget *parent)
     layout->addWidget(m_clearCreatorButton);
     layout->addWidget(m_creatorSelectionLabel);
     layout->addWidget(m_providersLabel);
+    layout->addWidget(m_playRenderButton);
+    layout->addWidget(m_pauseRenderButton);
+    layout->addWidget(m_stopRenderButton);
+    layout->addWidget(m_playbackPositionLabel);
     layout->addWidget(m_statusLabel);
 
     setCentralWidget(central);
@@ -253,6 +265,20 @@ MainWindow::MainWindow(QWidget *parent)
         }
         emit previewReframeOutputRequested(row);
     });
+
+    connect(m_playRenderButton, &QPushButton::clicked, this, [this]() {
+        const int row = m_reframeOutputsList->currentRow();
+        if (row < 0) {
+            m_statusLabel->setText(
+                QStringLiteral("No generated render selected."));
+            return;
+        }
+        emit playReframeOutputRequested(row);
+    });
+    connect(m_pauseRenderButton, &QPushButton::clicked, this,
+            &MainWindow::pauseReframeOutputPlaybackRequested);
+    connect(m_stopRenderButton, &QPushButton::clicked, this,
+            &MainWindow::stopReframeOutputPlaybackRequested);
 
     m_newProjectButton->installEventFilter(this);
     m_saveButton->installEventFilter(this);
@@ -540,4 +566,20 @@ void MainWindow::showProviderStatus(bool hasDetector, bool hasSpeaker)
                              : QStringLiteral("not configured"))
             .arg(hasSpeaker ? QStringLiteral("configured")
                             : QStringLiteral("not configured")));
+}
+
+void MainWindow::showReframePlaybackState(bool playing)
+{
+    m_playbackPositionLabel->setText(
+        playing ? QStringLiteral("Playback: playing")
+                : QStringLiteral("Playback: paused/stopped"));
+}
+
+void MainWindow::showReframePlaybackPosition(qint64 frameCount,
+                                             qint64 positionMs)
+{
+    m_playbackPositionLabel->setText(
+        QStringLiteral("Playback: frame %1, %2 ms")
+            .arg(frameCount)
+            .arg(positionMs));
 }

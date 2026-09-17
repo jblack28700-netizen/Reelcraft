@@ -2,7 +2,7 @@
 
 ## Current Version
 
-0.2.49
+0.2.50
 
 ## Current Branch
 
@@ -10,7 +10,7 @@ main
 
 ## Current Stage
 
-Phase 4 — 360 Reframing Engine (deterministic vertical slice), Target/Subject Resolution, real detector integration, structured target identity/selection, optional appearance-based re-identification, optional audio/speaker evidence, an audio-visual provider-attribution seam, end-to-end user-command execution, application-level command orchestration, persisted render records with duration-aware ranges, speaker-aware commands, and application command UI with rendered-result preview implemented and verified. Phase 3 Media Engine remains open; its player-lifecycle objective is intentionally superseded for now by the human-approved 360 priority.
+Phase 4 — 360 Reframing Engine (deterministic vertical slice), Target/Subject Resolution, real detector integration, structured target identity/selection, optional appearance-based re-identification, optional audio/speaker evidence, an audio-visual provider-attribution seam, end-to-end user-command execution, application-level command orchestration, persisted render records with duration-aware ranges, speaker-aware commands, application command UI with rendered-result preview, and continuous rendered-result playback implemented and verified. Phase 3 Media Engine remains open; its player-lifecycle objective is intentionally superseded for now by the human-approved 360 priority.
 
 ## Project Status
 
@@ -1059,7 +1059,20 @@ Status: Complete (2026-09-17). Human-selected scope (Decision 029): make the exi
 - 11 new model-free tests; full model-free suite 359 passed, 0 failed, 4 skipped.
 - Architecture decision: Decision 029.
 
-Next: GPU optimization, the deferred Phase 3 player-lifecycle objective (continuous playback of renders), and persisting the creator selection remain future candidates. Requires its own scoped objective.
+## Phase 4 Objective 13 — 360 Rendered-Result Playback — Complete
+
+Status: Complete (2026-09-17). Human-selected scope (Decision 030): turn the Objective 12 single-frame rendered-result preview into deterministic continuous playback of persisted 360 -> flat rendered results.
+
+- `Application::startReframeOutputPlayback(index)` owns/creates/replaces/disposes the playback `FrameSource` (default `FfmpegFrameSource` opened with the record's geometry), `FramePump`, and `Player`; `pauseReframeOutputPlayback()`, `resumeReframeOutputPlayback()`, `stopReframeOutputPlayback()`, and `tickReframeOutputPlayback()` are deterministic. The Application owns the `QTimer` driver; the Player owns no event loop.
+- Reuses the existing Phase 3 seams (`FrameSource`/`FfmpegFrameSource`/`FramePump`/`Player`/`Playhead`/`Clock`/`PacingPolicy`); no parallel architecture. An injectable source factory plus injected clock/pacing keep tests model-free.
+- Playback frames are emitted (`reframePlaybackFrameReady`) and presented flat by the viewer; `reframePlaybackStateChanged`, `reframePlaybackPositionChanged`, and `reframePlaybackEnded` report state. Invalid index, missing output, unknown dimensions, source-open failure, decode error, and end-of-stream are honest; media and outputs are read-only.
+- The Objective 10 preview-time contract and the existing single-frame render preview are preserved; playback is limited to persisted rendered results (no general media playback, audio, timeline editing, or duration work).
+- Minimal UI: "Play Render"/"Pause Render"/"Stop Render" plus a playback position readout.
+- 9 new model-free tests; full model-free suite 368 passed, 0 failed, 5 skipped. New env-gated `realReframePlaybackIntegration` renders a real 360 clip to a flat result and plays it back (all 20 frames).
+- Fix found by the real validation: `FfmpegFrameSource::readNextFrame` now drains buffered output before reporting end-of-stream (it previously stopped as soon as the ffmpeg process exited, so a paced consumer lost the tail); the real validation went from ~10 to all 20 frames. A correctness fix inside the existing media seam, not a new architecture.
+- Architecture decision: Decision 030.
+
+Next: GPU optimization, persisting the creator "me" selection, and general (active-media) playback remain future candidates. Requires its own scoped objective.
 
 
 

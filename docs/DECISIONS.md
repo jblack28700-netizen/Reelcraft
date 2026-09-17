@@ -895,3 +895,49 @@ Objectives 1–11 completed the 360 command pipeline (source -> scene/target und
 - 11 new model-free tests cover creator selection (set, require context, pass-through, clear), render preview (decode, reject bad inputs), and the UI (buttons, selection readout, preview request, flat presentation, provider status). Full model-free suite: 359 passed / 0 failed / 4 skipped.
 - No expensive real-media validation is required: the preview decode reuses the already-verified external-FFmpeg `FrameExtractor` seam, and the existing env-gated real integrations were not re-run.
 - Decisions 017–028 preserved. GPU optimization and the Phase 3 player lifecycle remain future work.
+
+
+# Decision 030 — Objective 13 Scope: 360 Rendered-Result Playback
+
+**Status:** Accepted (2026-09-17, 360 Reframing Objective 13; human-selected scope)
+
+## Context
+
+Objective 12's next-objective entry named three un-scoped candidates (GPU optimization, the deferred Phase 3 Application-level player lifecycle, and persisting the creator selection). The human selected the Phase 3 player lifecycle, scoped specifically to serving the 360 workflow: continuous deterministic playback of persisted 360 -> flat rendered results. Decision 017 already fixed the boundary — 'decode/media-source seam -> player/timing -> Application -> Viewer' — and deferred the Application-level player lifecycle (Phase 3 Objective 5). Objective 13 resumes exactly that piece, and only that piece, for rendered-result playback. The existing media/player seams (`FrameSource`, `FfmpegFrameSource`, `FramePump`, `Player`, `Playhead`, `Clock`, `PacingPolicy`) already exist and are tested; only Application-level orchestration was missing.
+
+## Scope (human-selected)
+
+In scope:
+- Application owns/creates/replaces/disposes the playback source (`FrameSource`), frame pump (`FramePump`), and player (`Player`) for the selected persisted rendered result.
+- Reuses the existing `FrameSource`/`FfmpegFrameSource`/`FramePump`/`Player`/`Playhead`/`Clock`/`PacingPolicy` seams; no parallel playback architecture.
+- An Application-level event-loop driver (an owned `QTimer`) invokes `Player::tick()`; the Player never owns the event loop.
+- Deterministic play/pause/stop of an already-rendered result; the frame interval is derived from the record's output fps.
+- The Objective 10 preview-time contract and the existing single-frame render preview are preserved.
+- The Viewer stays presentation-only: the Application emits frames and the UI presents them flat.
+
+Out of scope (explicit): QtMultimedia; audio; general-purpose media playback; timeline editing; duration/ffprobe work; scrubbing/timeline UI beyond the basic controls; GPU optimization; new ML/perception; changing the deterministic renderer; replacing the existing media/player abstractions; any subsequent objective.
+
+## Definition of Done
+
+1. `Application::startReframeOutputPlayback(index)` opens (or replaces) the selected rendered result through the existing seam, starts the `Player`, and begins ticking; `pauseReframeOutputPlayback()`, `resumeReframeOutputPlayback()`, `stopReframeOutputPlayback()`, and `tickReframeOutputPlayback()` exist and are deterministic.
+2. The owned timer drives ticks; the `Player` owns no timer or thread; pausing/stopping halts advancement.
+3. Playback frames are surfaced (`reframePlaybackFrameReady`), with `reframePlaybackStateChanged` and `reframePlaybackEnded`; the viewer presents them flat.
+4. Lifecycle: selecting a new result replaces the previous playback; new/open project disposes it; the source is always closed (no leaked subprocess).
+5. Honest failures: invalid index, missing output file, unknown dimensions, source-open failure, decode error, and end-of-stream are reported deterministically; the source media and rendered outputs are read-only.
+6. The Objective 10 preview-time contract is unchanged, and the single-frame render preview still works.
+7. Model-free tests (injected `FrameSource`, `ManualClock`, `PacingPolicy`) cover start/play/pause/resume/stop/replace/end/error/position and the UI controls; the full model-free suite is green.
+8. One real-media completion validation renders a 360 clip to a flat result through the existing pipeline and plays it back through the Application (gated on clip + ffmpeg; no ML).
+9. Documentation is updated (`CURRENT_STATE`, `NEXT_TASK`, `DEVELOPMENT_LOG`, `PROJECT_HISTORY`, `AI_HANDOFF`, `CHANGELOG`, `KNOWN_ISSUES`) and a dedicated checkpoint commit leaves a clean tree.
+
+## Decisions
+
+- Reuse the Decision 017 boundary unchanged. Playback is limited to persisted rendered results; general media playback remains behind the same seam for a future objective.
+- The Application owns the playback objects and the event-loop driver; the `Player` stays passive and deterministic.
+- Injectable seams keep tests model-free: a `PlaybackSourceFactory` (default: `FfmpegFrameSource` opened with the record's geometry) and injected `Clock`/`PacingPolicy` (defaults owned by the `Player`).
+- The frame interval derives from `ReframeCommandOutcome::outputFps` (fallback 40 ms), and the driver timer interval is clamped for sanity.
+
+## Consequences
+
+- 9 new model-free tests cover start/play/pause/resume/stop/replace/end/error/position and the UI controls. Full model-free suite: 368 passed / 0 failed / 5 skipped.
+- Real-media completion validation renders a real 360 clip to a flat result through the existing pipeline and plays it back; it surfaced and drove a fix for a **pre-existing media-seam bug**: `FfmpegFrameSource::readNextFrame` reported end-of-stream as soon as the ffmpeg process exited, discarding output still buffered in the pipe, so a slow/paced consumer lost the tail (about 10 of 20 frames). The read now drains all buffered output before deciding EOF, and the validation plays all 20 rendered frames. This is a correctness fix inside the existing media seam, not a new architecture.
+- Decisions 017–029 preserved. General/active-media playback, audio, timeline editing, duration metadata, creator-selection persistence, and GPU optimization remain future work.

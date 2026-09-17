@@ -67,6 +67,24 @@ int main(int argc, char *argv[])
                              application.creatorSelection().yawDeg,
                              application.creatorSelection().pitchDeg);
                      });
+    QObject::connect(&window, &MainWindow::playReframeOutputRequested,
+                     &application, &Application::startReframeOutputPlayback);
+    QObject::connect(&window, &MainWindow::pauseReframeOutputPlaybackRequested,
+                     &application, &Application::pauseReframeOutputPlayback);
+    QObject::connect(&window, &MainWindow::stopReframeOutputPlaybackRequested,
+                     &application, &Application::stopReframeOutputPlayback);
+    QObject::connect(&application, &Application::reframePlaybackFrameReady,
+                     &window, &MainWindow::showReframeOutputPreview);
+    QObject::connect(&application, &Application::reframePlaybackStateChanged,
+                     &window, &MainWindow::showReframePlaybackState);
+    QObject::connect(&application, &Application::reframePlaybackPositionChanged,
+                     &window, &MainWindow::showReframePlaybackPosition);
+    QObject::connect(&application, &Application::reframePlaybackEnded,
+                     &window, [&window]() {
+                         window.showReframePlaybackState(false);
+                         window.showStatus(
+                             QStringLiteral("Render playback ended."));
+                     });
     QObject::connect(&application, &Application::mediaListChanged,
                      &window, &MainWindow::showMediaList);
     QObject::connect(&application, &Application::activeMediaChanged,

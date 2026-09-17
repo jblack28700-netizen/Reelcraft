@@ -650,3 +650,13 @@ Date: 2026-09-17
 - Added rendered-result preview: `Application::previewReframeOutput(index)` decodes the first frame of a persisted render record through an injectable decoder seam (defaulting to the external-FFmpeg `FrameExtractor`) and emits `reframeOutputPreviewReady`; the viewer presents it flat (no equirectangular camera transform). Invalid indices, missing outputs, and decode failures are reported honestly.
 - Minimal UI: "Select Center as Me"/"Clear Me" with a selection readout, "Preview Selected Render" on the existing render list, and a provider status line. `main.cpp` wires them; external detector/speaker providers remain configured through `REELCRAFT_*`.
 - 11 new model-free tests; full model-free suite 359 passed / 0 failed / 4 skipped. Decision 029 records the human-selected Objective 12 scope; Decisions 017-028 preserved.
+
+## v0.2.50 — 360 Rendered-Result Playback
+
+Date: 2026-09-17
+
+- Added deterministic continuous playback of persisted 360 -> flat rendered results: `Application` owns/creates/replaces/disposes the playback `FrameSource` (default `FfmpegFrameSource` opened with the record's geometry), `FramePump`, and `Player` for the selected render, with `startReframeOutputPlayback`/`pauseReframeOutputPlayback`/`resumeReframeOutputPlayback`/`stopReframeOutputPlayback`/`tickReframeOutputPlayback`.
+- The Application owns the event-loop driver (a `QTimer`); the Player owns no timer or thread. Reuses the existing Phase 3 `FrameSource`/`FfmpegFrameSource`/`FramePump`/`Player`/`Playhead`/`Clock`/`PacingPolicy` seams — no parallel playback architecture.
+- Playback frames are emitted as `reframePlaybackFrameReady` and presented flat; `reframePlaybackStateChanged`, `reframePlaybackPositionChanged`, and `reframePlaybackEnded` report progress. Invalid index, missing output, unknown dimensions, source-open failure, decode error, and end-of-stream are honest; the source media and outputs remain read-only.
+- The Objective 10 preview-time contract and the single-frame render preview are preserved. Minimal UI adds Play/Pause/Stop Render controls and a playback position readout.
+- 9 new model-free tests; full model-free suite 368 passed / 0 failed / 5 skipped. New env-gated `realReframePlaybackIntegration` renders a real 360 clip to a flat result and plays it back. Decision 030 records the scope and Definition of Done; Decisions 017-029 preserved.
