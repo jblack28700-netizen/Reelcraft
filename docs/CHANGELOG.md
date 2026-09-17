@@ -539,4 +539,16 @@ Date: 2026-09-17
 - 26 new tests (plan/keyframe round-trip and validation, frame timing, camera interpolation, rendering determinism, intent parsing, plan building, and a real FFmpeg end-to-end render). Full test suite: 180 passed, 0 failed, 0 skipped.
 - No AI provider/model, target detection/tracking, speaker analysis, reframe-plan persistence, or Application/UI integration yet.
 
+## v0.2.39 — 360 Target/Subject Resolution
+
+Date: 2026-09-17
+
+- Added a replaceable 360 target-resolution layer (`app/target/`): detects in overlapping perspective (tangent) views and reprojects detections into the existing spherical camera coordinates, avoiding equirectangular pole/seam distortion.
+- Added a replaceable `TargetDetector` seam with a dependency-free subprocess adapter (`ProcessTargetDetector`, file/JSON protocol). No computer-vision library is linked into Reelcraft.
+- Added a deterministic `SphericalTargetTracker` (spherical NMS + greedy nearest-neighbour association with gate and miss counting) producing identity-persistent `TargetTrack`s.
+- Added `TargetResolver` and `TargetTrackPlanner`: resolved targets bridge to the existing `ReframePlanBuilder`, and full tracks become `ReframePlan`s consumed by `CameraPath`/`ReframeRenderer`. Unresolved queries are reported, never fabricated.
+- Recorded the detection-technology and licensing evaluation in `docs/TARGET_RESOLUTION_TECHNOLOGY.md` (Ultralytics YOLO AGPL-3.0 rejected as a default; permissive candidates recommended).
+- 39 new tests (geometry, seam/pitch boundaries, view coverage, tracking, resolver, subprocess protocol, planner, and a model-free detection -> plan -> render path). Full test suite: 219 passed, 0 failed, 0 skipped.
+- Not implemented yet: a bundled real detection model, "me" identity, speaker localization, semantic classification, production tracking quality, reframe-plan persistence, and UI integration.
+
 

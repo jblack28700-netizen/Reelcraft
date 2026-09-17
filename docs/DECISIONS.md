@@ -618,3 +618,28 @@ The human-approved product priority is a working AI-native 360 editing pipeline:
 - Target detection/tracking, speaker/dialogue analysis, content-based cut selection, reframe-plan persistence in the project schema, UI integration, and AI-provider integration remain future objectives; the reframe engine is deliberately not yet wired into `Application`/`MainWindow`.
 - This decision does not change Phase 3's media-engine boundary (Decision 017); it adds the editing/reframing layer above the existing media seams.
 
+
+# Decision 019 — Target Resolution: Tangent-View Detection, Replaceable Detector, Deterministic Spherical Tracker
+
+**Status:** Accepted (2026-09-17, 360 Reframing Objective 2)
+
+## Context
+
+360 Reframing Objective 1 delivered the deterministic reframing engine but no way to determine where a target is in the footage. A normal 2D detector run on a full equirectangular frame is unreliable near the poles and the 0/360 degree seam because of projection distortion. The objective required "eyes" that map detections into the existing spherical camera contract while keeping the computer-vision layer replaceable and licensing-clean.
+
+## Decisions
+
+- **Detect in overlapping perspective (tangent) views, then reproject.** `EquirectViewPlan` deterministically covers the sphere with pinhole views rendered by the existing `EquirectView`; `EquirectProjection` maps detections back to spherical directions using the exact inverse camera model; spherical non-maximum suppression merges overlapping detections. This avoids direct equirectangular distortion and reuses already-tested projection primitives (evidence and candidate analysis in `docs/TARGET_RESOLUTION_TECHNOLOGY.md`).
+- **The detector is a replaceable seam** (`TargetDetector`) that receives a perspective view and a query. A production-capable adapter (`ProcessTargetDetector`) talks to an external helper over a file/JSON protocol, so Reelcraft links no computer-vision library and model/runtime/license choices stay independent.
+- **The tracker is deterministic and replaceable** (`SphericalTargetTracker`): spherical NMS within a frame, then greedy nearest-neighbour association on great-circle distance with a gate and miss counting. No appearance or re-identification model is claimed.
+- **No fabricated targets.** When nothing matches a query, the resolver records an unresolved note and returns no observations.
+- **Detected targets become `ReframeTarget`s** (`TargetResolver::resolvedTargets`) usable by the existing `ReframePlanBuilder`, and whole tracks become `ReframePlan`s (`TargetTrackPlanner`) consumed by `CameraPath`/`ReframeRenderer`.
+- **Dependency/licensing stance:** no linked CV dependency. Ultralytics YOLO (AGPL-3.0; enterprise license for proprietary use) is rejected as a default; permissively licensed candidates (YOLOX, RT-DETR, OpenCV/OpenCV Zoo, MediaPipe — Apache-2.0; ONNX Runtime — MIT) are recommended and recorded.
+
+## Consequences
+
+- 39 new tests cover geometry, view coverage, seam and pitch boundaries, tracking, resolution, the subprocess protocol, the planner, and a model-free end-to-end detection -> direction -> ReframeTarget -> plan -> render path. Full suite: 219 passed / 0 failed / 0 skipped.
+- Real model integration is not present in this environment; the seam and protocol are tested with a synthetic detector and a shell helper. No model weights are bundled.
+- "Me" identity, speaker localization, semantic understanding, and production tracking quality remain future objectives.
+- This decision does not change Decisions 017 or 018; it adds a target-resolution layer above the reframing engine.
+

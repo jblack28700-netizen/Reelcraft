@@ -31,7 +31,14 @@ SOURCES += \
     ../app/reframe/ReframePlan.cpp \
     ../app/reframe/ReframePlanBuilder.cpp \
     ../app/reframe/ReframePipeline.cpp \
-    ../app/reframe/ReframeRenderer.cpp
+    ../app/reframe/ReframeRenderer.cpp \
+    ../app/target/EquirectProjection.cpp \
+    ../app/target/EquirectViewPlan.cpp \
+    ../app/target/ProcessTargetDetector.cpp \
+    ../app/target/SphericalTargetTracker.cpp \
+    ../app/target/TargetResolver.cpp \
+    ../app/target/TargetTrackPlanner.cpp \
+    ../app/target/TargetTypes.cpp
 
 HEADERS += \
     ../app/core/MediaItem.h \
@@ -62,4 +69,12 @@ HEADERS += \
     ../app/reframe/ReframePlan.h \
     ../app/reframe/ReframePlanBuilder.h \
     ../app/reframe/ReframePipeline.h \
-    ../app/reframe/ReframeRenderer.h
+    ../app/reframe/ReframeRenderer.h \
+    ../app/target/EquirectProjection.h \
+    ../app/target/EquirectViewPlan.h \
+    ../app/target/ProcessTargetDetector.h \
+    ../app/target/SphericalTargetTracker.h \
+    ../app/target/TargetDetector.h \
+    ../app/target/TargetResolver.h \
+    ../app/target/TargetTrackPlanner.h \
+    ../app/target/TargetTypes.h

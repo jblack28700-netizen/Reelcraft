@@ -145,8 +145,30 @@ Prove and implement a deterministic path from 360 source media and a reframing r
 - AI provider/model integration (the deterministic parser is the first implementation of the intent boundary).
 - Reframe-plan persistence in the project schema; Application/UI integration of reframing; playback of reframed output.
 
-## Next Objective (360 Reframing Objective 2) — NOT STARTED
+## 360 Reframing Objective 2 — Target/Subject Resolution — Complete
 
-Target/subject resolution behind the existing resolved-target boundary: derive `ReframeTarget` view directions from the source using existing/open-source detection and tracking (person/object detection, tracking, speaker localization), feed them into `ReframePlanBuilder`, and record evidence/explanation. Must reuse the `ReframeFrameProvider` seam and keep the AI/decision layer separate from deterministic execution. Requires its own scoped objective before implementation.
+Status: **Complete — implemented and verified (2026-09-17; automated suite 219 passed, 0 failed, 0 skipped).**
+
+### Objective
+Give Reelcraft the ability to resolve targets in 360 footage into deterministic spherical/view directions usable by the existing reframing pipeline, behind a replaceable boundary.
+
+### Scope (implemented)
+- `app/target/EquirectProjection`: equirect pixel <-> spherical direction, tangent-view pixel <-> direction (exact inverse of `EquirectView`), detection box -> spherical centre + angular extent, seam-safe angular distance, pitch/FOV bounds.
+- `app/target/EquirectViewPlan`: deterministic overlapping perspective-view coverage (tangent views) with polar views when needed — chosen over direct equirectangular detection because of pole/seam distortion.
+- `app/target/TargetDetector` seam + `app/target/ProcessTargetDetector` (dependency-free subprocess file/JSON protocol; no CV library linked).
+- `app/target/TargetTypes`: `TargetDetection`, `TargetQuery`, `TargetObservation` (timestamp, identity, yaw, pitch, confidence, class, angular extent, evidence) and `TargetTrack`.
+- `app/target/SphericalTargetTracker`: deterministic spherical NMS + greedy nearest-neighbour association with gate and miss counting.
+- `app/target/TargetResolver`: views -> detector -> spherical observations -> tracks; `resolvedTargets()` feeds the existing `ReframePlanBuilder`; unresolved queries are reported, never fabricated.
+- `app/target/TargetTrackPlanner`: track -> validated `ReframePlan` for `CameraPath`/`ReframeRenderer`.
+- 39 new tests, including a model-free end-to-end path.
+- Technology/licensing evaluation: `docs/TARGET_RESOLUTION_TECHNOLOGY.md`; Decision 019.
+
+### Explicitly not implemented
+- A bundled real detection model (no CV runtime in this environment; the subprocess seam is ready).
+- "Me" identity / re-identification; speaker localization; semantic/open-vocabulary classification; production tracking quality.
+
+## Next Objective (360 Reframing Objective 3) — NOT STARTED
+
+Identity and evidence: resolve "me"/the creator and the active speaker into a target identity (creator-selected seed, re-identification, or audio-visual speaker association), and integrate a real permissively licensed detector helper (for example YOLOX or RT-DETR via ONNX Runtime) behind the existing `ProcessTargetDetector` protocol. Requires its own scoped objective before implementation; must keep the real model optional so the unit suite stays model-free.
 
 

@@ -1037,6 +1037,54 @@ The human-approved product priority moved to making the core 360 editing/reframi
 
 - Decision 018 recorded: structured reframing plan boundary; replaceable frame-provider seam; deterministic renderer; deterministic intent boundary; unresolved targets reported.
 
+---
+
+# 2026-09-17 — 360 Reframing Objective 2: Target/Subject Resolution
+
+### Context
+
+Objective 1 delivered the deterministic reframing engine but no way to find a target. A normal 2D detector on a full equirectangular frame is unreliable near the poles and the 0/360-degree seam. After inspecting the existing architecture and researching detection/tracking options and licenses, the objective was implemented as a replaceable, dependency-free target-resolution layer above the existing reframing engine.
+
+### Research and licensing
+
+- Recorded in `docs/TARGET_RESOLUTION_TECHNOLOGY.md`. Verified from each project's own LICENSE and the Ultralytics licensing page:
+  - Rejected as a default: Ultralytics YOLO (AGPL-3.0; enterprise license required for proprietary/closed-source/SaaS use); YOLO-NAS (restrictive/non-commercial weight terms).
+  - Recommended permissive candidates: YOLOX (Apache-2.0), RT-DETR (Apache-2.0), OpenCV / OpenCV Zoo (Apache-2.0, per-model check), MediaPipe (Apache-2.0), ONNX Runtime (MIT).
+- Chosen strategy: detect in overlapping perspective (tangent) views and reproject to the sphere, reusing the tested `EquirectView` projection; no linked CV dependency.
+
+### Work completed
+
+- Added `app/target/EquirectProjection.{h,cpp}`: pure 360 geometry (equirect pixel <-> direction, tangent-view pixel <-> direction exactly matching EquirectView, detection box -> spherical centre + angular radii, seam-safe great-circle distance, yaw normalization, pitch/FOV bounds).
+- Added `app/target/EquirectViewPlan.{h,cpp}`: deterministic overlapping view coverage with automatic polar views.
+- Added `app/target/TargetDetector.h` and `app/target/ProcessTargetDetector.{h,cpp}`: replaceable detector seam plus a subprocess file/JSON adapter.
+- Added `app/target/TargetTypes.{h,cpp}`: detection/query/observation types (timestamp, identity, yaw/pitch, confidence, class, angular extent, evidence) and `TargetTrack` with shortest-yaw sampling and representative-target selection.
+- Added `app/target/SphericalTargetTracker.{h,cpp}`: deterministic spherical NMS (preferring larger angular footprint on overlap) plus greedy nearest-neighbour association with gate and miss counting.
+- Added `app/target/TargetResolver.{h,cpp}`: view -> detector -> spherical observations -> tracks; notes unresolved queries; `resolvedTargets()` bridges to the existing `ReframePlanBuilder`.
+- Added `app/target/TargetTrackPlanner.{h,cpp}`: track -> validated `ReframePlan` consumed by `CameraPath`/`ReframeRenderer`.
+- Registered the module in `reelcraft.pro` and `tests/tests.pro`.
+- Added 39 tests (geometry/round-trip/seam/pitch, view coverage/determinism/poles, tracking identity/merge/gate/misses/confidence/seam/determinism, track sampling/representative, resolver detection/query/unresolved/invalid/determinism/trajectory, `resolvedTargets` -> `ReframePlanBuilder` -> `CameraPath`, subprocess parse/execute/failure, track planning, and a detection -> plan -> render integration).
+
+### Failure recovery
+
+- First test run: 212/7. Root cause: a radians/degrees unit error in the equirect yaw mapping in `EquirectProjection` (yaw returned in radians). Fixed both conversion directions.
+- Second test run: 218/1. Root cause: within-frame duplicate suppression kept a target sliver clipped at a neighbouring view edge over the full detection. Fixed by preferring the larger angular footprint when confidence ties.
+
+### Verification
+
+- Clean application and test builds (Qt 6.10.2, Debian GCC 15) with zero compilation errors.
+- Full automated suite: 219 passed, 0 failed, 0 skipped (~40 s).
+- Model-free end-to-end tests: synthetic equirect -> color detector -> spherical direction -> `ReframeTarget` -> `ReframePlanBuilder` -> `CameraPath`; and detection -> track -> plan -> `ReframeRenderer` render.
+- Offscreen application smoke: SMOKE_EXIT=124.
+
+### Boundary notes / not implemented
+
+- No real detection model is bundled or executed: the environment has no OpenCV/ONNX/TFLite runtime and no pip for the Debian Python. The seam and subprocess protocol are ready; a permissive helper (e.g. YOLOX/RT-DETR via ONNX Runtime) can be added later. This is clearly a "model integration not verified" result, not "real detection verified".
+- "Me" identity, speaker localization, semantic classification, production tracking quality, reframe-plan persistence, and UI integration remain future work.
+
+### Decisions
+
+- Decision 019 recorded (tangent-view detection, replaceable detector, deterministic tracker, no linked CV dependency, unresolved targets reported). Decision 018 preserved unchanged.
+
 
 
 

@@ -2,7 +2,7 @@
 
 ## Current Version
 
-0.2.38
+0.2.39
 
 ## Current Branch
 
@@ -10,7 +10,7 @@ main
 
 ## Current Stage
 
-Phase 4 — 360 Reframing Engine (deterministic vertical slice) implemented and verified. Phase 3 Media Engine remains open; its player-lifecycle objective is intentionally superseded for now by the human-approved 360 priority.
+Phase 4 — 360 Reframing Engine (deterministic vertical slice) and Target/Subject Resolution implemented and verified. Phase 3 Media Engine remains open; its player-lifecycle objective is intentionally superseded for now by the human-approved 360 priority.
 
 ## Project Status
 
@@ -75,13 +75,13 @@ The conceptual AI-to-deterministic edit contract is now backed by a concrete str
 
 Status: Partially implemented — deterministic reframing vertical slice complete.
 
-360° video is a first-class requirement. The viewer supports equirectangular presentation and look-around; media records carry a declared projection; and a deterministic reframing engine now turns a 360 source plus a structured (or natural-language) request into a flat H.264 output through the `ReframePlan`/`CameraPath` contract. Automatic scene/target understanding, detection/tracking, speaker localization, and UI integration of reframing are not yet implemented.
+360° video is a first-class requirement. The viewer supports equirectangular presentation and look-around; media records carry a declared projection; and a deterministic reframing engine now turns a 360 source plus a structured (or natural-language) request into a flat H.264 output through the `ReframePlan`/`CameraPath` contract. Target/subject resolution is now implemented behind a replaceable detector seam (tangent-view detection reprojected to spherical directions, deterministic identity tracking, and a subprocess model adapter); an actual detection model is not yet bundled, "me" identity and speaker localization are not solved, and reframing is not yet wired into the UI.
 
 ## Testing
 
 Status: Implemented and continuously verified.
 
-A Qt Test suite covers project state, viewer/media, the media-source seam and frame pump, player/timing, and the 360 reframing engine (plan validation/round-trip, camera interpolation, rendering determinism, intent parsing, plan building, and a real FFmpeg end-to-end render). Current result: 180 passed, 0 failed, 0 skipped (~41.5 s).
+A Qt Test suite covers project state, viewer/media, the media-source seam and frame pump, player/timing, the 360 reframing engine (plan validation/round-trip, camera interpolation, rendering determinism, intent parsing, plan building, and a real FFmpeg end-to-end render), and target resolution (equirect/view geometry, seam and pitch boundaries, view coverage, deterministic tracking, resolver behavior, the subprocess detector protocol, the track planner, and a model-free detection -> plan -> render path). Current result: 219 passed, 0 failed, 0 skipped (~40 s).
 
 ## Technology Direction
 
@@ -894,4 +894,28 @@ Verification:
 Architecture decision: Decision 018 records the structured plan boundary, replaceable frame provider, deterministic renderer, and deterministic intent boundary.
 
 Next: target/subject resolution (detection/tracking) behind the resolved-target boundary — see `NEXT_TASK.md`.
+
+## Phase 4 Objective 2 — Target/Subject Resolution — Complete
+
+Status: Complete (2026-09-17). Follows the completed deterministic reframing engine (Decision 018) and implements the "eyes" needed to resolve targets.
+
+- Added `app/target/`:
+  - `EquirectProjection` — pure 360 geometry: equirectangular pixel <-> spherical direction, perspective/tangent-view pixel <-> direction (exact inverse of `EquirectView`), detection box -> spherical centre + angular extent, great-circle distance, seam-safe yaw deltas, pitch/FOV bounds.
+  - `EquirectViewPlan` — deterministic overlapping perspective-view coverage of the sphere (with polar views when needed).
+  - `TargetDetector` seam + `ProcessTargetDetector` — a dependency-free subprocess adapter (file/JSON protocol) so no computer-vision library is linked into Reelcraft.
+  - `TargetTypes` — `TargetDetection`, `TargetQuery`, `TargetObservation` (timestamp, identity, yaw/pitch, confidence, class, angular extent, evidence) and `TargetTrack` with shortest-yaw sampling.
+  - `SphericalTargetTracker` — deterministic spherical NMS plus greedy nearest-neighbour association with a gate and miss counting.
+  - `TargetResolver` — orchestrates views -> detector -> spherical observations -> tracks, reports unresolved queries honestly, and exposes `resolvedTargets()` for the existing `ReframePlanBuilder`.
+  - `TargetTrackPlanner` — turns a resolved track into a validated `ReframePlan` consumed unchanged by `CameraPath`/`ReframeRenderer`.
+- Registered in `reelcraft.pro` and `tests/tests.pro`.
+- Recorded the detection-technology and licensing evaluation in `docs/TARGET_RESOLUTION_TECHNOLOGY.md`; Decision 019 records the architecture.
+
+Verification:
+- Application build succeeded; offscreen smoke SMOKE_EXIT=124.
+- Test build succeeded.
+- Automated tests: 219 passed, 0 failed, 0 skipped (180 prior + 39 target-resolution tests), ~40 s.
+- Model-free end-to-end test: synthetic equirect frame -> color detector -> spherical direction -> ReframeTarget -> `ReframePlanBuilder` -> `CameraPath`, and a separate detection -> track -> plan -> `ReframeRenderer` render.
+
+Not implemented: a bundled/real detection model (no CV runtime in this environment), "me" identity, speaker localization, semantic classification, production tracking quality, reframe-plan persistence, and UI integration.
+
 

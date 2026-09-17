@@ -53,6 +53,8 @@ A deterministic 360 reframing vertical slice is implemented and verified under `
 
 The Phase 3 Objective 5 (Application-level player lifecycle) entry in `NEXT_TASK.md` remains valid history but must not be started mechanically while the 360 priority is active.
 
+Target/subject resolution is also implemented under `app/target/` (Decision 019): a replaceable `TargetDetector` seam (with a dependency-free subprocess adapter), pure 360 geometry, deterministic tangent-view coverage, a deterministic spherical tracker, and a resolver/track-planner that produce `ReframeTarget`s and `ReframePlan`s for the existing engine. No real detection model is bundled; the detection-technology and licensing evaluation is in `docs/TARGET_RESOLUTION_TECHNOLOGY.md`. "Me" identity, speaker localization, and UI integration remain future objectives.
+
 Do not assume that planned architecture has already been implemented; read `CURRENT_STATE.md` and `NEXT_TASK.md` for exact status.
 
 ---

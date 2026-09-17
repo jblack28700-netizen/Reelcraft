@@ -43,6 +43,14 @@
 #include "reframe/ReframePlanBuilder.h"
 #include "reframe/ReframePipeline.h"
 #include "reframe/ReframeRenderer.h"
+#include "target/EquirectProjection.h"
+#include "target/EquirectViewPlan.h"
+#include "target/ProcessTargetDetector.h"
+#include "target/SphericalTargetTracker.h"
+#include "target/TargetDetector.h"
+#include "target/TargetResolver.h"
+#include "target/TargetTrackPlanner.h"
+#include "target/TargetTypes.h"
 #include "ui/MainWindow.h"
 #include "ui/ViewerWidget.h"
 #include "viewer/EquirectView.h"
@@ -569,6 +577,177 @@ ReframePlan makeReframePlan(qint64 startMs, qint64 endMs, int width, int height,
     return plan;
 }
 
+// --- 360 target resolution test helpers ------------------------------------
+// Deterministic, model-free helpers: a synthetic equirect frame builder, a
+// color-blob detector that implements the replaceable TargetDetector seam, and
+// simple frame providers. They let the geometry, tracker, resolver, and
+// planner be tested end-to-end without downloading any model.
+
+struct EquirectDisk
+{
+    double yawDeg = 0.0;
+    double pitchDeg = 0.0;
+    double radiusDeg = 8.0;
+    QColor color;
+};
+
+QImage buildTargetEquirect(int width, int height, const QList<EquirectDisk> &disks)
+{
+    QImage image(width, height, QImage::Format_ARGB32);
+    image.fill(QColor(0, 0, 0));
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const SphericalDirection direction =
+                EquirectProjection::directionFromEquirectPixel(x, y, width, height);
+            for (const EquirectDisk &disk : disks) {
+                const SphericalDirection center{ disk.yawDeg, disk.pitchDeg };
+                if (EquirectProjection::angularDistanceDeg(direction, center)
+                    <= disk.radiusDeg) {
+                    image.setPixel(x, y, disk.color.rgb());
+                    break;
+                }
+            }
+        }
+    }
+    return image;
+}
+
+class SyntheticColorDetector : public TargetDetector
+{
+public:
+    struct Spec
+    {
+        QColor color;
+        QString label;
+        int tolerance = 40;
+        double confidence = 0.9;
+    };
+
+    void addSpec(const QColor &color, const QString &label, int tolerance = 40,
+                 double confidence = 0.9)
+    {
+        m_specs.append(Spec{ color, label, tolerance, confidence });
+    }
+
+    QString name() const override { return QStringLiteral("synthetic-color"); }
+
+    bool detect(const QImage &view, const TargetQuery &query,
+                QList<TargetDetection> *out, QString *error) override
+    {
+        if (error) {
+            error->clear();
+        }
+        if (out) {
+            out->clear();
+        }
+        if (!out || view.isNull()) {
+            return false;
+        }
+        for (const Spec &spec : m_specs) {
+            if (!query.label.isEmpty() && spec.label != query.label) {
+                continue;
+            }
+            int minX = view.width();
+            int minY = view.height();
+            int maxX = -1;
+            int maxY = -1;
+            int count = 0;
+            for (int y = 0; y < view.height(); ++y) {
+                for (int x = 0; x < view.width(); ++x) {
+                    const QColor color = view.pixelColor(x, y);
+                    const int diff = qMax(qMax(qAbs(color.red() - spec.color.red()),
+                                               qAbs(color.green() - spec.color.green())),
+                                          qAbs(color.blue() - spec.color.blue()));
+                    if (diff <= spec.tolerance) {
+                        minX = qMin(minX, x);
+                        minY = qMin(minY, y);
+                        maxX = qMax(maxX, x);
+                        maxY = qMax(maxY, y);
+                        ++count;
+                    }
+                }
+            }
+            if (count < 4) {
+                continue;
+            }
+            TargetDetection detection;
+            detection.boundingBox =
+                QRectF(minX, minY, maxX - minX + 1, maxY - minY + 1);
+            detection.label = spec.label;
+            detection.confidence = spec.confidence;
+            out->append(detection);
+        }
+        return true;
+    }
+
+private:
+    QList<Spec> m_specs;
+};
+
+class StaticEquirectProvider : public ReframeFrameProvider
+{
+public:
+    explicit StaticEquirectProvider(QImage image) : m_image(std::move(image)) {}
+
+    bool frameAt(qint64, QImage *outFrame, QString *error) override
+    {
+        if (error) {
+            error->clear();
+        }
+        if (!outFrame) {
+            return false;
+        }
+        *outFrame = m_image;
+        return true;
+    }
+
+private:
+    QImage m_image;
+};
+
+// A frame provider whose target disk moves linearly in yaw over a duration.
+class MovingDiskProvider : public ReframeFrameProvider
+{
+public:
+    MovingDiskProvider(int width, int height, QColor color, double radiusDeg)
+        : m_width(width), m_height(height), m_color(color), m_radius(radiusDeg)
+    {
+    }
+
+    void setMotion(double startYawDeg, double endYawDeg, qint64 durationMs)
+    {
+        m_startYaw = startYawDeg;
+        m_endYaw = endYawDeg;
+        m_duration = durationMs > 0 ? durationMs : 1;
+    }
+
+    bool frameAt(qint64 timeMs, QImage *outFrame, QString *error) override
+    {
+        if (error) {
+            error->clear();
+        }
+        if (!outFrame) {
+            return false;
+        }
+        const double t =
+            qBound(0.0, static_cast<double>(timeMs) / m_duration, 1.0);
+        const double yaw = m_startYaw + (m_endYaw - m_startYaw) * t;
+        QList<EquirectDisk> disks;
+        disks.append(EquirectDisk{ yaw, 0.0, m_radius, m_color });
+        *outFrame = buildTargetEquirect(m_width, m_height, disks);
+        return true;
+    }
+
+private:
+    int m_width;
+    int m_height;
+    QColor m_color;
+    double m_radius;
+    double m_startYaw = 0.0;
+    double m_endYaw = 0.0;
+    qint64 m_duration = 1000;
+};
+
 } // namespace
 
 class TestMainWindow : public MainWindow
@@ -766,6 +945,45 @@ private slots:
     void reframeBuilderRejectsUnresolvedTargets();
     void reframeBuilderHonorsIntentTimeRangeAndOutput();
     void reframePipelineRendersRealVideoEndToEnd();
+    void equirectDirectionFromCenterAndSides();
+    void equirectPixelRoundTrip();
+    void equirectAngularDistanceHandlesSeam();
+    void equirectPitchClampAndValidity();
+    void equirectViewCenterMatchesDirection();
+    void equirectViewDirectionRoundTrip();
+    void equirectViewRejectsBehindCamera();
+    void equirectDetectionToDirectionMapsBox();
+    void equirectDetectionRejectsInvalidBox();
+    void equirectViewPlanCoversSphere();
+    void equirectViewPlanIsDeterministic();
+    void equirectViewPlanAddsPolarViews();
+    void targetTrackerCreatesTrackFromDetection();
+    void targetTrackerPersistsIdentityAcrossFrames();
+    void targetTrackerSeparatesDistinctTargets();
+    void targetTrackerMergesNearDuplicates();
+    void targetTrackerGreedyPrefersNearest();
+    void targetTrackerGateCreatesNewTrack();
+    void targetTrackerDeactivatesAfterMisses();
+    void targetTrackerFiltersLowConfidence();
+    void targetTrackerSeamContinuity();
+    void targetTrackerIsDeterministic();
+    void targetTrackSampleAtInterpolates();
+    void targetTrackRepresentativeTarget();
+    void targetResolverFindsSyntheticTarget();
+    void targetResolverHonorsLabelQuery();
+    void targetResolverReportsUnresolved();
+    void targetResolverRejectsInvalidInput();
+    void targetResolverIsDeterministic();
+    void targetResolverSequenceBuildsTrajectory();
+    void targetResolverFeedsReframePlanBuilder();
+    void targetProcessDetectorParsesResponse();
+    void targetProcessDetectorRunsHelper();
+    void targetProcessDetectorFailsOnMissingExecutable();
+    void targetProcessDetectorFailsOnBadExit();
+    void targetTrackPlannerBuildsFollowPlan();
+    void targetTrackPlannerRejectsEmptyTrack();
+    void targetTrackPlannerFiltersLowConfidence();
+    void targetResolutionToRenderPipeline();
 };
 
 void ProjectTest::initTestCase()
@@ -5733,6 +5951,723 @@ void ProjectTest::reframePipelineRendersRealVideoEndToEnd()
         result.outputPath, FrameExtractor::defaultExecutablePath(), &decoded,
         &error));
     QCOMPARE(decoded.size(), QSize(160, 90));
+}
+
+// ==================== 360 target resolution (Phase 4, Obj 2) ====================
+// Deterministic infrastructure tests plus a model-free end-to-end path. No
+// model is downloaded and no CV dependency is linked; the replaceable
+// TargetDetector seam is exercised with a synthetic color detector and a
+// subprocess helper.
+
+namespace {
+
+TargetObservation makeTargetObservation(
+    qint64 timeMs, double yawDeg, double pitchDeg,
+    const QString &label = QStringLiteral("person"), double confidence = 0.9,
+    const QString &targetId = QString())
+{
+    TargetObservation observation;
+    observation.timeMs = timeMs;
+    observation.yawDeg = yawDeg;
+    observation.pitchDeg = pitchDeg;
+    observation.label = label;
+    observation.confidence = confidence;
+    observation.targetId = targetId;
+    return observation;
+}
+
+TargetResolveConfig smallResolverConfig()
+{
+    TargetResolveConfig config;
+    config.viewPlan.fieldOfViewDeg = 75.0;
+    config.viewPlan.yawCount = 6;
+    config.viewPlan.pitchCount = 3;
+    config.viewPlan.viewWidth = 160;
+    config.viewPlan.viewHeight = 120;
+    config.minConfidence = 0.3;
+    return config;
+}
+
+} // namespace
+
+void ProjectTest::equirectDirectionFromCenterAndSides()
+{
+    const int width = 360;
+    const int height = 180;
+    const SphericalDirection center = EquirectProjection::directionFromEquirectPixel(
+        179.5, 89.5, width, height);
+    QVERIFY(qAbs(center.yawDeg) < 1e-6);
+    QVERIFY(qAbs(center.pitchDeg) < 1e-6);
+
+    const SphericalDirection right = EquirectProjection::directionFromEquirectPixel(
+        269.5, 89.5, width, height);
+    QVERIFY(qAbs(right.yawDeg - 90.0) < 1e-6);
+
+    const SphericalDirection left = EquirectProjection::directionFromEquirectPixel(
+        89.5, 89.5, width, height);
+    QVERIFY(qAbs(left.yawDeg + 90.0) < 1e-6);
+
+    const SphericalDirection top = EquirectProjection::directionFromEquirectPixel(
+        179.5, -0.5, width, height);
+    QVERIFY(qAbs(top.pitchDeg - 90.0) < 1e-6);
+}
+
+void ProjectTest::equirectPixelRoundTrip()
+{
+    const int width = 720;
+    const int height = 360;
+    const double yaws[] = { -170.0, -90.0, -45.0, 0.0, 45.0, 90.0, 170.0 };
+    const double pitches[] = { -80.0, -30.0, 0.0, 30.0, 80.0 };
+    for (double yaw : yaws) {
+        for (double pitch : pitches) {
+            QPointF pixel;
+            QVERIFY(EquirectProjection::equirectPixelFromDirection(yaw, pitch, width,
+                                                                    height, &pixel));
+            const SphericalDirection back = EquirectProjection::directionFromEquirectPixel(
+                pixel.x(), pixel.y(), width, height);
+            const SphericalDirection expected{ yaw, pitch };
+            QVERIFY(EquirectProjection::angularDistanceDeg(expected, back) < 0.5);
+        }
+    }
+}
+
+void ProjectTest::equirectAngularDistanceHandlesSeam()
+{
+    QVERIFY(qAbs(EquirectProjection::angularDistanceDeg({ 179.0, 0.0 }, { -179.0, 0.0 })
+                 - 2.0) < 1e-6);
+    QVERIFY(qAbs(EquirectProjection::angularDistanceDeg({ 179.5, 0.0 }, { -179.5, 0.0 })
+                 - 1.0) < 1e-6);
+    QVERIFY(qAbs(EquirectProjection::angularDistanceDeg({ 10.0, 5.0 }, { 10.0, 5.0 }))
+            < 1e-9);
+    QVERIFY(qAbs(EquirectProjection::angularDistanceDeg({ 0.0, 0.0 }, { 0.0, 10.0 })
+                 - 10.0) < 1e-6);
+    QVERIFY(qAbs(EquirectProjection::shortestYawDeltaDeg(179.0, -179.0) - 2.0) < 1e-6);
+    QVERIFY(qAbs(EquirectProjection::shortestYawDeltaDeg(-179.0, 179.0) + 2.0) < 1e-6);
+}
+
+void ProjectTest::equirectPitchClampAndValidity()
+{
+    QVERIFY(qAbs(EquirectProjection::clampPitchDeg(120.0) - 90.0) < 1e-9);
+    QVERIFY(qAbs(EquirectProjection::clampPitchDeg(-120.0) + 90.0) < 1e-9);
+    QVERIFY(EquirectProjection::isValidDirection(0.0, 90.0));
+    QVERIFY(!EquirectProjection::isValidDirection(0.0, 90.5));
+    QVERIFY(!EquirectProjection::isValidDirection(std::nan(""), 0.0));
+    QVERIFY(qAbs(EquirectProjection::normalizeYawDeg(190.0) + 170.0) < 1e-9);
+    QVERIFY(qAbs(EquirectProjection::normalizeYawDeg(-190.0) - 170.0) < 1e-9);
+}
+
+void ProjectTest::equirectViewCenterMatchesDirection()
+{
+    const PerspectiveView view{ 40.0, 10.0, 75.0, 320, 240 };
+    const SphericalDirection center =
+        EquirectProjection::directionFromViewPixel(view, 159.5, 119.5);
+    QVERIFY(EquirectProjection::angularDistanceDeg(center, { 40.0, 10.0 }) < 1e-6);
+}
+
+void ProjectTest::equirectViewDirectionRoundTrip()
+{
+    const PerspectiveView view{ 30.0, -20.0, 75.0, 320, 240 };
+    const double yaws[] = { 10.0, 20.0, 30.0, 40.0, 50.0 };
+    const double pitches[] = { -30.0, -20.0, -10.0 };
+    for (double yaw : yaws) {
+        for (double pitch : pitches) {
+            QPointF pixel;
+            QVERIFY(EquirectProjection::viewPixelFromDirection(view, yaw, pitch, &pixel));
+            const SphericalDirection back =
+                EquirectProjection::directionFromViewPixel(view, pixel.x(), pixel.y());
+            QVERIFY(EquirectProjection::angularDistanceDeg({ yaw, pitch }, back) < 1e-4);
+        }
+    }
+}
+
+void ProjectTest::equirectViewRejectsBehindCamera()
+{
+    const PerspectiveView view{ 0.0, 0.0, 75.0, 320, 240 };
+    QVERIFY(EquirectProjection::isDirectionInView(view, 0.0, 0.0));
+    QVERIFY(!EquirectProjection::isDirectionInView(view, 180.0, 0.0));
+    QPointF pixel;
+    QVERIFY(!EquirectProjection::viewPixelFromDirection(view, 180.0, 0.0, &pixel));
+}
+
+void ProjectTest::equirectDetectionToDirectionMapsBox()
+{
+    const PerspectiveView view{ 0.0, 0.0, 90.0, 320, 180 };
+    SphericalDirection center;
+    double yawRadius = 0.0;
+    double pitchRadius = 0.0;
+    QVERIFY(EquirectProjection::detectionToDirection(
+        view, QRectF(150.0, 80.0, 20.0, 20.0), &center, &yawRadius, &pitchRadius));
+    QVERIFY(EquirectProjection::angularDistanceDeg(center, { 0.0, 0.0 }) < 2.0);
+    QVERIFY(yawRadius > 0.0);
+    QVERIFY(pitchRadius > 0.0);
+    QVERIFY(yawRadius < 90.0);
+    QVERIFY(pitchRadius < 90.0);
+}
+
+void ProjectTest::equirectDetectionRejectsInvalidBox()
+{
+    const PerspectiveView view{ 0.0, 0.0, 90.0, 320, 180 };
+    SphericalDirection center;
+    double yawRadius = 0.0;
+    double pitchRadius = 0.0;
+    QVERIFY(!EquirectProjection::detectionToDirection(view, QRectF(), &center,
+                                                      &yawRadius, &pitchRadius));
+    QVERIFY(!EquirectProjection::detectionToDirection(
+        view, QRectF(10.0, 10.0, -5.0, 10.0), &center, &yawRadius, &pitchRadius));
+}
+
+void ProjectTest::equirectViewPlanCoversSphere()
+{
+    EquirectViewPlan::Config config;
+    config.fieldOfViewDeg = 75.0;
+    config.yawCount = 6;
+    config.pitchCount = 3;
+    config.viewWidth = 160;
+    config.viewHeight = 120;
+    const QList<PerspectiveView> views = EquirectViewPlan::coveringViews(config);
+    QVERIFY(views.size() >= 18);
+
+    const double pitches[] = { -85.0, -75.0, -45.0, 0.0, 45.0, 75.0, 85.0 };
+    for (double pitch : pitches) {
+        for (double yaw = -180.0; yaw < 180.0; yaw += 15.0) {
+            QVERIFY2(EquirectViewPlan::covers(views, yaw, pitch),
+                     qPrintable(QStringLiteral("uncovered yaw=%1 pitch=%2")
+                                    .arg(yaw).arg(pitch)));
+        }
+    }
+}
+
+void ProjectTest::equirectViewPlanIsDeterministic()
+{
+    EquirectViewPlan::Config config;
+    config.fieldOfViewDeg = 75.0;
+    config.yawCount = 5;
+    config.pitchCount = 4;
+    config.viewWidth = 160;
+    config.viewHeight = 120;
+    const QList<PerspectiveView> a = EquirectViewPlan::coveringViews(config);
+    const QList<PerspectiveView> b = EquirectViewPlan::coveringViews(config);
+    QCOMPARE(a.size(), b.size());
+    for (int i = 0; i < a.size(); ++i) {
+        QVERIFY(qAbs(a.at(i).yawDeg - b.at(i).yawDeg) < 1e-12);
+        QVERIFY(qAbs(a.at(i).pitchDeg - b.at(i).pitchDeg) < 1e-12);
+        QCOMPARE(a.at(i).width, b.at(i).width);
+        QCOMPARE(a.at(i).height, b.at(i).height);
+    }
+}
+
+void ProjectTest::equirectViewPlanAddsPolarViews()
+{
+    EquirectViewPlan::Config config;
+    config.fieldOfViewDeg = 75.0;
+    config.yawCount = 4;
+    config.pitchCount = 1;
+    config.viewWidth = 160;
+    config.viewHeight = 120;
+    const QList<PerspectiveView> views = EquirectViewPlan::coveringViews(config);
+    QVERIFY(EquirectViewPlan::covers(views, 0.0, 89.0));
+    QVERIFY(EquirectViewPlan::covers(views, 0.0, -89.0));
+    QVERIFY(EquirectViewPlan::covers(views, 123.0, 85.0));
+}
+
+void ProjectTest::targetTrackerCreatesTrackFromDetection()
+{
+    SphericalTargetTracker tracker;
+    const QList<TargetObservation> assigned =
+        tracker.update({ makeTargetObservation(0, 10.0, 0.0) }, 0);
+    QCOMPARE(assigned.size(), 1);
+    QCOMPARE(assigned.at(0).targetId, QStringLiteral("t1"));
+    QCOMPARE(tracker.tracks().size(), 1);
+    QCOMPARE(tracker.tracks().at(0).size(), 1);
+    QCOMPARE(tracker.tracks().at(0).label(), QStringLiteral("person"));
+}
+
+void ProjectTest::targetTrackerPersistsIdentityAcrossFrames()
+{
+    SphericalTargetTracker tracker;
+    tracker.update({ makeTargetObservation(0, 0.0, 0.0) }, 0);
+    const QList<TargetObservation> second =
+        tracker.update({ makeTargetObservation(500, 5.0, 0.0) }, 500);
+    QCOMPARE(second.size(), 1);
+    QCOMPARE(second.at(0).targetId, QStringLiteral("t1"));
+    QCOMPARE(tracker.tracks().size(), 1);
+    QCOMPARE(tracker.tracks().at(0).size(), 2);
+}
+
+void ProjectTest::targetTrackerSeparatesDistinctTargets()
+{
+    SphericalTargetTracker tracker;
+    tracker.update({ makeTargetObservation(0, -60.0, 0.0),
+                     makeTargetObservation(0, 60.0, 0.0) }, 0);
+    QCOMPARE(tracker.tracks().size(), 2);
+    QVERIFY(tracker.trackById(QStringLiteral("t1")) != nullptr);
+    QVERIFY(tracker.trackById(QStringLiteral("t2")) != nullptr);
+}
+
+void ProjectTest::targetTrackerMergesNearDuplicates()
+{
+    QList<TargetObservation> observations = {
+        makeTargetObservation(0, 10.0, 0.0, QStringLiteral("person"), 0.8),
+        makeTargetObservation(0, 12.0, 0.0, QStringLiteral("person"), 0.9)
+    };
+    QList<TargetObservation> merged =
+        SphericalTargetTracker::mergeNearDuplicates(observations, 8.0);
+    QCOMPARE(merged.size(), 1);
+    QVERIFY(qAbs(merged.at(0).confidence - 0.9) < 1e-9);
+
+    std::reverse(observations.begin(), observations.end());
+    merged = SphericalTargetTracker::mergeNearDuplicates(observations, 8.0);
+    QCOMPARE(merged.size(), 1);
+    QVERIFY(qAbs(merged.at(0).confidence - 0.9) < 1e-9);
+}
+
+void ProjectTest::targetTrackerGreedyPrefersNearest()
+{
+    SphericalTargetTracker tracker;
+    tracker.update({ makeTargetObservation(0, 0.0, 0.0) }, 0);
+    tracker.update({ makeTargetObservation(500, 12.0, 0.0),
+                     makeTargetObservation(500, 2.0, 0.0) }, 500);
+    QCOMPARE(tracker.tracks().size(), 2);
+    const TargetTrack *track = tracker.trackById(QStringLiteral("t1"));
+    QVERIFY(track != nullptr);
+    QVERIFY(qAbs(track->observations().last().yawDeg - 2.0) < 1e-9);
+}
+
+void ProjectTest::targetTrackerGateCreatesNewTrack()
+{
+    SphericalTargetTracker tracker;
+    tracker.update({ makeTargetObservation(0, 0.0, 0.0) }, 0);
+    tracker.update({ makeTargetObservation(500, 80.0, 0.0) }, 500);
+    QCOMPARE(tracker.tracks().size(), 2);
+    const TargetTrack *first = tracker.trackById(QStringLiteral("t1"));
+    QVERIFY(first != nullptr);
+    QCOMPARE(first->missCount(), 1);
+}
+
+void ProjectTest::targetTrackerDeactivatesAfterMisses()
+{
+    SphericalTargetTracker::Config config;
+    config.maxMisses = 2;
+    SphericalTargetTracker tracker(config);
+    tracker.update({ makeTargetObservation(0, 0.0, 0.0) }, 0);
+    tracker.update({}, 500);
+    tracker.update({}, 1000);
+    QVERIFY(tracker.trackById(QStringLiteral("t1"))->active());
+    tracker.update({}, 1500);
+    const TargetTrack *track = tracker.trackById(QStringLiteral("t1"));
+    QVERIFY(!track->active());
+    QCOMPARE(track->size(), 1);
+    QCOMPARE(tracker.activeTracks().size(), 0);
+}
+
+void ProjectTest::targetTrackerFiltersLowConfidence()
+{
+    SphericalTargetTracker::Config config;
+    config.minConfidence = 0.5;
+    SphericalTargetTracker tracker(config);
+    tracker.update({ makeTargetObservation(0, 0.0, 0.0, QStringLiteral("person"), 0.2) }, 0);
+    QCOMPARE(tracker.tracks().size(), 0);
+}
+
+void ProjectTest::targetTrackerSeamContinuity()
+{
+    SphericalTargetTracker tracker;
+    tracker.update({ makeTargetObservation(0, 179.0, 0.0) }, 0);
+    tracker.update({ makeTargetObservation(500, -179.0, 0.0) }, 500);
+    QCOMPARE(tracker.tracks().size(), 1);
+    QCOMPARE(tracker.tracks().at(0).size(), 2);
+}
+
+void ProjectTest::targetTrackerIsDeterministic()
+{
+    const auto run = []() {
+        SphericalTargetTracker tracker;
+        tracker.update({ makeTargetObservation(0, -40.0, 0.0),
+                         makeTargetObservation(0, 40.0, 0.0) }, 0);
+        tracker.update({ makeTargetObservation(500, -38.0, 0.0),
+                         makeTargetObservation(500, 42.0, 0.0) }, 500);
+        return tracker;
+    };
+    const SphericalTargetTracker a = run();
+    const SphericalTargetTracker b = run();
+    QCOMPARE(a.tracks().size(), b.tracks().size());
+    for (int i = 0; i < a.tracks().size(); ++i) {
+        QCOMPARE(a.tracks().at(i).id(), b.tracks().at(i).id());
+        QCOMPARE(a.tracks().at(i).size(), b.tracks().at(i).size());
+        QVERIFY(qAbs(a.tracks().at(i).observations().last().yawDeg
+                     - b.tracks().at(i).observations().last().yawDeg) < 1e-12);
+    }
+}
+
+void ProjectTest::targetTrackSampleAtInterpolates()
+{
+    TargetTrack track(QStringLiteral("t1"), QStringLiteral("person"));
+    track.append(makeTargetObservation(0, 170.0, 10.0, QStringLiteral("person"), 0.8));
+    track.append(makeTargetObservation(1000, -170.0, 20.0, QStringLiteral("person"), 0.6));
+
+    TargetObservation sampled;
+    QVERIFY(track.sampleAt(500, &sampled));
+    QVERIFY(qAbs(qAbs(sampled.yawDeg) - 180.0) < 1e-6);
+    QVERIFY(qAbs(sampled.pitchDeg - 15.0) < 1e-6);
+    QVERIFY(qAbs(sampled.confidence - 0.7) < 1e-6);
+
+    QVERIFY(track.sampleAt(-100, &sampled));
+    QVERIFY(qAbs(sampled.yawDeg - 170.0) < 1e-9);
+    QVERIFY(track.sampleAt(5000, &sampled));
+    QVERIFY(qAbs(sampled.yawDeg + 170.0) < 1e-9);
+}
+
+void ProjectTest::targetTrackRepresentativeTarget()
+{
+    TargetTrack track(QStringLiteral("t7"), QStringLiteral("person"));
+    track.append(makeTargetObservation(0, 10.0, 5.0, QStringLiteral("person"), 0.5,
+                                       QStringLiteral("t7")));
+    track.append(makeTargetObservation(500, 20.0, 6.0, QStringLiteral("person"), 0.95,
+                                       QStringLiteral("t7")));
+    TargetObservation representative;
+    QVERIFY(track.representative(&representative));
+    QVERIFY(qAbs(representative.yawDeg - 20.0) < 1e-9);
+
+    const ReframeTarget target = track.representativeTarget();
+    QCOMPARE(target.id, QStringLiteral("t7"));
+    QVERIFY(qAbs(target.yawDeg - 20.0) < 1e-9);
+    QVERIFY(qAbs(target.pitchDeg - 6.0) < 1e-9);
+}
+
+void ProjectTest::targetResolverFindsSyntheticTarget()
+{
+    const QImage frame = buildTargetEquirect(
+        360, 180, { EquirectDisk{ 40.0, 10.0, 8.0, QColor(255, 0, 0) } });
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+    TargetResolver resolver(smallResolverConfig());
+
+    TargetQuery query;
+    query.label = QStringLiteral("person");
+    query.minConfidence = 0.3;
+
+    QList<TargetObservation> observations;
+    QString error;
+    QVERIFY2(resolver.resolveFrame(frame, 0, query, &detector, &observations, &error),
+             qPrintable(error));
+    QCOMPARE(observations.size(), 1);
+    QVERIFY(qAbs(observations.at(0).yawDeg - 40.0) < 4.0);
+    QVERIFY(qAbs(observations.at(0).pitchDeg - 10.0) < 4.0);
+    QVERIFY(observations.at(0).confidence > 0.3);
+    QCOMPARE(observations.at(0).targetId, QStringLiteral("t1"));
+    QCOMPARE(observations.at(0).label, QStringLiteral("person"));
+}
+
+void ProjectTest::targetResolverHonorsLabelQuery()
+{
+    const QImage frame = buildTargetEquirect(
+        360, 180,
+        { EquirectDisk{ -50.0, 0.0, 8.0, QColor(255, 0, 0) },
+          EquirectDisk{ 50.0, 0.0, 8.0, QColor(0, 0, 255) } });
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+    detector.addSpec(QColor(0, 0, 255), QStringLiteral("car"));
+    TargetResolver resolver(smallResolverConfig());
+
+    TargetQuery query;
+    query.label = QStringLiteral("car");
+    QList<TargetObservation> observations;
+    QString error;
+    QVERIFY2(resolver.resolveFrame(frame, 0, query, &detector, &observations, &error),
+             qPrintable(error));
+    QCOMPARE(observations.size(), 1);
+    QCOMPARE(observations.at(0).label, QStringLiteral("car"));
+    QVERIFY(qAbs(observations.at(0).yawDeg - 50.0) < 4.0);
+}
+
+void ProjectTest::targetResolverReportsUnresolved()
+{
+    QImage frame(360, 180, QImage::Format_ARGB32);
+    frame.fill(QColor(0, 0, 0));
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+    TargetResolver resolver(smallResolverConfig());
+
+    TargetQuery query;
+    query.label = QStringLiteral("person");
+    QList<TargetObservation> observations;
+    QString error;
+    QVERIFY(resolver.resolveFrame(frame, 0, query, &detector, &observations, &error));
+    QCOMPARE(observations.size(), 0);
+    QVERIFY(!resolver.notes().isEmpty());
+    QVERIFY(resolver.notes().join(QStringLiteral("\n"))
+                .contains(QStringLiteral("Unresolved")));
+    QCOMPARE(resolver.tracks().size(), 0);
+}
+
+void ProjectTest::targetResolverRejectsInvalidInput()
+{
+    TargetResolver resolver(smallResolverConfig());
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+    QList<TargetObservation> observations;
+    QString error;
+    QVERIFY(!resolver.resolveFrame(QImage(), 0, TargetQuery(), &detector, &observations,
+                                   &error));
+    QVERIFY(!error.isEmpty());
+
+    QImage frame(360, 180, QImage::Format_ARGB32);
+    frame.fill(QColor(0, 0, 0));
+    QVERIFY(!resolver.resolveFrame(frame, 0, TargetQuery(), nullptr, &observations,
+                                   &error));
+}
+
+void ProjectTest::targetResolverIsDeterministic()
+{
+    const QImage frame = buildTargetEquirect(
+        360, 180, { EquirectDisk{ 25.0, -15.0, 8.0, QColor(255, 0, 0) } });
+    const auto run = [&frame]() {
+        SyntheticColorDetector detector;
+        detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+        TargetResolver resolver(smallResolverConfig());
+        QList<TargetObservation> observations;
+        resolver.resolveFrame(frame, 0, TargetQuery{}, &detector, &observations, nullptr);
+        return observations;
+    };
+    const QList<TargetObservation> a = run();
+    const QList<TargetObservation> b = run();
+    QCOMPARE(a.size(), b.size());
+    for (int i = 0; i < a.size(); ++i) {
+        QCOMPARE(a.at(i).targetId, b.at(i).targetId);
+        QVERIFY(qAbs(a.at(i).yawDeg - b.at(i).yawDeg) < 1e-12);
+        QVERIFY(qAbs(a.at(i).pitchDeg - b.at(i).pitchDeg) < 1e-12);
+    }
+}
+
+void ProjectTest::targetResolverSequenceBuildsTrajectory()
+{
+    MovingDiskProvider provider(360, 180, QColor(255, 0, 0), 8.0);
+    provider.setMotion(-20.0, 20.0, 1000);
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+    TargetResolver resolver(smallResolverConfig());
+
+    TargetQuery query;
+    query.label = QStringLiteral("person");
+    QList<TargetTrack> tracks;
+    QString error;
+    QVERIFY2(resolver.resolveSequence(&provider, { 0, 500, 1000 }, query, &detector,
+                                      &tracks, &error),
+             qPrintable(error));
+    QCOMPARE(tracks.size(), 1);
+    QCOMPARE(tracks.at(0).size(), 3);
+    const QList<TargetObservation> &observations = tracks.at(0).observations();
+    QVERIFY(observations.at(0).yawDeg < observations.at(1).yawDeg);
+    QVERIFY(observations.at(1).yawDeg < observations.at(2).yawDeg);
+    QVERIFY(qAbs(observations.at(1).yawDeg) < 6.0);
+}
+
+void ProjectTest::targetResolverFeedsReframePlanBuilder()
+{
+    const QImage frame = buildTargetEquirect(
+        360, 180, { EquirectDisk{ 45.0, 5.0, 8.0, QColor(255, 0, 0) } });
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+    TargetResolver resolver(smallResolverConfig());
+
+    TargetQuery query;
+    query.label = QStringLiteral("person");
+    QList<TargetObservation> observations;
+    QString error;
+    QVERIFY2(resolver.resolveFrame(frame, 0, query, &detector, &observations, &error),
+             qPrintable(error));
+    QVERIFY(!observations.isEmpty());
+
+    const QList<ReframeTarget> targets = resolver.resolvedTargets(QStringLiteral("person"));
+    QCOMPARE(targets.size(), 1);
+    QCOMPARE(targets.at(0).id, QStringLiteral("person"));
+    QVERIFY(qAbs(targets.at(0).yawDeg - 45.0) < 4.0);
+
+    const ReframeIntent intent =
+        ReframeIntentParser::parse(QStringLiteral("look at the person"));
+    const ReframeBuildResult built = ReframePlanBuilder::build(
+        intent, targets, ReframePlan::TimeRange{ 0, 2000 },
+        ReframePlan::OutputSpec{ 160, 90, 2.0 });
+    QVERIFY2(built.ok, qPrintable(built.error));
+
+    const CameraState state = CameraPath::stateAt(built.plan, 0);
+    QVERIFY(qAbs(state.yawDeg - targets.at(0).yawDeg) < 1e-6);
+}
+
+void ProjectTest::targetProcessDetectorParsesResponse()
+{
+    QList<TargetDetection> detections;
+    QString error;
+    QVERIFY(ProcessTargetDetector::parseResponse(
+        "{\"detections\":[{\"x\":1,\"y\":2,\"width\":3,\"height\":4,"
+        "\"label\":\"person\",\"confidence\":0.8,\"id\":\"a\"}]}",
+        &detections, &error));
+    QCOMPARE(detections.size(), 1);
+    QCOMPARE(detections.at(0).label, QStringLiteral("person"));
+    QVERIFY(qAbs(detections.at(0).confidence - 0.8) < 1e-9);
+    QCOMPARE(detections.at(0).targetId, QStringLiteral("a"));
+
+    QVERIFY(!ProcessTargetDetector::parseResponse("not json", &detections, &error));
+    QVERIFY(!ProcessTargetDetector::parseResponse("{}", &detections, &error));
+    QVERIFY(ProcessTargetDetector::parseResponse(
+        "{\"detections\":[{\"x\":0,\"y\":0,\"width\":0,\"height\":0}]}",
+        &detections, &error));
+    QCOMPARE(detections.size(), 0);
+}
+
+void ProjectTest::targetProcessDetectorRunsHelper()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString script = directory.filePath(QStringLiteral("helper.sh"));
+    QFile file(script);
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
+    file.write("#!/bin/sh\n"
+               "cat > \"$2\" <<'EOF'\n"
+               "{\"detections\":[{\"x\":10,\"y\":20,\"width\":30,\"height\":40,"
+               "\"label\":\"person\",\"confidence\":0.85,\"id\":\"p1\"}]}\n"
+               "EOF\n");
+    file.close();
+    QVERIFY(QFile::setPermissions(
+        script, QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                    | QFileDevice::ExeOwner));
+
+    ProcessTargetDetector detector(QStringLiteral("/bin/sh"), { script });
+    QImage view(64, 48, QImage::Format_ARGB32);
+    view.fill(QColor(0, 0, 0));
+    QList<TargetDetection> detections;
+    QString error;
+    QVERIFY2(detector.detect(view, TargetQuery(), &detections, &error),
+             qPrintable(error));
+    QCOMPARE(detections.size(), 1);
+    QCOMPARE(detections.at(0).label, QStringLiteral("person"));
+    QVERIFY(qAbs(detections.at(0).confidence - 0.85) < 1e-9);
+}
+
+void ProjectTest::targetProcessDetectorFailsOnMissingExecutable()
+{
+    ProcessTargetDetector detector(QStringLiteral("/nonexistent/rc-helper-xyz"));
+    QImage view(32, 32, QImage::Format_ARGB32);
+    view.fill(QColor(0, 0, 0));
+    QList<TargetDetection> detections;
+    QString error;
+    QVERIFY(!detector.detect(view, TargetQuery(), &detections, &error));
+    QVERIFY(!error.isEmpty());
+}
+
+void ProjectTest::targetProcessDetectorFailsOnBadExit()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString script = directory.filePath(QStringLiteral("bad.sh"));
+    QFile file(script);
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
+    file.write("#!/bin/sh\nexit 3\n");
+    file.close();
+    QVERIFY(QFile::setPermissions(
+        script, QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                    | QFileDevice::ExeOwner));
+
+    ProcessTargetDetector detector(QStringLiteral("/bin/sh"), { script });
+    QImage view(32, 32, QImage::Format_ARGB32);
+    view.fill(QColor(0, 0, 0));
+    QList<TargetDetection> detections;
+    QString error;
+    QVERIFY(!detector.detect(view, TargetQuery(), &detections, &error));
+    QVERIFY(error.contains(QStringLiteral("failed")));
+}
+
+void ProjectTest::targetTrackPlannerBuildsFollowPlan()
+{
+    TargetTrack track(QStringLiteral("t1"), QStringLiteral("person"));
+    track.append(makeTargetObservation(0, 0.0, 0.0));
+    track.append(makeTargetObservation(500, 30.0, 5.0));
+    track.append(makeTargetObservation(1000, 60.0, 10.0));
+
+    ReframePlan plan;
+    QString error;
+    TargetTrackPlanner::Config config;
+    config.fieldOfViewDeg = 90.0;
+    config.maxKeyframes = 10;
+    config.minConfidence = 0.3;
+    QVERIFY2(TargetTrackPlanner::planTrack(
+                 track, ReframePlan::TimeRange{ 0, 1500 },
+                 ReframePlan::OutputSpec{ 160, 90, 2.0 }, config, &plan, &error),
+             qPrintable(error));
+    QCOMPARE(plan.keyframes().size(), 3);
+    QCOMPARE(plan.keyframes().at(1).timeMs, qint64(500));
+
+    QVERIFY(qAbs(CameraPath::stateAt(plan, 0).yawDeg - 0.0) < 1e-9);
+    QVERIFY(qAbs(CameraPath::stateAt(plan, 1000).yawDeg - 60.0) < 1e-9);
+    QVERIFY(qAbs(CameraPath::stateAt(plan, 500).yawDeg - 30.0) < 1e-9);
+}
+
+void ProjectTest::targetTrackPlannerRejectsEmptyTrack()
+{
+    TargetTrack track(QStringLiteral("t1"), QStringLiteral("person"));
+    ReframePlan plan;
+    QString error;
+    QVERIFY(!TargetTrackPlanner::planTrack(
+        track, ReframePlan::TimeRange{ 0, 1000 },
+        ReframePlan::OutputSpec{ 160, 90, 1.0 }, TargetTrackPlanner::Config{},
+        &plan, &error));
+    QVERIFY(!error.isEmpty());
+}
+
+void ProjectTest::targetTrackPlannerFiltersLowConfidence()
+{
+    TargetTrack track(QStringLiteral("t1"), QStringLiteral("person"));
+    track.append(makeTargetObservation(0, 0.0, 0.0, QStringLiteral("person"), 0.1));
+    ReframePlan plan;
+    QString error;
+    TargetTrackPlanner::Config config;
+    config.minConfidence = 0.3;
+    QVERIFY(!TargetTrackPlanner::planTrack(
+        track, ReframePlan::TimeRange{ 0, 1000 },
+        ReframePlan::OutputSpec{ 160, 90, 1.0 }, config, &plan, &error));
+}
+
+void ProjectTest::targetResolutionToRenderPipeline()
+{
+    const QImage frame = buildTargetEquirect(
+        360, 180, { EquirectDisk{ 50.0, 0.0, 10.0, QColor(255, 0, 0) } });
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+    TargetResolver resolver(smallResolverConfig());
+
+    TargetQuery query;
+    query.label = QStringLiteral("person");
+    QList<TargetObservation> observations;
+    QString error;
+    QVERIFY2(resolver.resolveFrame(frame, 0, query, &detector, &observations, &error),
+             qPrintable(error));
+    QVERIFY(!observations.isEmpty());
+
+    TargetTrack track(QStringLiteral("t1"), QStringLiteral("person"));
+    track.append(observations.at(0));
+    ReframePlan plan;
+    QString planError;
+    QVERIFY2(TargetTrackPlanner::planTrack(
+                 track, ReframePlan::TimeRange{ 0, 1000 },
+                 ReframePlan::OutputSpec{ 160, 90, 1.0 },
+                 TargetTrackPlanner::Config{}, &plan, &planError),
+             qPrintable(planError));
+
+    StaticEquirectProvider provider(frame);
+    int centeredFrames = 0;
+    QString renderError;
+    QVERIFY2(ReframeRenderer::render(
+                 plan, &provider,
+                 [&centeredFrames](int, qint64, const QImage &image) {
+                     if (redDominant(image.pixelColor(image.width() / 2,
+                                                      image.height() / 2))) {
+                         ++centeredFrames;
+                     }
+                     return true;
+                 },
+                 nullptr, &renderError),
+             qPrintable(renderError));
+    QCOMPARE(centeredFrames, 1);
 }
 
 QTEST_MAIN(ProjectTest)

@@ -246,6 +246,28 @@ Re-verify the standard `scripts/build_and_test.sh` workflow on a host with a wor
 
 ---
 
+# Issue — No real detection model is integrated (360 target resolution) (2026-09-17)
+
+### Status
+
+Open — intentional first-slice boundary; not a defect.
+
+### Description
+
+The target-resolution layer (`app/target/`) implements a replaceable detector seam (`TargetDetector`) and a dependency-free subprocess adapter (`ProcessTargetDetector`), but it does not bundle or run a real object/person detector. The current development environment has no OpenCV, ONNX Runtime, TFLite, or Debian `pip`, so model integration could not be verified here. Tests use a deterministic synthetic color detector and a shell helper to exercise the seam and protocol.
+
+Consequently, "real-world detection verified" is NOT claimed: only the deterministic geometry/tracking infrastructure and the subprocess protocol are verified.
+
+### Impact
+
+Requests such as "follow me", "keep me centered", "follow the person speaking", and "look at the car" still require a resolved target direction (from a detector helper, a manual/creator selection, or a future model). Unresolved targets fail deterministically and are reported rather than fabricated.
+
+### Planned Resolution
+
+Add an optional, permissively licensed helper behind the existing `ProcessTargetDetector` protocol (recommended: YOLOX or RT-DETR via ONNX Runtime; see `docs/TARGET_RESOLUTION_TECHNOLOGY.md`). Keep it optional so the unit suite stays model-free, and add a separate model/integration test. Do not adopt AGPL Ultralytics models without an explicit product/licensing decision.
+
+---
+
 # Issue Management Rules
 
 For each future issue:
