@@ -981,3 +981,44 @@ Out of scope (explicit): full timeline editor; drag-and-drop/scrubbing UI; capti
 - Temporal selection is expressed as ordered retained ranges on the existing `ReframePlan`; the deterministic renderer concatenates per-range frames and the camera path is evaluated at absolute source time. No new rendering architecture.
 - Remove and target-duration operations are resolved to retained ranges against the known source duration; without a duration they fail honestly.
 - The command layer distinguishes valid / invalid-range / out-of-bounds / contradictory / unsupported / ambiguous outcomes and never invents timestamps.
+
+---
+
+# Decision 032 — Objective 15 Scope: 360 Compound Natural-Language Editing
+
+**Status:** Accepted (2026-09-17, 360 Reframing Objective 15; human-selected scope)
+
+## Context
+
+The Objective 14 parser treats a clause containing a temporal operation plus time tokens as a temporal clause and skips it in the camera-subject parser, so a single compound command that joins a temporal edit and a camera/target instruction with "and" loses the camera/target half. The documented example "Keep 0:00 to 0:30 and follow me." produces only the temporal edit. Objective 15 fixes that composition without adding a second parser, a second temporal representation, a new renderer, or a new playback path.
+
+## Scope (human-selected)
+
+In scope — only unambiguous compositions:
+
+- Class A — temporal + target: "Keep 0:00 to 0:30 and follow me." -> KEEP [0:00, 0:30] + target "me" (existing follow/center behavior applied to the entire retained range).
+- Class B — temporal + explicit target: "From 0:35 to 1:10, keep the person I selected centered." -> KEEP [0:35, 1:10] + the existing creator-selected target vocabulary.
+- Class C — temporal + speaker: "Keep 0:35 to 1:10 and follow whoever is speaking." -> KEEP [0:35, 1:10] + the existing active-speaker path.
+- Class D — target duration + target: "Make a 30-second version and keep me centered." -> the existing TargetDuration operation + the existing "me" target applied to the resulting effective range.
+
+The deterministic semantic rule: when a temporal edit and a camera/target instruction occur in the same unambiguous command and no separate applicability interval is specified, the camera/target instruction applies to the entire resulting temporal edit. Multiple camera moves continue to use the existing camera-path interpolation.
+
+Explicitly out of scope: new detection/tracking/re-identification/speaker systems; GPU optimization; creator-"me" persistence; a timeline editor, drag/drop, or scrubbing; captions, transitions, effects, color grading, audio editing; general-purpose playback or QtMultimedia; renderer/playback replacement; a second temporal representation; a parallel natural-language parser; a generalized editing DSL; arbitrary sequential temporal applicability (for example "follow me for the first 20 seconds, then follow the other person"); and any later objective.
+
+## Definition of Done
+
+1. The compound intent is explicitly represented on the existing ReframeIntent (a temporal edit plus camera moves) and documented; no new intent type or workflow engine.
+2. The existing ReframeIntentParser parses the supported compound phrases; temporal clauses are still not interpreted as target subjects.
+3. Temporal + target/reframe commands preserve both operations and the camera/target resolves through the existing target/identity system.
+4. Temporal + speaker commands preserve both operations through the existing speaker system.
+5. Target-duration + target commands work through the existing TargetDuration operation.
+6. Ambiguous, contradictory, invalid, and unsupported compositions fail honestly (including a camera instruction with its own separate time interval), and no timestamp or target identity is invented.
+7. TemporalEditPlan, ReframePlan, the renderer, and Objective 13 playback are reused unchanged in architecture.
+8. Focused Objective 15 tests pass; the full model-free regression is green; one real-media compound-command validation renders a compound result and plays it back.
+9. Documentation updated (DECISIONS, CURRENT_STATE, NEXT_TASK, CHANGELOG, DEVELOPMENT_LOG, PROJECT_HISTORY, AI_HANDOFF, KNOWN_ISSUES where applicable); dedicated checkpoint commit; clean tree; Decisions 017-031 preserved.
+
+## Decisions
+
+- This is a composition fix in the existing intent parser, not a new natural-language architecture.
+- A temporal clause's time ranges are stripped before camera/target extraction, so both halves of a compound "and" command survive; the operation keyword is retained so "keep <subject> centered" still parses.
+- The default applicability rule is whole-retained-range; a camera instruction that supplies its own separate time interval is unsupported and fails honestly rather than being silently dropped.

@@ -10,7 +10,7 @@ Priority pipeline: 360 source -> scene/subject understanding -> natural-language
 
 The Phase 3 Objective 5 entry below remains valid project history but must NOT be started mechanically while the 360 priority is active. It should resume only when it directly serves the 360 capability (for example, previewing/playing reframed results).
 
-**Current 360 status:** Reframing Objectives 1–14 are complete and verified (deterministic vertical slice; target/subject resolution; real detector integration; target identity/selection; appearance re-identification; audio/speaker evidence; audio-visual provider-attribution seam; end-to-end user-command execution; application command orchestration; persisted outputs and duration-aware ranges; speaker-aware commands; application command UI and rendered-result preview; rendered-result playback; deterministic temporal editing). See the end of this file for the next candidates; each requires its own scoped objective.
+**Current 360 status:** Reframing Objectives 1–15 are complete and verified (deterministic vertical slice; target/subject resolution; real detector integration; target identity/selection; appearance re-identification; audio/speaker evidence; audio-visual provider-attribution seam; end-to-end user-command execution; application command orchestration; persisted outputs and duration-aware ranges; speaker-aware commands; application command UI and rendered-result preview; rendered-result playback; deterministic temporal editing; compound natural-language composition of temporal plus camera/target/speaker instructions). See the end of this file for the next candidates; each requires its own scoped objective.
 
 ---
 
@@ -376,6 +376,21 @@ Human-selected scope (Decision 031): add deterministic temporal editing (retain 
 - The resulting flat render is a normal record that plays through the existing Objective 13 playback; the source is read-only.
 - 11 new model-free tests; full model-free suite 379 passed / 0 failed / 6 skipped. New env-gated \`realTemporalEditIntegration\` renders a temporally edited 360 result and plays it back.
 - Architecture decision: Decision 031.
+
+## 360 Reframing Objective 15 — 360 Compound Natural-Language Editing — Complete
+
+Status: **Complete — implemented and verified (2026-09-17).**
+
+### Objective
+Human-selected scope (Decision 032): a single natural-language command that carries both a temporal edit and a camera/target instruction must preserve both operations (the Objective 14 limitation where the whole temporal clause was skipped by the camera parser). Composition only; no second parser, temporal representation, renderer, or playback path.
+
+### Scope (implemented)
+- The existing `ReframeIntentParser` strips a temporal clause's time ranges (or a target-duration phrase) before camera/target extraction, so both halves of a compound "and" command survive; the operation keyword is retained for "keep <subject> centered".
+- `ReframeIntent::hasCompoundEdit()` explicitly represents the composition; the deterministic default rule is that the camera/target applies to the entire retained range.
+- Supported: temporal + target, temporal + explicit target, temporal + speaker, target-duration + target. Unsupported: a camera instruction with its own separate time interval fails honestly.
+- `TemporalEditPlan`, `ReframePlan`, the renderer, and Objective 13 playback are reused unchanged.
+- 2 new model-free tests plus an env-gated `realCompoundCommandIntegration`; full model-free suite 381 passed / 0 failed / 7 skipped.
+- Architecture decision: Decision 032.
 
 ## Next Objective — GPU Optimization, Creator-Selection Persistence, or General Playback — NOT STARTED
 

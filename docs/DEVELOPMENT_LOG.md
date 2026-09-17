@@ -1528,3 +1528,39 @@ Human-selected scope (Decision 031): add deterministic temporal editing (retain 
 ### Decisions
 
 - Decision 031 recorded. Decisions 017-030 preserved unchanged.
+
+---
+
+## 2026-09-17 — 360 Reframing Objective 15: 360 Compound Natural-Language Editing
+
+### Objective
+
+Human-selected scope (Decision 032): a single natural-language command combining a temporal edit and a camera/target instruction must preserve both operations (fixing the Objective 14 limitation where a temporal clause was skipped wholesale by the camera parser). Composition only; no second parser, temporal representation, renderer, or playback path.
+
+### Work completed
+
+- ReframeIntentParser: a temporal clause's time ranges (or a target-duration phrase) are stripped before camera/target extraction; the operation keyword is retained so "keep <subject> centered" still matches, and residual trailing sentence punctuation is removed so the end-anchored subject patterns still match. Temporal clauses are still never interpreted as target subjects.
+- ReframeIntent::hasCompoundEdit() explicitly represents the composition; the parser records the documented whole-retained-range applicability rule in the intent notes.
+- Unsupported composition (a camera instruction with its own separate time interval) is detected from leftover time tokens after the temporal ranges are removed and fails honestly with a "separate time interval" error. Invalid, ambiguous, and contradictory temporal edits remain honest.
+- No changes to TemporalEditPlan, ReframePlan, ReframeRenderer/ReframePipeline, or the Objective 13 playback path; the source stays read-only.
+
+### Verification
+
+- Model-free suite: 381 passed, 0 failed, 7 skipped.
+- Focused Objective 15 tests: 2 passed (parser composition and runner composition), run alongside the affected Objective 14 intent/command tests (13 passed in the focused batch).
+- Test build and standalone application build both succeed.
+- Real media (realCompoundCommandIntegration, audio+video proxy; original untouched): "Keep 0:00 to 0:01 and look left." retained 0..1000 ms with the left camera direction, rendered 10 frames to a 320x180 @ 10 fps result, and played all 10 back through Objective 13 (13.8 s).
+- Performance: full model-free regression ~68 s, real compound validation ~13.8 s; no unexplained regression.
+
+### Failure recovery
+
+- Class B ("From 0:35 to 1:10, keep the person I selected centered.") initially produced no camera move because the residual sentence period defeated the end-anchored "keep ... centered" subject pattern. Fix: trim trailing punctuation from the temporal camera residue before camera parsing.
+
+### Boundary notes / not implemented
+
+- The applicability rule is whole-retained-range; a camera instruction with its own separate interval is unsupported. Arbitrary sequential applicability ("follow me for the first 20 seconds, then ...") remains out of scope.
+- The creator "me" selection remains session state; GPU optimization remains future work.
+
+### Decisions
+
+- Decision 032 recorded. Decisions 017-031 preserved unchanged.

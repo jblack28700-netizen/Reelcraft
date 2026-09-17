@@ -1,5 +1,6 @@
 #include "ReframeIntent.h"
 
+#include <QPair>
 #include <QRegularExpression>
 
 #include <algorithm>
@@ -276,10 +277,18 @@ QList<TimeToken> allTimeTokens(const QString &text)
     return tokens;
 }
 
-QList<TemporalRange> rangesFromText(const QString &text,
-                                    const QList<TimeToken> &tokens)
+// Objective 15: a temporal range plus the character span it occupies, so the
+// camera parser can strip the temporal half of a compound clause.
+struct TemporalSpans
 {
     QList<TemporalRange> ranges;
+    QList<QPair<int, int>> spans; // [from, to) character spans of each range
+};
+
+TemporalSpans temporalSpansFromText(const QString &text,
+                                    const QList<TimeToken> &tokens)
+{
+    TemporalSpans result;
     for (int i = 0; i + 1 < tokens.size(); ++i) {
         const QString between =
             text.mid(tokens[i].end, tokens[i + 1].start - tokens[i].end);
@@ -289,11 +298,20 @@ QList<TemporalRange> rangesFromText(const QString &text,
             TemporalRange range;
             range.startMs = tokens[i].ms;
             range.endMs = tokens[i + 1].ms;
-            ranges.append(range);
+            result.ranges.append(range);
+            result.spans.append(qMakePair(tokens[i].start, tokens[i + 1].end));
             ++i;
         }
     }
-    return ranges;
+    return result;
+}
+
+QString removeSpans(QString text, const QList<QPair<int, int>> &spans)
+{
+    for (int i = spans.size() - 1; i >= 0; --i) {
+        text.remove(spans.at(i).first, spans.at(i).second - spans.at(i).first);
+    }
+    return text;
 }
 
 bool hasWholeWord(const QString &text, const QString &word)
@@ -341,6 +359,41 @@ bool isTemporalClause(const QString &clause)
         || hasWholeWord(clause, QStringLiteral("chunk"))
         || hasWholeWord(clause, QStringLiteral("bit"))
         || hasWholeWord(clause, QStringLiteral("clip"));
+}
+
+// Objective 15: the camera-relevant remainder of a temporal clause. Time
+// ranges (and a target-duration phrase) are removed so a camera/target
+// instruction joined by "and" survives, while the temporal operation keyword
+// is kept so "keep <subject> centered" still matches.
+QString cameraClauseText(const QString &clause)
+{
+    static const QRegularExpression targetDuration(
+        QStringLiteral("(?:make|create|produce|render|generate|build|give me)?"
+                       "\\s*(?:a\\s+)?(\\d+(?:\\.\\d+)?)[\\s-]*(?:second|sec)s?"
+                       "\\s+(?:version|cut|clip|edit|video)"));
+    const QRegularExpressionMatch targetMatch = targetDuration.match(clause);
+    if (targetMatch.hasMatch()) {
+        QString residue = clause;
+        residue.remove(targetMatch.capturedStart(),
+                       targetMatch.capturedLength());
+        return residue;
+    }
+    const QList<TimeToken> tokens = allTimeTokens(clause);
+    if (tokens.isEmpty()) {
+        return clause;
+    }
+    return removeSpans(clause, temporalSpansFromText(clause, tokens).spans);
+}
+
+// Removes a trailing temporal operation word left behind when the camera
+// instruction precedes the temporal edit ("Follow me and keep 0:00 to 0:30").
+QString stripTrailingTemporalFiller(QString subject)
+{
+    static const QRegularExpression trailing(QStringLiteral(
+        "(?:\\s+and)?\\s+(?:keep|retain|remove|delete|drop|skip|only|"
+        "cut(?:\\s+out)?)\\s*$"));
+    subject.remove(trailing);
+    return subject.trimmed();
 }
 
 struct TemporalParseResult
@@ -392,14 +445,26 @@ TemporalParseResult parseTemporal(const QStringList &clauses)
             const int durationEnd = targetMatch.capturedEnd();
             const bool startRequested = targetStartMarker.match(clause).hasMatch();
             qint64 startMs = -1;
+            QList<QPair<int, int>> consumed;
+            consumed.append(qMakePair(durationStart, durationEnd));
             for (const TimeToken &token : tokens) {
                 if (token.start >= durationStart && token.end <= durationEnd) {
                     continue;
                 }
                 if (startRequested) {
                     startMs = token.ms;
+                    consumed.append(qMakePair(token.start, token.end));
                 }
                 break;
+            }
+            // Objective 15: a leftover time token means the camera instruction
+            // carries its own interval; that applicability is not supported.
+            if (!allTimeTokens(removeSpans(clause, consumed)).isEmpty()) {
+                result.error = QStringLiteral(
+                    "The command specifies a separate time interval for the "
+                    "camera instruction; applying a camera to only part of the "
+                    "retained range is not supported.");
+                return result;
             }
             result.plan = TemporalEditPlan::targetDuration(targetMs, startMs);
             continue;
@@ -488,12 +553,23 @@ TemporalParseResult parseTemporal(const QStringList &clauses)
             return result;
         }
 
-        const QList<TemporalRange> ranges = rangesFromText(clause, tokens);
+        const TemporalSpans temporal = temporalSpansFromText(clause, tokens);
+        const QList<TemporalRange> &ranges = temporal.ranges;
         if (ranges.isEmpty()) {
             result.hasRequest = true;
             result.error = QStringLiteral(
                 "Could not read a time range from '%1'; write it as "
                 "'from 2:10 to 2:45' or '0:35-1:10'.").arg(clause);
+            return result;
+        }
+        // Objective 15: a leftover time token means the camera instruction
+        // carries its own interval; that applicability is not supported.
+        if (!allTimeTokens(removeSpans(clause, temporal.spans)).isEmpty()) {
+            result.hasRequest = true;
+            result.error = QStringLiteral(
+                "The command specifies a separate time interval for the camera "
+                "instruction; applying a camera to only part of the retained "
+                "range is not supported.");
             return result;
         }
         if (kind == 1) {
@@ -605,24 +681,41 @@ ReframeIntent ReframeIntentParser::parse(const QString &text)
         }
     }
 
-    // Camera clauses.
+    // Camera clauses. Objective 15: a temporal clause may also carry a
+    // camera/target instruction joined by "and" ("Keep 0:00 to 0:30 and follow
+    // me."); strip the temporal ranges and parse the remainder, so both halves
+    // survive. The temporal edit applies to the whole retained range.
     for (const QString &rawClause : clauses) {
         const QString clause = rawClause.trimmed();
-        if (clause.isEmpty() || isTemporalClause(clause)
-            || !clauseHasCameraKeyword(clause)) {
+        if (clause.isEmpty()) {
+            continue;
+        }
+        const bool temporal = isTemporalClause(clause);
+        QString cameraText = temporal ? cameraClauseText(clause) : clause;
+        if (temporal) {
+            // The residual sentence punctuation would defeat the end-anchored
+            // subject patterns ("keep the person I selected centered.").
+            static const QRegularExpression trailingPunctuation(
+                QStringLiteral("[\\s.,;:!\\?]+$"));
+            cameraText.remove(trailingPunctuation);
+        }
+        if (!clauseHasCameraKeyword(cameraText)) {
             continue;
         }
         ReframeCameraMove move;
-        move.label = clause;
+        move.label = cameraText.trimmed();
 
         double yaw = 0.0;
         double pitch = 0.0;
-        if (directionFromClause(clause, &yaw, &pitch)) {
+        if (directionFromClause(cameraText, &yaw, &pitch)) {
             move.hasDirection = true;
             move.yawDeg = yaw;
             move.pitchDeg = pitch;
         } else {
-            const QString subject = subjectFromClause(clause);
+            QString subject = subjectFromClause(cameraText);
+            if (temporal) {
+                subject = stripTrailingTemporalFiller(subject);
+            }
             if (!subject.isEmpty()) {
                 move.targetRef = subject;
                 if (!intent.unresolvedTargets.contains(subject)) {
@@ -634,6 +727,17 @@ ReframeIntent ReframeIntentParser::parse(const QString &text)
         if (move.hasDirection || !move.targetRef.isEmpty()) {
             intent.moves.append(move);
         }
+    }
+
+    // Objective 15: make the compound composition explicit. When a temporal
+    // edit and a camera/target instruction coexist, the camera/target applies
+    // to the entire retained temporal range (multiple moves interpolate as
+    // before).
+    if (intent.hasTemporalRequest && !intent.moves.isEmpty()
+        && intent.temporalError.isEmpty()) {
+        intent.notes.append(QStringLiteral(
+            "Compound command: the camera/target instruction applies to the "
+            "entire retained temporal range."));
     }
 
     if (!intent.moves.isEmpty()) {

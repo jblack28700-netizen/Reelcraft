@@ -54,6 +54,14 @@ struct ReframeIntent
     // True when the command referred to "this section"/"the current part"
     // without explicit timestamps; the runner substitutes the effective range.
     bool temporalUsesDefaultRange = false;
+
+    // Objective 15: true when the command carries both a temporal edit and a
+    // camera/target instruction. The documented semantic rule is that the
+    // camera/target applies to the entire retained temporal range.
+    bool hasCompoundEdit() const
+    {
+        return hasTemporalRequest && !moves.isEmpty();
+    }
 };
 
 // Deterministic, rule-based parser for a small, documented instruction

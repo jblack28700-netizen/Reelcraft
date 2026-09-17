@@ -972,6 +972,9 @@ private slots:
     void reframeCommandRunnerComposesTemporalEdits();
     void reframeCommandRunnerTemporalFailuresAreHonest();
     void reframeCommandRunnerTemporalComposesWithIdentityAndSpeaker();
+    void reframeIntentParsesCompoundTemporalAndCamera();
+    void reframeCommandRunnerComposesCompoundCommands();
+    void realCompoundCommandIntegration();
     void reframePipelineRendersTemporalSegments();
     void applicationTemporalCommandResolvesAgainstProbedDuration();
     void applicationTemporalOutcomePlaysBack();
@@ -7383,6 +7386,75 @@ void ProjectTest::reframeCommandRunnerTemporalFailuresAreHonest()
     QVERIFY(result.plan.segments().isEmpty());
 }
 
+void ProjectTest::reframeIntentParsesCompoundTemporalAndCamera()
+{
+    // Class A: temporal keep + target joined by "and" (no "then").
+    const ReframeIntent a = ReframeIntentParser::parse(
+        QStringLiteral("Keep 0:00 to 0:30 and follow me."));
+    QVERIFY(a.hasTemporalRequest);
+    QVERIFY(a.temporalError.isEmpty());
+    QVERIFY(a.hasCompoundEdit());
+    QCOMPARE(a.temporalEdit.ranges().size(), 1);
+    QCOMPARE(a.temporalEdit.ranges().at(0).startMs, qint64(0));
+    QCOMPARE(a.temporalEdit.ranges().at(0).endMs, qint64(30000));
+    QCOMPARE(a.moves.size(), 1);
+    QCOMPARE(a.moves.at(0).targetRef, QStringLiteral("me"));
+
+    // Class B: temporal + explicit creator-selected target.
+    const ReframeIntent b = ReframeIntentParser::parse(
+        QStringLiteral("From 0:35 to 1:10, keep the person I selected centered."));
+    QVERIFY(b.hasCompoundEdit());
+    QVERIFY(b.temporalError.isEmpty());
+    QCOMPARE(b.temporalEdit.ranges().size(), 1);
+    QCOMPARE(b.temporalEdit.ranges().at(0).startMs, qint64(35000));
+    QCOMPARE(b.temporalEdit.ranges().at(0).endMs, qint64(70000));
+    QCOMPARE(b.moves.size(), 1);
+    QCOMPARE(b.moves.at(0).targetRef, QStringLiteral("person i selected"));
+
+    // Class C: temporal + speaker.
+    const ReframeIntent c = ReframeIntentParser::parse(
+        QStringLiteral("Keep 0:35 to 1:10 and follow whoever is speaking."));
+    QVERIFY(c.hasCompoundEdit());
+    QVERIFY(c.temporalError.isEmpty());
+    QCOMPARE(c.moves.size(), 1);
+    QCOMPARE(c.moves.at(0).targetRef, QStringLiteral("whoever is speaking"));
+
+    // Class D: target duration + target.
+    const ReframeIntent d = ReframeIntentParser::parse(
+        QStringLiteral("Make a 30-second version and keep me centered."));
+    QVERIFY(d.hasTemporalRequest);
+    QVERIFY(d.temporalError.isEmpty());
+    QVERIFY(d.temporalEdit.operation()
+            == TemporalEditPlan::Operation::TargetDuration);
+    QCOMPARE(d.temporalEdit.targetDurationMs(), qint64(30000));
+    QVERIFY(d.hasCompoundEdit());
+    QCOMPARE(d.moves.size(), 1);
+    QCOMPARE(d.moves.at(0).targetRef, QStringLiteral("me"));
+
+    // Reverse order: camera first, temporal second.
+    const ReframeIntent e = ReframeIntentParser::parse(
+        QStringLiteral("Follow me and keep 0:00 to 0:30."));
+    QVERIFY(e.hasCompoundEdit());
+    QVERIFY(e.temporalError.isEmpty());
+    QCOMPARE(e.moves.size(), 1);
+    QCOMPARE(e.moves.at(0).targetRef, QStringLiteral("me"));
+    QCOMPARE(e.temporalEdit.ranges().at(0).endMs, qint64(30000));
+
+    // Temporal-only and camera-only commands are not compound.
+    QVERIFY(!ReframeIntentParser::parse(
+                 QStringLiteral("Keep 0:00 to 0:30 and 1:15 to 2:00."))
+                 .hasCompoundEdit());
+    QVERIFY(!ReframeIntentParser::parse(QStringLiteral("follow me"))
+                 .hasCompoundEdit());
+
+    // Unsupported: the camera carries its own separate time interval.
+    const ReframeIntent unsupported = ReframeIntentParser::parse(
+        QStringLiteral("Keep 0:00 to 0:30 and follow me at 1:00."));
+    QVERIFY(unsupported.hasTemporalRequest);
+    QVERIFY(!unsupported.temporalError.isEmpty());
+    QVERIFY(unsupported.temporalError.contains(QStringLiteral("separate")));
+}
+
 void ProjectTest::reframePipelineRendersTemporalSegments()
 {
     if (!FrameExtractor::isAvailable()) {
@@ -8401,6 +8473,119 @@ TargetTrack speakerTrack(const QString &id, double yawDeg)
 }
 
 } // namespace
+
+void ProjectTest::reframeCommandRunnerComposesCompoundCommands()
+{
+    // Class A: temporal keep + "me" via the creator seed.
+    {
+        const QImage frame = buildTargetEquirect(
+            360, 180, { EquirectDisk{ 40.0, 0.0, 10.0, QColor(255, 0, 0) },
+                        EquirectDisk{ -40.0, 0.0, 10.0, QColor(0, 0, 255) } });
+        StaticEquirectProvider provider(frame);
+        SyntheticColorDetector detector;
+        detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+        detector.addSpec(QColor(0, 0, 255), QStringLiteral("person"));
+
+        ReframeCommandRequest request;
+        request.instruction = QStringLiteral("Keep 0:00 to 0:30 and follow me.");
+        request.defaultRange = ReframePlan::TimeRange{ 0, 30000 };
+        request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+        request.sourceDurationMs = 30000;
+        request.resolveConfig = smallResolverConfig();
+        request.hasCreatorSelection = true;
+        request.creatorSelection.identity = QStringLiteral("me");
+        request.creatorSelection.timeMs = 0;
+        request.creatorSelection.yawDeg = 40.0;
+        request.creatorSelection.pitchDeg = 0.0;
+        request.creatorSelection.label = QStringLiteral("person");
+
+        const ReframeCommandResult result =
+            ReframeCommandRunner::prepare(request, &detector, &provider);
+        QVERIFY2(result.ok, qPrintable(result.error));
+        QCOMPARE(result.plan.segments().size(), 1);
+        QCOMPARE(result.plan.segments().at(0).endMs, qint64(30000));
+        QCOMPARE(result.resolvedTargets.size(), 1);
+        QVERIFY(qAbs(CameraPath::stateAt(result.plan, 0).yawDeg - 40.0) < 8.0);
+    }
+
+    // Class C: temporal keep + active speaker.
+    {
+        const QImage frame = buildTargetEquirect(
+            360, 180, { EquirectDisk{ 30.0, 0.0, 10.0, QColor(255, 0, 0) } });
+        StaticEquirectProvider provider(frame);
+        SyntheticColorDetector detector;
+        detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+        SpeakerScriptProvider speaker;
+        speaker.setIntervals({ speakerInterval(0, 3000) });
+
+        ReframeCommandRequest request;
+        request.sourcePath = QStringLiteral("/tmp/reelcraft_dummy.mp4");
+        request.instruction =
+            QStringLiteral("Keep 0:35 to 1:10 and follow whoever is speaking.");
+        request.defaultRange = ReframePlan::TimeRange{ 0, 70000 };
+        request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+        request.sourceDurationMs = 70000;
+        request.resolveConfig = smallResolverConfig();
+        request.speakerProvider = &speaker;
+
+        const ReframeCommandResult result =
+            ReframeCommandRunner::prepare(request, &detector, &provider);
+        QVERIFY2(result.ok, qPrintable(result.error));
+        QVERIFY(result.speakerCommand);
+        QCOMPARE(result.plan.segments().size(), 1);
+        QCOMPARE(result.plan.segments().at(0).startMs, qint64(35000));
+        QCOMPARE(result.plan.segments().at(0).endMs, qint64(70000));
+        QVERIFY(!result.resolvedTargets.isEmpty());
+        QVERIFY(qAbs(CameraPath::stateAt(result.plan, 0).yawDeg - 30.0) < 8.0);
+    }
+
+    // Class D: target duration + "me".
+    {
+        const QImage frame = buildTargetEquirect(
+            360, 180, { EquirectDisk{ 20.0, 0.0, 10.0, QColor(255, 0, 0) } });
+        StaticEquirectProvider provider(frame);
+        SyntheticColorDetector detector;
+        detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+
+        ReframeCommandRequest request;
+        request.instruction =
+            QStringLiteral("Make a 30-second version and keep me centered.");
+        request.defaultRange = ReframePlan::TimeRange{ 0, 120000 };
+        request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+        request.sourceDurationMs = 120000;
+        request.resolveConfig = smallResolverConfig();
+        request.hasCreatorSelection = true;
+        request.creatorSelection.identity = QStringLiteral("me");
+        request.creatorSelection.timeMs = 0;
+        request.creatorSelection.yawDeg = 20.0;
+        request.creatorSelection.pitchDeg = 0.0;
+        request.creatorSelection.label = QStringLiteral("person");
+
+        const ReframeCommandResult result =
+            ReframeCommandRunner::prepare(request, &detector, &provider);
+        QVERIFY2(result.ok, qPrintable(result.error));
+        QCOMPARE(result.plan.segments().size(), 1);
+        QCOMPARE(result.plan.segments().at(0).startMs, qint64(0));
+        QCOMPARE(result.plan.segments().at(0).endMs, qint64(30000));
+        QCOMPARE(result.resolvedTargets.size(), 1);
+    }
+
+    // Unsupported composition (camera carries its own interval) fails honestly
+    // and produces no plan.
+    {
+        ReframeCommandRequest request;
+        request.instruction =
+            QStringLiteral("Keep 0:00 to 0:30 and follow me at 1:00.");
+        request.defaultRange = ReframePlan::TimeRange{ 0, 120000 };
+        request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+        request.sourceDurationMs = 120000;
+        const ReframeCommandResult result =
+            ReframeCommandRunner::prepare(request, nullptr, nullptr);
+        QVERIFY(!result.ok);
+        QVERIFY(result.error.contains(QStringLiteral("separate time interval")));
+        QVERIFY(result.plan.segments().isEmpty());
+    }
+}
 
 void ProjectTest::reframeCommandRunnerTemporalComposesWithIdentityAndSpeaker()
 {
@@ -9566,6 +9751,72 @@ void ProjectTest::realTemporalEditIntegration()
         QTest::qWait(50);
     }
     qInfo("real temporal playback: frames=%d ended=%d", frames, ended ? 1 : 0);
+    QVERIFY(frames > 0);
+    QVERIFY(ended);
+    app.stopReframeOutputPlayback();
+    QVERIFY(!app.isReframeOutputPlaybackActive());
+}
+
+// Real 360 compound command (Objective 15; skipped unless configured).
+// Exercises the compound path (temporal edit + camera instruction in one
+// natural-language command) end to end on real media, then plays it back.
+// Direction-only keeps this model-free; the model-backed target/speaker
+// composition is covered by the focused synthetic-track tests and the existing
+// real target/speaker integrations.
+void ProjectTest::realCompoundCommandIntegration()
+{
+    const QString clip = qEnvironmentVariable("REELCRAFT_TARGET_CLIP");
+    if (clip.isEmpty()) {
+        QSKIP("real compound command validation not configured "
+              "(set REELCRAFT_TARGET_CLIP)");
+    }
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable");
+    }
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString outputPath = qEnvironmentVariable("REELCRAFT_COMPOUND_OUTPUT");
+    if (outputPath.isEmpty()) {
+        outputPath = directory.filePath(QStringLiteral("compound_render.mp4"));
+    }
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(clip));
+    QVERIFY(app.setActiveMedia(app.mediaItems().first().id()));
+    app.setReframeDefaultOutput(320, 180, 10.0);
+
+    // One natural-language command carrying both a temporal edit and a camera
+    // instruction; both must survive into the plan.
+    QVERIFY2(app.runReframeCommandTo(
+                 QStringLiteral("Keep 0:00 to 0:01 and look left."), 0, 0,
+                 outputPath),
+             qPrintable(app.lastReframeCommandOutcome().error));
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    const ReframeCommandOutcome &record = app.reframeOutputs().at(0);
+    QVERIFY2(record.ok, qPrintable(record.error));
+    QCOMPARE(record.temporalSegments.size(), 1);
+    QCOMPARE(record.temporalSegments.at(0).first, qint64(0));
+    QCOMPARE(record.temporalSegments.at(0).second, qint64(1000));
+    QVERIFY(record.frameCount > 0);
+    QVERIFY(QFileInfo::exists(record.outputPath));
+    qInfo("real compound render: segments=%lld..%lld frames=%d output=%s",
+          static_cast<long long>(record.temporalSegments.at(0).first),
+          static_cast<long long>(record.temporalSegments.at(0).second),
+          record.frameCount, qPrintable(record.outputPath));
+
+    int frames = 0;
+    bool ended = false;
+    QObject::connect(&app, &Application::reframePlaybackFrameReady,
+                     [&frames](const QImage &) { ++frames; });
+    QObject::connect(&app, &Application::reframePlaybackEnded,
+                     [&ended]() { ended = true; });
+    QVERIFY(app.startReframeOutputPlayback(0));
+    for (int i = 0; i < 200 && !ended; ++i) {
+        QTest::qWait(50);
+    }
+    qInfo("real compound playback: frames=%d ended=%d", frames, ended ? 1 : 0);
     QVERIFY(frames > 0);
     QVERIFY(ended);
     app.stopReframeOutputPlayback();

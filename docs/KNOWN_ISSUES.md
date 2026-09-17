@@ -408,7 +408,7 @@ Persist the creator selection additively in the project (mirroring `reframeOutpu
 
 ---
 
-# Issue — Temporal-editing phrase scope is bounded (recorded 2026-09-17, Objective 14)
+# Issue — Temporal-editing phrase scope is bounded (updated 2026-09-17, Objective 15)
 
 ### Status
 
@@ -419,12 +419,12 @@ Open — intentional boundary; not a defect.
 Objective 14 (Decision 031) implements deterministic temporal editing for explicit ranges and target durations. It does not implement a timeline editor, drag/drop/scrubbing, captions, transitions, effects, color grading, or audio editing. In addition:
 
 - "this section" / "the current part" resolves to the command's effective range; a persisted or scrubbed selection is not available.
-- A temporal operation and a camera operation inside the same clause without a "then" separator (for example "keep 0:00 to 0:30 and follow me") currently keeps the temporal edit but does not also apply the camera clause, because the whole clause is classified as temporal.
+- Compound temporal + camera/target phrases are now supported (Objective 15, Decision 032): the temporal ranges are stripped before camera/target extraction, so "keep 0:00 to 0:30 and follow me" keeps both. A camera instruction that supplies its own separate time interval (for example "keep 0:00 to 0:30 and follow me at 1:00") is unsupported and fails honestly.
 - A Remove or TargetDuration edit requires a known source duration (the whole-clip duration probe, or the command's effective range end); without it the request fails honestly.
 
 ### Impact
 
-Creators must use explicit time ranges and the documented "then" phrasing to combine temporal and camera instructions, and must run commands against media whose duration is known.
+A temporal edit's camera applicability is the whole retained range; a camera instruction with its own separate interval is rejected. Commands must run against media whose duration is known.
 
 ### Planned Resolution
 

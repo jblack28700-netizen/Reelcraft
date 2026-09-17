@@ -2,7 +2,7 @@
 
 ## Current Version
 
-0.2.51
+0.2.52
 
 ## Current Branch
 
@@ -10,7 +10,7 @@ main
 
 ## Current Stage
 
-Phase 4 — 360 Reframing Engine (deterministic vertical slice), Target/Subject Resolution, real detector integration, structured target identity/selection, optional appearance-based re-identification, optional audio/speaker evidence, an audio-visual provider-attribution seam, end-to-end user-command execution, application-level command orchestration, persisted render records with duration-aware ranges, speaker-aware commands, application command UI with rendered-result preview, continuous rendered-result playback, and deterministic 360 temporal editing (retain/remove/target-duration) composed with the existing reframing, persistence, and playback paths implemented and verified. Phase 3 Media Engine remains open; its player-lifecycle objective is intentionally superseded for now by the human-approved 360 priority.
+Phase 4 — 360 Reframing Engine (deterministic vertical slice), Target/Subject Resolution, real detector integration, structured target identity/selection, optional appearance-based re-identification, optional audio/speaker evidence, an audio-visual provider-attribution seam, end-to-end user-command execution, application-level command orchestration, persisted render records with duration-aware ranges, speaker-aware commands, application command UI with rendered-result preview, continuous rendered-result playback, deterministic 360 temporal editing (retain/remove/target-duration), and compound natural-language composition of temporal plus camera/target/speaker instructions implemented and verified. Phase 3 Media Engine remains open; its player-lifecycle objective is intentionally superseded for now by the human-approved 360 priority.
 
 ## Project Status
 
@@ -1094,3 +1094,18 @@ Next: GPU optimization, persisting the creator "me" selection, and general (acti
 
 
 
+
+## Phase 4 Objective 15 — 360 Compound Natural-Language Editing — Complete
+
+Status: Complete (2026-09-17). Human-selected scope (Decision 032): a single natural-language command that carries both a temporal edit and a camera/target instruction now preserves both operations, composing through the existing intent, temporal, target/identity/speaker, plan, renderer, and playback paths.
+
+- The existing `ReframeIntentParser` strips a temporal clause's time ranges (and a target-duration phrase) before camera/target extraction, so both halves of a compound "and" command survive; the temporal operation keyword is retained so "keep <subject> centered" still parses, and temporal clauses are still never interpreted as target subjects.
+- `ReframeIntent::hasCompoundEdit()` explicitly represents the composition; the documented semantic rule is that the camera/target instruction applies to the entire retained temporal range (multiple camera moves keep the existing camera-path interpolation).
+- Supported classes: temporal + target ("Keep 0:00 to 0:30 and follow me."), temporal + explicit target ("From 0:35 to 1:10, keep the person I selected centered."), temporal + speaker ("Keep 0:35 to 1:10 and follow whoever is speaking."), and target-duration + target ("Make a 30-second version and keep me centered.").
+- Unsupported compositions fail honestly: a camera instruction that supplies its own separate time interval (for example "Keep 0:00 to 0:30 and follow me at 1:00.") is rejected rather than silently dropped; invalid, ambiguous, and contradictory temporal edits remain honest.
+- `TemporalEditPlan`, `ReframePlan`, `ReframeRenderer`/`ReframePipeline`, and Objective 13 playback are reused unchanged in architecture; the source media stays read-only.
+- 2 new model-free tests plus one env-gated `realCompoundCommandIntegration`; full model-free suite 381 passed / 0 failed / 7 skipped.
+- Real-media validation (`realCompoundCommandIntegration`, audio+video proxy; original untouched): "Keep 0:00 to 0:01 and look left." produced one retained range (0..1000 ms) and the left camera direction, rendered a 320x180 @ 10 fps result (10 frames), and played it back through Objective 13.
+- Architecture decision: Decision 032.
+
+Next: GPU optimization, persisting the creator "me" selection, and general (active-media) playback remain future candidates. Requires its own scoped objective.
