@@ -8,6 +8,8 @@ An AI agent must read this document before making project changes.
 
 This document does not replace the other project documentation. It tells the agent which documents establish the project's source of truth and how they should be used.
 
+The canonical operating policy for *how* an agent executes an approved objective — autonomous execution, efficiency per run, risk-based validation, scope control, and completion — is `docs/AGENT_WORKFLOW.md`. It governs execution; this document and the core state documents govern what the project is and what the objective is.
+
 ---
 
 # 1. First Rule
@@ -25,7 +27,8 @@ Before making changes:
 5. Read `ARCHITECTURE.md`.
 6. Read relevant decisions in `DECISIONS.md`.
 7. Inspect the actual files relevant to the task.
-8. Confirm the active development objective.
+8. Read the canonical operating policy in `docs/AGENT_WORKFLOW.md`.
+9. Confirm the active development objective.
 
 ---
 
@@ -222,6 +225,7 @@ The following documents form the persistent project-control system:
 - `CURRENT_STATE.md`
 - `NEXT_TASK.md`
 - `AI_HANDOFF.md`
+- `AGENT_WORKFLOW.md` (canonical operating policy)
 - `PROJECT_HISTORY.md`
 - `DEVELOPMENT_LOG.md`
 - `KNOWN_ISSUES.md`

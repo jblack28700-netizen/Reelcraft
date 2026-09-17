@@ -52,6 +52,7 @@ The project's persistent memory lives in Markdown files, not chat history. The c
 - `CURRENT_STATE.md` – what exists right now.
 - `NEXT_TASK.md` – the exact next development objective.
 - `AI_HANDOFF.md` – information for the next AI agent.
+- `AGENT_WORKFLOW.md` – canonical operating policy for AI agents (autonomy, efficiency, validation, scope, completion).
 - `PROJECT_HISTORY.md` – major milestones and decisions.
 - `DEVELOPMENT_LOG.md` – chronological engineering journal.
 - `KNOWN_ISSUES.md` – bugs and limitations.
@@ -64,6 +65,9 @@ The project's persistent memory lives in Markdown files, not chat history. The c
 **Golden Rule:** Never rely solely on AI chat history. Documentation is the source of truth.
 
 ## 7. Development Rules for AI Agents
+
+The canonical operating policy for *how* an approved objective is executed — autonomy, efficiency per run, risk-based validation, scope control, and completion — is `docs/AGENT_WORKFLOW.md`. The rules below are complementary, project-specific expectations.
+
 1. **Inspect before changing.** Never assume a feature exists.
 2. **Protect existing work.** Don't delete or rewrite working code without reason.
 3. **Create a recoverable checkpoint before risky changes.**
