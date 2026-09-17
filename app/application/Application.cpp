@@ -19,6 +19,7 @@ Application::Application(QObject *parent)
 {
     m_durationProbe = m_ownedDurationProbe.get();
     resetReframeCommandExecutor();
+    resetReframePreviewDecoder();
 }
 
 void Application::initialize()
@@ -70,12 +71,18 @@ void Application::newProject()
     const bool hadActiveMedia = !m_activeMediaId.isEmpty();
     const bool hadPreviewTime = m_previewTimeSeconds != 0.0;
     const bool hadReframeOutputs = !m_reframeOutputs.isEmpty();
+    const bool hadCreatorSelection = m_hasCreatorSelection;
     m_mediaItems.clear();
     m_activeMediaId.clear();
     m_previewTimeSeconds = 0.0;
     m_reframeOutputs.clear();
+    m_hasCreatorSelection = false;
+    m_creatorSelection = CreatorTargetSelection();
     resetViewport();
     emit mediaListChanged(m_mediaItems);
+    if (hadCreatorSelection) {
+        emit creatorSelectionChanged(false);
+    }
     if (hadReframeOutputs) {
         emit reframeOutputsChanged(m_reframeOutputs);
     }
@@ -119,6 +126,11 @@ bool Application::openProject(const QString &filePath)
         return false;
     }
 
+    if (m_hasCreatorSelection) {
+        m_hasCreatorSelection = false;
+        m_creatorSelection = CreatorTargetSelection();
+        emit creatorSelectionChanged(false);
+    }
     m_currentProject = loaded;
     m_hasProject = true;
     resetViewport();
@@ -567,6 +579,8 @@ bool Application::runReframeCommandTo(const QString &instruction, qint64 startMs
         m_reframeOutputWidth, m_reframeOutputHeight, m_reframeOutputFps };
     request.speakerProvider = m_speakerProvider;
     request.speakerBindings = m_speakerBindings;
+    request.hasCreatorSelection = m_hasCreatorSelection;
+    request.creatorSelection = m_creatorSelection;
 
     const ReframeCommandResult result =
         m_commandExecutor(request, m_targetDetector, m_commandFrameProvider);
@@ -697,6 +711,103 @@ QList<QPair<QString, QString>> Application::speakerBindings() const
 {
     return m_speakerBindings;
 }
+
+bool Application::selectCreatorTargetFromViewport()
+{
+    if (!m_hasProject) {
+        emit backgroundCompleted(QStringLiteral(
+            "Open or create a project before selecting a creator target."));
+        return false;
+    }
+    const MediaItem *media = activeMediaItem();
+    if (!media) {
+        emit backgroundCompleted(QStringLiteral(
+            "Select an active media item before selecting a creator target."));
+        return false;
+    }
+    CreatorTargetSelection selection;
+    selection.identity = TargetIdentityRegistry::creatorIdentity();
+    selection.timeMs = static_cast<qint64>(m_previewTimeSeconds * 1000.0);
+    selection.yawDeg = m_viewportState ? m_viewportState->yaw() : 0.0;
+    selection.pitchDeg = m_viewportState ? m_viewportState->pitch() : 0.0;
+    selection.label = QStringLiteral("person");
+    selection.evidence = QStringLiteral("creator selected the viewport center");
+    m_creatorSelection = selection;
+    m_hasCreatorSelection = true;
+    emit creatorSelectionChanged(true);
+    emit backgroundCompleted(
+        QStringLiteral("Creator target 'me' set at yaw %1, pitch %2.")
+            .arg(selection.yawDeg, 0, 'f', 1)
+            .arg(selection.pitchDeg, 0, 'f', 1));
+    return true;
+}
+
+void Application::clearCreatorSelection()
+{
+    if (!m_hasCreatorSelection) {
+        return;
+    }
+    m_hasCreatorSelection = false;
+    m_creatorSelection = CreatorTargetSelection();
+    emit creatorSelectionChanged(false);
+    emit backgroundCompleted(QStringLiteral("Creator target 'me' cleared."));
+}
+
+bool Application::hasCreatorSelection() const
+{
+    return m_hasCreatorSelection;
+}
+
+CreatorTargetSelection Application::creatorSelection() const
+{
+    return m_creatorSelection;
+}
+
+bool Application::previewReframeOutput(int index)
+{
+    if (index < 0 || index >= m_reframeOutputs.size()) {
+        emit backgroundCompleted(
+            QStringLiteral("Select a generated render to preview."));
+        return false;
+    }
+    const ReframeCommandOutcome &record = m_reframeOutputs.at(index);
+    if (record.outputPath.isEmpty() || !QFileInfo::exists(record.outputPath)) {
+        emit backgroundCompleted(QStringLiteral(
+            "The render output is unavailable: %1").arg(record.outputPath));
+        return false;
+    }
+    QImage image;
+    QString error;
+    if (!m_previewDecoder
+        || !m_previewDecoder(record.outputPath, &image, &error)
+        || image.isNull()) {
+        emit backgroundCompleted(
+            QStringLiteral("Could not preview the render: %1")
+                .arg(error.isEmpty() ? QStringLiteral("no frame decoded")
+                                     : error));
+        return false;
+    }
+    emit backgroundCompleted(
+        QStringLiteral("Previewing render: %1").arg(record.outputPath));
+    emit reframeOutputPreviewReady(image);
+    return true;
+}
+
+void Application::setReframePreviewDecoder(const ReframePreviewDecoder &decoder)
+{
+    if (decoder) {
+        m_previewDecoder = decoder;
+    }
+}
+
+void Application::resetReframePreviewDecoder()
+{
+    m_previewDecoder = [](const QString &path, QImage *out, QString *error) {
+        return FrameExtractor::extractFirstFrame(
+            path, FrameExtractor::defaultExecutablePath(), out, error);
+    };
+}
+
 
 QJsonArray Application::reframeOutputsJson() const
 {

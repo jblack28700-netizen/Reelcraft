@@ -52,6 +52,21 @@ int main(int argc, char *argv[])
                      &window, &MainWindow::showReframeCommandResult);
     QObject::connect(&application, &Application::reframeOutputsChanged,
                      &window, &MainWindow::showReframeOutputs);
+    QObject::connect(&window, &MainWindow::selectCreatorTargetRequested,
+                     &application, &Application::selectCreatorTargetFromViewport);
+    QObject::connect(&window, &MainWindow::clearCreatorTargetRequested,
+                     &application, &Application::clearCreatorSelection);
+    QObject::connect(&window, &MainWindow::previewReframeOutputRequested,
+                     &application, &Application::previewReframeOutput);
+    QObject::connect(&application, &Application::reframeOutputPreviewReady,
+                     &window, &MainWindow::showReframeOutputPreview);
+    QObject::connect(&application, &Application::creatorSelectionChanged,
+                     [&window, &application](bool hasSelection) {
+                         window.showCreatorSelection(
+                             hasSelection,
+                             application.creatorSelection().yawDeg,
+                             application.creatorSelection().pitchDeg);
+                     });
     QObject::connect(&application, &Application::mediaListChanged,
                      &window, &MainWindow::showMediaList);
     QObject::connect(&application, &Application::activeMediaChanged,
@@ -125,6 +140,9 @@ int main(int argc, char *argv[])
             QStringList{ speakerScript, QStringLiteral("--model"), sileroModel });
         application.setSpeakerEvidenceProvider(speakerProvider.get());
     }
+
+    window.showProviderStatus(application.targetDetector() != nullptr,
+                              application.speakerEvidenceProvider() != nullptr);
 
     return app.exec();
 }

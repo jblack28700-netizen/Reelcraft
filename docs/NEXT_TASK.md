@@ -10,7 +10,7 @@ Priority pipeline: 360 source -> scene/subject understanding -> natural-language
 
 The Phase 3 Objective 5 entry below remains valid project history but must NOT be started mechanically while the 360 priority is active. It should resume only when it directly serves the 360 capability (for example, previewing/playing reframed results).
 
-**Current 360 status:** Reframing Objectives 1–8 are complete and verified (deterministic vertical slice; target/subject resolution; real detector integration; target identity/selection; appearance re-identification; audio/speaker evidence; audio-visual provider-attribution seam; end-to-end user-command execution). The next objective is Application-level 360 command orchestration (see the end of this file); it requires its own scoped objective.
+**Current 360 status:** Reframing Objectives 1–12 are complete and verified (deterministic vertical slice; target/subject resolution; real detector integration; target identity/selection; appearance re-identification; audio/speaker evidence; audio-visual provider-attribution seam; end-to-end user-command execution; application command orchestration; persisted outputs and duration-aware ranges; speaker-aware commands; application command UI and rendered-result preview). See the end of this file for the next candidates; each requires its own scoped objective.
 
 ---
 
@@ -333,8 +333,22 @@ Reuse the Objective 6/7 speaker evidence layer inside the application command pa
 - 9 new model-free tests; full model-free suite 348 passed / 0 failed / 4 skipped. New env-gated `realSpeakerCommandIntegration`.
 - Architecture decision: Decision 028.
 
-## Next Objective — GPU Optimization or Phase 3 Player Lifecycle — NOT STARTED
+## 360 Reframing Objective 12 — 360 Command UI and Rendered-Result Preview — Complete
 
-The remaining leading candidates are GPU optimization of the ML helpers (behind the existing replaceable seams) and the deferred Phase 3 Application-level player-lifecycle objective; richer UI for the persisted render records is also a candidate. Requires its own scoped objective; do not begin automatically.
+Status: **Complete — implemented and verified (2026-09-17).**
+
+### Objective
+Human-selected scope (Decision 029): make the existing 360 command path usable from the application and let the creator see a generated reframe, without building a general player/timeline or a parallel command system.
+
+### Scope (implemented)
+- Creator "me" selection: `Application::selectCreatorTargetFromViewport()` seeds "me" from the current viewport direction and preview time; `clearCreatorSelection()` clears it; the selection is passed into every command request.
+- Rendered-result preview: `Application::previewReframeOutput(index)` decodes the first frame of a persisted render record through an injectable decoder seam (defaulting to the external-FFmpeg `FrameExtractor`) and emits `reframeOutputPreviewReady`; `MainWindow` presents it flat.
+- Minimal UI: creator-selection buttons/readout, "Preview Selected Render" on the existing render list, provider status line.
+- 11 new model-free tests; full model-free suite 359 passed / 0 failed / 4 skipped.
+- Architecture decision: Decision 029.
+
+## Next Objective — GPU Optimization, Playback, or Creator-Selection Persistence — NOT STARTED
+
+The remaining leading candidates are GPU optimization of the ML helpers (behind the existing replaceable seams), the deferred Phase 3 Application-level player-lifecycle objective (continuous playback of rendered results), and persisting the creator "me" selection in the project. Requires its own scoped objective; do not begin automatically.
 
 

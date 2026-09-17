@@ -1419,3 +1419,35 @@ Reuse the Objective 6/7 speaker evidence layer inside the application command pa
 ### Decisions
 
 - Decision 028 recorded. Decisions 017-027 preserved unchanged.
+---
+
+## 2026-09-17 — 360 Reframing Objective 12: 360 Command UI and Rendered-Result Preview
+
+### Objective
+
+Human-selected scope (Decision 029): make the existing 360 command path usable from the application and let the creator see a generated reframe, without building a general player/timeline or a parallel command system.
+
+### Work completed
+
+- `Application`: `selectCreatorTargetFromViewport()` seeds "me" from the current viewport yaw/pitch and preview time; `clearCreatorSelection()`; `hasCreatorSelection()`/`creatorSelection()`; `creatorSelectionChanged(bool)`. The selection is session state, cleared on new/open project, and passed into every `ReframeCommandRequest`.
+- `Application`: `previewReframeOutput(int)` decodes the first frame of a persisted render record and emits `reframeOutputPreviewReady`; a `ReframePreviewDecoder` seam defaults to `FrameExtractor::extractFirstFrame`. Honest failures for invalid index, missing output, and decode failure.
+- `MainWindow`: "Select Center as Me"/"Clear Me" + selection readout, "Preview Selected Render" (acts on the render list selection), and a provider status line; `showReframeOutputPreview` presents flat via the existing viewer flat mode.
+- `main.cpp` wiring for all new signals and an initial provider-status update.
+
+### Verification
+
+- Model-free suite: 359 passed, 0 failed, 4 skipped.
+- Focused Objective 12 tests: 11 passed.
+- Test build and standalone application build both succeed.
+- No real-media validation was run: this objective is UI/orchestration and the preview decode reuses the already-verified FFmpeg `FrameExtractor` seam.
+- Change-impact: the deterministic renderer, command runner, perception/identity/speaker layers, and viewer rendering are unchanged; the viewer flat mode already existed.
+
+### Boundary notes / not implemented
+
+- The creator selection is session state (not persisted) and generated renders can be previewed as a single flat frame, not played continuously (the deferred Phase 3 player-lifecycle objective).
+- In-app model/helper path configuration is not added; external providers remain configured through `REELCRAFT_*` and are reported as configured/not configured.
+- GPU optimization and continuous playback remain future work.
+
+### Decisions
+
+- Decision 029 recorded. Decisions 017-028 preserved unchanged.

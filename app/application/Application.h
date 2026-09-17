@@ -24,6 +24,12 @@ class SpeakerEvidenceProvider;
 using ReframeCommandExecutor = std::function<ReframeCommandResult(
     const ReframeCommandRequest &, TargetDetector *, ReframeFrameProvider *)>;
 
+// The application-level render-preview decoder. It defaults to decoding the
+// first frame of a generated output with the external FFmpeg seam; tests inject
+// a fake so preview orchestration stays model-free.
+using ReframePreviewDecoder =
+    std::function<bool(const QString &path, QImage *out, QString *error)>;
+
 class Application : public QObject
 {
     Q_OBJECT
@@ -165,6 +171,27 @@ public slots:
     void setSpeakerBindings(const QList<QPair<QString, QString>> &bindings);
     QList<QPair<QString, QString>> speakerBindings() const;
 
+    // --- creator target selection (Objective 12) ----------------------------
+    // Seeds the canonical creator identity "me" from the current viewport
+    // direction (yaw/pitch) at the current preview time, so "follow me" and
+    // "keep me centered" commands can resolve without a known track id. Session
+    // state; not persisted. Requires a project and an available active media.
+    bool selectCreatorTargetFromViewport();
+    void clearCreatorSelection();
+    bool hasCreatorSelection() const;
+    CreatorTargetSelection creatorSelection() const;
+
+    // --- generated render preview (Objective 12) ----------------------------
+    // Decodes the first frame of the indexed persisted render output and emits
+    // reframeOutputPreviewReady() for flat presentation. Fails honestly when the
+    // index is invalid, the output file is missing, or no frame decodes. The
+    // output file is only read.
+    bool previewReframeOutput(int index);
+
+    // Test/DI seam: the preview decoder defaults to the FFmpeg frame seam.
+    void setReframePreviewDecoder(const ReframePreviewDecoder &decoder);
+    void resetReframePreviewDecoder();
+
 signals:
     void projectChanged(const Project &project);
     void backgroundCompleted(const QString &message);
@@ -190,6 +217,12 @@ signals:
     // Emitted whenever the persisted render-record list changes (a new record,
     // a new/opened project).
     void reframeOutputsChanged(const QList<ReframeCommandOutcome> &outputs);
+
+    // Emitted when the creator "me" selection is set or cleared (Objective 12).
+    void creatorSelectionChanged(bool hasSelection);
+
+    // Emitted after previewReframeOutput() decodes a frame successfully.
+    void reframeOutputPreviewReady(const QImage &image);
 
 private:
     bool decodePreviewFrameAt(double targetSeconds);
@@ -225,4 +258,9 @@ private:
     SpeakerEvidenceProvider *m_speakerProvider = nullptr;
     QList<QPair<QString, QString>> m_speakerBindings;
     QList<ReframeCommandOutcome> m_reframeOutputs;
+
+    // Objective 12: creator "me" selection and render preview.
+    CreatorTargetSelection m_creatorSelection;
+    bool m_hasCreatorSelection = false;
+    ReframePreviewDecoder m_previewDecoder;
 };

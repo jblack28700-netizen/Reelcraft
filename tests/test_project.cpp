@@ -1012,6 +1012,17 @@ private slots:
     void reframePipelineRenderPlanValidatesInputs();
     void applicationPassesSpeakerProviderAndBindings();
     void realSpeakerCommandIntegration();
+    void applicationSelectsCreatorTargetFromViewport();
+    void applicationCreatorSelectionRequiresContext();
+    void applicationCreatorSelectionPassedToCommand();
+    void applicationNewProjectClearsCreatorSelection();
+    void applicationPreviewReframeOutputDecodesFrame();
+    void applicationPreviewReframeOutputRejectsBadInputs();
+    void mainWindowCreatorButtonsEmitSignals();
+    void mainWindowShowsCreatorSelection();
+    void mainWindowPreviewRenderButtonEmitsRequest();
+    void mainWindowShowsReframeOutputPreviewFlat();
+    void mainWindowShowsProviderStatus();
     void realApplicationCommandIntegration();
     void equirectDirectionFromCenterAndSides();
     void equirectPixelRoundTrip();
@@ -8300,6 +8311,241 @@ void ProjectTest::realSpeakerCommandIntegration()
     QVERIFY(!result.plan.keyframes().isEmpty());
     QVERIFY(QFileInfo::exists(result.outputPath));
     QVERIFY(QFileInfo(result.outputPath).size() > 0);
+}
+
+// ================= 360 command UI & render preview (Phase 4, Obj 12) ============
+// Model-free tests for the creator "me" selection, generated-render preview, and
+// the minimal command UI. No model or media decode is required.
+
+void ProjectTest::applicationSelectsCreatorTargetFromViewport()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.viewportState()->setYaw(35.0);
+    app.viewportState()->setPitch(-12.0);
+
+    bool signalFired = false;
+    QObject::connect(&app, &Application::creatorSelectionChanged,
+                     [&signalFired](bool) { signalFired = true; });
+
+    QVERIFY(app.selectCreatorTargetFromViewport());
+    QVERIFY(signalFired);
+    QVERIFY(app.hasCreatorSelection());
+    QCOMPARE(app.creatorSelection().identity, QStringLiteral("me"));
+    QVERIFY(qAbs(app.creatorSelection().yawDeg - 35.0) < 1e-9);
+    QVERIFY(qAbs(app.creatorSelection().pitchDeg + 12.0) < 1e-9);
+
+    app.clearCreatorSelection();
+    QVERIFY(!app.hasCreatorSelection());
+}
+
+void ProjectTest::applicationCreatorSelectionRequiresContext()
+{
+    Application app;
+    QVERIFY(!app.selectCreatorTargetFromViewport()); // no project
+
+    app.newProject();
+    QVERIFY(!app.selectCreatorTargetFromViewport()); // no active media
+}
+
+void ProjectTest::applicationCreatorSelectionPassedToCommand()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.viewportState()->setYaw(20.0);
+    QVERIFY(app.selectCreatorTargetFromViewport());
+
+    ReframeCommandRequest captured;
+    bool called = false;
+    app.setReframeCommandExecutor(
+        [&called, &captured](const ReframeCommandRequest &request,
+                             TargetDetector *, ReframeFrameProvider *) {
+            called = true;
+            captured = request;
+            ReframeCommandResult result;
+            result.ok = true;
+            result.outputPath = request.outputPath;
+            return result;
+        });
+
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("keep me centered"), 0, 2000,
+                                    directory.filePath(QStringLiteral("out.mp4"))));
+    QVERIFY(called);
+    QVERIFY(captured.hasCreatorSelection);
+    QCOMPARE(captured.creatorSelection.identity, QStringLiteral("me"));
+    QVERIFY(qAbs(captured.creatorSelection.yawDeg - 20.0) < 1e-9);
+}
+
+void ProjectTest::applicationNewProjectClearsCreatorSelection()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    QVERIFY(app.selectCreatorTargetFromViewport());
+    QVERIFY(app.hasCreatorSelection());
+
+    bool cleared = false;
+    QObject::connect(&app, &Application::creatorSelectionChanged,
+                     [&cleared](bool hasSelection) {
+                         if (!hasSelection) {
+                             cleared = true;
+                         }
+                     });
+    app.newProject();
+    QVERIFY(!app.hasCreatorSelection());
+    QVERIFY(cleared);
+}
+
+void ProjectTest::applicationPreviewReframeOutputDecodesFrame()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandExecutor(successExecutor());
+    const QString outputPath = directory.filePath(QStringLiteral("render.mp4"));
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                    outputPath));
+    QCOMPARE(app.reframeOutputs().size(), 1);
+
+    QFile outputFile(outputPath);
+    QVERIFY(outputFile.open(QIODevice::WriteOnly));
+    outputFile.write("x");
+    outputFile.close();
+
+    QImage fake(8, 4, QImage::Format_ARGB32);
+    fake.fill(QColor(10, 20, 30));
+    app.setReframePreviewDecoder(
+        [&fake, &outputPath](const QString &path, QImage *out, QString *error) {
+            if (path != outputPath) {
+                if (error) {
+                    *error = QStringLiteral("unexpected path");
+                }
+                return false;
+            }
+            *out = fake;
+            return true;
+        });
+
+    QImage received;
+    QObject::connect(&app, &Application::reframeOutputPreviewReady,
+                     [&received](const QImage &image) { received = image; });
+    QVERIFY(app.previewReframeOutput(0));
+    QCOMPARE(received.size(), fake.size());
+    QCOMPARE(received.pixelColor(0, 0), QColor(10, 20, 30));
+}
+
+void ProjectTest::applicationPreviewReframeOutputRejectsBadInputs()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+
+    // No render records yet, and out-of-range indices.
+    QVERIFY(!app.previewReframeOutput(0));
+    QVERIFY(!app.previewReframeOutput(-1));
+    QVERIFY(!app.previewReframeOutput(5));
+
+    app.setReframeCommandExecutor(successExecutor());
+    const QString outputPath = directory.filePath(QStringLiteral("render.mp4"));
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                    outputPath));
+    // The output file does not exist yet.
+    QVERIFY(!app.previewReframeOutput(0));
+
+    QFile outputFile(outputPath);
+    QVERIFY(outputFile.open(QIODevice::WriteOnly));
+    outputFile.write("x");
+    outputFile.close();
+
+    // A decoder failure is reported, not silently ignored.
+    app.setReframePreviewDecoder(
+        [](const QString &, QImage *, QString *error) {
+            if (error) {
+                *error = QStringLiteral("decode failed");
+            }
+            return false;
+        });
+    QVERIFY(!app.previewReframeOutput(0));
+}
+
+void ProjectTest::mainWindowCreatorButtonsEmitSignals()
+{
+    TestMainWindow window;
+    QSignalSpy selectSpy(&window, &MainWindow::selectCreatorTargetRequested);
+    QSignalSpy clearSpy(&window, &MainWindow::clearCreatorTargetRequested);
+    auto *select = window.findChild<QPushButton *>("selectCreatorButton");
+    auto *clear = window.findChild<QPushButton *>("clearCreatorButton");
+    QVERIFY(select);
+    QVERIFY(clear);
+    select->click();
+    clear->click();
+    QCOMPARE(selectSpy.count(), 1);
+    QCOMPARE(clearSpy.count(), 1);
+}
+
+void ProjectTest::mainWindowShowsCreatorSelection()
+{
+    TestMainWindow window;
+    window.showCreatorSelection(true, 12.5, -3.0);
+    auto *label = window.findChild<QLabel *>("creatorSelectionLabel");
+    QVERIFY(label);
+    QVERIFY(label->text().contains(QStringLiteral("12.5")));
+    QVERIFY(label->text().contains(QStringLiteral("-3.0")));
+
+    window.showCreatorSelection(false, 0.0, 0.0);
+    QVERIFY(label->text().contains(QStringLiteral("none")));
+}
+
+void ProjectTest::mainWindowPreviewRenderButtonEmitsRequest()
+{
+    TestMainWindow window;
+    QSignalSpy spy(&window, &MainWindow::previewReframeOutputRequested);
+    auto *list = window.findChild<QListWidget *>("reframeOutputsList");
+    auto *button = window.findChild<QPushButton *>("previewRenderButton");
+    QVERIFY(list);
+    QVERIFY(button);
+
+    ReframeCommandOutcome first;
+    first.ok = true;
+    first.instruction = QStringLiteral("pan right");
+    first.outputPath = QStringLiteral("/tmp/a.mp4");
+    ReframeCommandOutcome second;
+    second.ok = true;
+    second.instruction = QStringLiteral("follow person 1");
+    second.outputPath = QStringLiteral("/tmp/b.mp4");
+    window.showReframeOutputs({ first, second });
+    list->setCurrentRow(1);
+    button->click();
+
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.first().at(0).toInt(), 1);
+}
+
+void ProjectTest::mainWindowShowsReframeOutputPreviewFlat()
+{
+    TestMainWindow window;
+    QImage image(16, 8, QImage::Format_ARGB32);
+    image.fill(QColor(5, 6, 7));
+    window.showReframeOutputPreview(image);
+    QVERIFY(window.viewerWidget()->hasSourceImage());
+    QVERIFY(window.viewerWidget()->isFlatSourceMode());
+}
+
+void ProjectTest::mainWindowShowsProviderStatus()
+{
+    TestMainWindow window;
+    window.showProviderStatus(true, false);
+    auto *label = window.findChild<QLabel *>("providersLabel");
+    QVERIFY(label);
+    QVERIFY(label->text().contains(QStringLiteral("detector=configured")));
+    QVERIFY(label->text().contains(QStringLiteral("speaker=not configured")));
 }
 
 // Real application command path (Objective 9; skipped unless configured).

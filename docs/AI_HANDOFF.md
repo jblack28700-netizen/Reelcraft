@@ -68,6 +68,8 @@ Objective 10 (Decision 027) closed both gaps: a replaceable `MediaDurationProbe`
 
 Speaker-aware commands are implemented (Decision 028, Objective 11): `ReframeCommandRunner` recognizes speaker references ("follow the speaker", "keep the speaker centered") and reuses the Objective 6/7 `SpeakerEvidenceAnalyzer` + `SpeakerReframePlanner` to turn the associated speaker timeline into the deterministic plan. Audio is evidence: an optional `SpeakerEvidenceProvider` is required, explicit creator `speakerId -> targetId` bindings are honoured first, and an unassociated/ambiguous speaker or a mixed speaker/subject/direction command is reported honestly. `ReframePipeline::renderPlan()` renders an already-validated plan so the speaker plan is not re-derived. `main.cpp` builds a `ProcessSpeakerProvider` from `REELCRAFT_SPEAKER_*` when configured.
 
+The 360 command workflow is now usable from the application (Decision 029, Objective 12): `Application::selectCreatorTargetFromViewport()` seeds the creator "me" identity from the viewport direction and preview time (passed into every command request, cleared on new/open project), and `Application::previewReframeOutput()` decodes the first frame of a persisted render record through an injectable decoder seam (defaulting to the external-FFmpeg `FrameExtractor`) for flat viewer presentation. The minimal UI adds creator-selection controls, a render-preview action, and a provider status line. The creator selection is session state, and continuous playback remains the deferred Phase 3 player-lifecycle objective.
+
 ---
 
 # 4. Current Development Camera

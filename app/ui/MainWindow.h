@@ -60,6 +60,18 @@ public slots:
     // (Objective 10).
     void showReframeOutputs(const QList<ReframeCommandOutcome> &outputs);
 
+    // Updates the creator "me" selection readout (Objective 12).
+    void showCreatorSelection(bool hasSelection, double yawDeg, double pitchDeg);
+
+    // Presents a generated render's decoded frame flat (Objective 12): a
+    // reframed output is a flat video, so no equirectangular camera transform is
+    // applied.
+    void showReframeOutputPreview(const QImage &image);
+
+    // Shows whether the replaceable detector/speaker providers are configured
+    // (Objective 12). The providers are external and optional.
+    void showProviderStatus(bool hasDetector, bool hasSpeaker);
+
 signals:
     void newProjectRequested();
     void saveProjectRequested(const QString &filePath);
@@ -72,6 +84,9 @@ signals:
     void setMediaProjectionRequested(const QString &mediaId, const QString &projectionValue);
     void reframeCommandRequested(const QString &instruction, qint64 startMs,
                                  qint64 endMs);
+    void selectCreatorTargetRequested();
+    void clearCreatorTargetRequested();
+    void previewReframeOutputRequested(int index);
     void backgroundDemoRequested();
     void resetViewportRequested();
     void viewportYawDeltaRequested(double delta);
@@ -113,6 +128,13 @@ private:
     QPushButton *m_runCommandButton = nullptr;
     QLabel *m_commandResultLabel = nullptr;
     QListWidget *m_reframeOutputsList = nullptr;
+
+    // Objective 12: creator selection, render preview, provider status.
+    QPushButton *m_selectCreatorButton = nullptr;
+    QPushButton *m_clearCreatorButton = nullptr;
+    QLabel *m_creatorSelectionLabel = nullptr;
+    QPushButton *m_previewRenderButton = nullptr;
+    QLabel *m_providersLabel = nullptr;
 
     ViewerWidget *m_viewerWidget = nullptr;
 

@@ -641,3 +641,12 @@ Date: 2026-09-17
 - Added `ReframePipeline::renderPlan()` to render an already-validated plan with the same deterministic renderer; `run()` delegates to it and `ReframeCommandRunner::run()` renders the prepared speaker plan instead of re-deriving it.
 - `Application` holds a non-owned speaker provider and optional bindings and copies them into each command request; `main.cpp` builds a `ProcessSpeakerProvider` from `REELCRAFT_SPEAKER_PY`/`_SCRIPT`/`REELCRAFT_SILERO_MODEL` when configured.
 - 9 new model-free tests; full model-free suite 348 passed / 0 failed / 4 skipped. New env-gated `realSpeakerCommandIntegration`. Decision 028 recorded; Decisions 017-027 preserved.
+
+## v0.2.49 — 360 Command UI and Rendered-Result Preview
+
+Date: 2026-09-17
+
+- The 360 command workflow is now usable from the application. `Application::selectCreatorTargetFromViewport()` seeds the creator identity "me" from the current viewport direction and preview time, and `clearCreatorSelection()` clears it; the selection is passed into every command request so "follow me" / "keep me centered" can resolve without a known track id. It is session state and is cleared on new/open project.
+- Added rendered-result preview: `Application::previewReframeOutput(index)` decodes the first frame of a persisted render record through an injectable decoder seam (defaulting to the external-FFmpeg `FrameExtractor`) and emits `reframeOutputPreviewReady`; the viewer presents it flat (no equirectangular camera transform). Invalid indices, missing outputs, and decode failures are reported honestly.
+- Minimal UI: "Select Center as Me"/"Clear Me" with a selection readout, "Preview Selected Render" on the existing render list, and a provider status line. `main.cpp` wires them; external detector/speaker providers remain configured through `REELCRAFT_*`.
+- 11 new model-free tests; full model-free suite 359 passed / 0 failed / 4 skipped. Decision 029 records the human-selected Objective 12 scope; Decisions 017-028 preserved.

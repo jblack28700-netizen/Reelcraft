@@ -872,3 +872,26 @@ Objectives 6/7 delivered an optional audio/speaker evidence layer (`SpeakerEvide
 - 9 new model-free tests: speaker phrasing parsing, speaker-follow with a scripted provider, honest failure without a provider, honest ambiguity/unassociated behavior, explicit-binding precedence, unsupported mixing (subject and direction), `renderPlan` input validation, and application plumbing. Full model-free suite: 348 passed / 0 failed / 4 skipped.
 - A new env-gated `realSpeakerCommandIntegration` resolves real presenter tracks once with the Apache-2.0 YOLOX detector, then runs "follow the speaker" with the real Silero VAD provider and an explicit creator speaker binding through the deterministic renderer. Result recorded in `CURRENT_STATE.md` and `DEVELOPMENT_LOG.md`.
 - Decisions 017–027 preserved. GPU optimization and the deferred Phase 3 player-lifecycle objective remain future work.
+
+# Decision 029 — Objective 12 Scope: 360 Command UI and Rendered-Result Preview
+
+**Status:** Accepted (2026-09-17, 360 Reframing Objective 12)
+
+## Context
+
+Objectives 1–11 completed the 360 command pipeline (source -> scene/target understanding -> English command -> resolve -> plan -> deterministic render -> persisted record). Objective 11's `NEXT_TASK.md` next-objective entry named only candidates — GPU optimization of the ML helpers, the deferred Phase 3 Application-level player-lifecycle objective, and richer UI for the persisted render records — and stated that the next objective "requires its own scoped objective; do not begin automatically." No scoped Objective 12 existed in the repository. The human selected the candidate that most directly serves the 360-first priority: "360 command UI + preview rendered results."
+
+## Decisions
+
+- **Objective 12 is "360 Command UI and Rendered-Result Preview."** It makes the existing command path usable from the application and lets the creator see a generated reframe, without building a general player/timeline or a parallel command system.
+- **Creator "me" selection from the application.** `Application::selectCreatorTargetFromViewport()` seeds the canonical "me" identity from the current viewport yaw/pitch and the current preview time; `clearCreatorSelection()` clears it. The selection is session state (not persisted), is cleared on new/open project, and is passed into every `ReframeCommandRequest` (`hasCreatorSelection`/`creatorSelection`), so "follow me" / "keep me centered" can resolve without a known track id.
+- **Rendered-result preview.** `Application::previewReframeOutput(index)` decodes the first frame of a persisted render record and emits `reframeOutputPreviewReady`. It fails honestly for an invalid index, a missing output file, or a decode failure. The decoder is an injectable seam (`ReframePreviewDecoder`) defaulting to the existing external-FFmpeg `FrameExtractor`; tests inject a fake so orchestration stays model-free.
+- **Flat presentation.** A reframed render is a flat video, so `MainWindow::showReframeOutputPreview` presents the decoded frame through the viewer's existing flat mode (`setFlatSourceMode(true)` + `setSourceImage`), never the equirectangular camera transform. No viewer architecture change.
+- **Minimal UI, no redesign.** `MainWindow` gained "Select Center as Me" / "Clear Me" buttons and a selection readout, a "Preview Selected Render" action on the existing render list, and a provider status line. `main.cpp` wires them; external detector/speaker providers remain configured through `REELCRAFT_*` and are reported as configured/not configured.
+- **Preserved invariants.** Original media and generated outputs are read-only; the deterministic renderer and the replaceable ML/provider boundaries are unchanged; the deferred Phase 3 player-lifecycle objective is not started (only the single-frame preview, which reuses the existing frame seam, is in scope). Continuous playback and general timeline/UI work remain future objectives.
+
+## Consequences
+
+- 11 new model-free tests cover creator selection (set, require context, pass-through, clear), render preview (decode, reject bad inputs), and the UI (buttons, selection readout, preview request, flat presentation, provider status). Full model-free suite: 359 passed / 0 failed / 4 skipped.
+- No expensive real-media validation is required: the preview decode reuses the already-verified external-FFmpeg `FrameExtractor` seam, and the existing env-gated real integrations were not re-run.
+- Decisions 017–028 preserved. GPU optimization and the Phase 3 player lifecycle remain future work.

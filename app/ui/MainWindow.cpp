@@ -75,6 +75,11 @@ MainWindow::MainWindow(QWidget *parent)
     m_commandResultLabel = new QLabel(QStringLiteral("No reframe command run."), central);
     m_reframeOutputsList = new QListWidget(central);
     m_reframeOutputsList->setMinimumHeight(60);
+    m_previewRenderButton = new QPushButton(QStringLiteral("Preview Selected Render"), central);
+    m_selectCreatorButton = new QPushButton(QStringLiteral("Select Center as Me"), central);
+    m_clearCreatorButton = new QPushButton(QStringLiteral("Clear Me"), central);
+    m_creatorSelectionLabel = new QLabel(QStringLiteral("Creator target 'me': none"), central);
+    m_providersLabel = new QLabel(QStringLiteral("Providers: detector=no, speaker=no"), central);
 
     m_mediaListWidget = new QListWidget(central);
     m_mediaListWidget->setObjectName("mediaListWidget");
@@ -108,6 +113,11 @@ MainWindow::MainWindow(QWidget *parent)
     m_runCommandButton->setObjectName("runReframeCommandButton");
     m_commandResultLabel->setObjectName("reframeResultLabel");
     m_reframeOutputsList->setObjectName("reframeOutputsList");
+    m_previewRenderButton->setObjectName("previewRenderButton");
+    m_selectCreatorButton->setObjectName("selectCreatorButton");
+    m_clearCreatorButton->setObjectName("clearCreatorButton");
+    m_creatorSelectionLabel->setObjectName("creatorSelectionLabel");
+    m_providersLabel->setObjectName("providersLabel");
 
     m_viewerWidget = new ViewerWidget(central);
     m_viewerWidget->setObjectName("viewerWidget");
@@ -141,6 +151,11 @@ MainWindow::MainWindow(QWidget *parent)
     layout->addWidget(m_runCommandButton);
     layout->addWidget(m_commandResultLabel);
     layout->addWidget(m_reframeOutputsList);
+    layout->addWidget(m_previewRenderButton);
+    layout->addWidget(m_selectCreatorButton);
+    layout->addWidget(m_clearCreatorButton);
+    layout->addWidget(m_creatorSelectionLabel);
+    layout->addWidget(m_providersLabel);
     layout->addWidget(m_statusLabel);
 
     setCentralWidget(central);
@@ -223,6 +238,20 @@ MainWindow::MainWindow(QWidget *parent)
         const qint64 endMs = static_cast<qint64>(
             qRound64(m_commandEndSeconds->value() * 1000.0));
         emit reframeCommandRequested(m_commandEdit->text(), startMs, endMs);
+    });
+
+    connect(m_selectCreatorButton, &QPushButton::clicked, this,
+            &MainWindow::selectCreatorTargetRequested);
+    connect(m_clearCreatorButton, &QPushButton::clicked, this,
+            &MainWindow::clearCreatorTargetRequested);
+    connect(m_previewRenderButton, &QPushButton::clicked, this, [this]() {
+        const int row = m_reframeOutputsList->currentRow();
+        if (row < 0) {
+            m_statusLabel->setText(
+                QStringLiteral("No generated render selected."));
+            return;
+        }
+        emit previewReframeOutputRequested(row);
     });
 
     m_newProjectButton->installEventFilter(this);
@@ -476,4 +505,39 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
     }
 
     event->accept();
+}
+
+void MainWindow::showCreatorSelection(bool hasSelection, double yawDeg,
+                                      double pitchDeg)
+{
+    if (hasSelection) {
+        m_creatorSelectionLabel->setText(
+            QStringLiteral("Creator target 'me': yaw %1, pitch %2")
+                .arg(yawDeg, 0, 'f', 1)
+                .arg(pitchDeg, 0, 'f', 1));
+    } else {
+        m_creatorSelectionLabel->setText(
+            QStringLiteral("Creator target 'me': none"));
+    }
+}
+
+void MainWindow::showReframeOutputPreview(const QImage &image)
+{
+    if (!m_viewerWidget) {
+        return;
+    }
+    // A reframed render is a flat video: present it flat, letterboxed, with no
+    // equirectangular camera transform.
+    m_viewerWidget->setFlatSourceMode(true);
+    m_viewerWidget->setSourceImage(image);
+}
+
+void MainWindow::showProviderStatus(bool hasDetector, bool hasSpeaker)
+{
+    m_providersLabel->setText(
+        QStringLiteral("Providers: detector=%1, speaker=%2")
+            .arg(hasDetector ? QStringLiteral("configured")
+                             : QStringLiteral("not configured"))
+            .arg(hasSpeaker ? QStringLiteral("configured")
+                            : QStringLiteral("not configured")));
 }

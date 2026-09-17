@@ -2,7 +2,7 @@
 
 ## Current Version
 
-0.2.48
+0.2.49
 
 ## Current Branch
 
@@ -10,7 +10,7 @@ main
 
 ## Current Stage
 
-Phase 4 — 360 Reframing Engine (deterministic vertical slice), Target/Subject Resolution, real detector integration, structured target identity/selection, optional appearance-based re-identification, optional audio/speaker evidence, an audio-visual provider-attribution seam, end-to-end user-command execution, application-level command orchestration, persisted render records with duration-aware ranges, and speaker-aware commands implemented and verified. Phase 3 Media Engine remains open; its player-lifecycle objective is intentionally superseded for now by the human-approved 360 priority.
+Phase 4 — 360 Reframing Engine (deterministic vertical slice), Target/Subject Resolution, real detector integration, structured target identity/selection, optional appearance-based re-identification, optional audio/speaker evidence, an audio-visual provider-attribution seam, end-to-end user-command execution, application-level command orchestration, persisted render records with duration-aware ranges, speaker-aware commands, and application command UI with rendered-result preview implemented and verified. Phase 3 Media Engine remains open; its player-lifecycle objective is intentionally superseded for now by the human-approved 360 priority.
 
 ## Project Status
 
@@ -1048,7 +1048,18 @@ Status: Complete (2026-09-17). Reuses the Objective 6/7 speaker evidence layer i
 - Real footage (`realSpeakerCommandIntegration`, audio+video proxy; original untouched): "follow the speaker" used 9 pre-resolved tracks, associated the VAD speech to t1 through an explicit creator speaker binding, and rendered 24 frames to a 640x360 clip.
 - Architecture decision: Decision 028.
 
-Next: GPU optimization and the deferred Phase 3 player-lifecycle objective remain the leading candidates, along with UI polish for the persisted render records. Requires its own scoped objective.
+## Phase 4 Objective 12 — 360 Command UI and Rendered-Result Preview — Complete
+
+Status: Complete (2026-09-17). Human-selected scope (Decision 029): make the existing 360 command path usable from the application and let the creator see a generated reframe, without building a general player/timeline.
+
+- Creator "me" selection: `Application::selectCreatorTargetFromViewport()` seeds the canonical "me" identity from the current viewport yaw/pitch and preview time; `clearCreatorSelection()` clears it. Session state; cleared on new/open project; passed into every `ReframeCommandRequest` so "follow me"/"keep me centered" resolve without a known track id.
+- Rendered-result preview: `Application::previewReframeOutput(index)` decodes the first frame of a persisted render record and emits `reframeOutputPreviewReady`; the decoder is an injectable seam defaulting to the external-FFmpeg `FrameExtractor`. Invalid index / missing output / decode failure are reported honestly.
+- Flat presentation: `MainWindow::showReframeOutputPreview` presents the frame through the existing flat viewer mode (no equirect camera transform).
+- Minimal UI: "Select Center as Me"/"Clear Me" + selection readout, "Preview Selected Render" on the existing render list, and a provider status line.
+- 11 new model-free tests; full model-free suite 359 passed, 0 failed, 4 skipped.
+- Architecture decision: Decision 029.
+
+Next: GPU optimization, the deferred Phase 3 player-lifecycle objective (continuous playback of renders), and persisting the creator selection remain future candidates. Requires its own scoped objective.
 
 
 

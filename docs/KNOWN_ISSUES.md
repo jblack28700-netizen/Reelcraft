@@ -388,6 +388,26 @@ Revisit when a permissively licensed audio-visual active-speaker or diarization 
 
 ---
 
+# Issue — Creator selection and render playback are session-only (2026-09-17)
+
+### Status
+
+Open — intentional boundary; not a defect.
+
+### Description
+
+The Objective 12 creator "me" selection (`Application::selectCreatorTargetFromViewport()`) is session state: it is not persisted in the project, so reopening a project requires re-selecting the creator target. Generated renders can be previewed as a single flat frame but not played or scrubbed inside Reelcraft; continuous playback is the deferred Phase 3 Application-level player-lifecycle objective, and Objective 12 deliberately reuses the existing single-frame FFmpeg seam rather than building a parallel player.
+
+### Impact
+
+After reopening a project the creator must re-select "me"; reviewing a rendered result frame-by-frame in the app is not yet possible.
+
+### Planned Resolution
+
+Persist the creator selection additively in the project (mirroring `reframeOutputs`), and resume the Phase 3 player-lifecycle objective where it serves the 360 workflow (previewing/playing rendered results). Do not build a parallel player.
+
+---
+
 # Issue Management Rules
 
 For each future issue:
