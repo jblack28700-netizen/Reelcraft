@@ -220,3 +220,29 @@ invocation (process-per-view) is intentionally unoptimized.
   Ultralytics YOLO (AGPL-3.0).
 - **Limitations:** appearance similarity, not biometric identity; thresholds are
   domain dependent; CPU; process-per-crop; no speaker/audio association.
+
+## 13. Audio/Speaker Evidence (2026-09-17, Objective 6)
+
+- **Interface:** `SpeakerEvidenceProvider` + `ProcessSpeakerProvider` (external
+  file/JSON helper). No audio/ML runtime is linked into Reelcraft.
+- **Evidence model:** `SpeakerInterval`, `SpeakerAnalysis`, `SpeakerEvidence`,
+  `SpeakerSegment`, and an explicit `SpeakerVerdict` (Unavailable / Active /
+  Ambiguous / Overlap / Silence / Unassociated); JSON-serializable.
+- **Association:** `SpeakerTargetAssociator` maps a provider-local `speakerId`
+  to an existing target track: explicit creator binding > optional spatial
+  (direction of arrival) nearest within a gate > single visible person >
+  unassociated/ambiguous. It never creates a target.
+- **Temporal behavior:** `SpeakerTimeline` merges same-speaker pauses
+  (`holdMs`), requires `switchConfirmMs` before a speaker change, ignores speech
+  shorter than `minSpeechMs`, and represents simultaneous speech as Overlap.
+- **Identity integration:** evidence only. `TargetIdentityRegistry::annotateSpeaker`
+  records speaker evidence without changing resolution; `SpeakerReframePlanner`
+  turns the associated timeline into a `ReframePlan` with cuts at speaker
+  changes. Audio never overrides an explicit creator selection.
+- **Provider selected:** Silero VAD (MIT code and weights; local CPU via ONNX
+  Runtime; FFmpeg audio decode). See `tools/speaker_helper/README.md`.
+- **Rejected/deferred:** pyannote (gated models, PyTorch), SpeechBrain/torchreid
+  speaker embeddings (heavy, VoxCeleb provenance), cloud APIs, audio-visual
+  active-speaker models (research/unclear weight licensing).
+- **Limitations:** VAD gives activity, not identity; automatic attribution with
+  multiple visible people requires an explicit binding or a future provider.

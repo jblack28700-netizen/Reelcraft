@@ -51,6 +51,13 @@
 #include "target/AppearanceTypes.h"
 #include "target/IdentityReidentifier.h"
 #include "target/ProcessAppearanceProvider.h"
+#include "target/ProcessSpeakerProvider.h"
+#include "target/SpeakerEvidenceAnalyzer.h"
+#include "target/SpeakerEvidenceProvider.h"
+#include "target/SpeakerReframePlanner.h"
+#include "target/SpeakerTargetAssociator.h"
+#include "target/SpeakerTimeline.h"
+#include "target/SpeakerTypes.h"
 #include "target/TargetCropExtractor.h"
 #include "target/TargetDetector.h"
 #include "target/TargetIdentity.h"
@@ -1037,6 +1044,37 @@ private slots:
     void appearanceReidentifierProviderFailure();
     void appearanceReidentifierCandidateOrderDeterministic();
     void appearanceReidentifierGeometryConfirmsAppearance();
+    void speakerIntervalAndAnalysisJson();
+    void speakerVerdictEvidenceAndSegmentJson();
+    void speakerIntervalRejectsInvalid();
+    void speakerProcessParseResponse();
+    void speakerProcessRunsHelper();
+    void speakerProcessFailsOnMissingExecutable();
+    void speakerProcessFailsOnBadExit();
+    void speakerAssociatorExplicitBinding();
+    void speakerAssociatorExplicitBindingNotVisible();
+    void speakerAssociatorSingleVisible();
+    void speakerAssociatorMultipleVisibleIsAmbiguous();
+    void speakerAssociatorSpatialAzimuth();
+    void speakerTimelineSingleSpeaker();
+    void speakerTimelineSpeakerChange();
+    void speakerTimelineShortPauseIsHeld();
+    void speakerTimelineRapidAlternationDoesNotThrash();
+    void speakerTimelineOverlapIsPreserved();
+    void speakerTimelineFiltersShortAndLowConfidence();
+    void speakerAnalyzerAssociatesSingleSpeaker();
+    void speakerAnalyzerExplicitBindingWithTwoVisible();
+    void speakerAnalyzerWithoutProviderIsUnavailable();
+    void speakerAnalyzerProviderFailureIsFailSafe();
+    void speakerAnalyzerUnassociatedSpeechDoesNotInventTarget();
+    void speakerAnalyzerTrackingLossKeepsNoTarget();
+    void speakerAnalyzerOverlapIsPreserved();
+    void speakerAnalyzerIsDeterministic();
+    void speakerAnalyzerEvidenceDoesNotChangeIdentity();
+    void speakerPlannerFollowsSingleSpeaker();
+    void speakerPlannerCutsOnSpeakerChange();
+    void speakerPlannerRejectsNoActiveSegment();
+    void speakerRegistryAnnotateDoesNotChangeResolution();
 };
 
 void ProjectTest::initTestCase()
@@ -6986,6 +7024,9 @@ void ProjectTest::realDetectorIntegration()
                  qPrintable(reacquired.notes.join(QStringLiteral("; "))));
         QCOMPARE(registry.targetId(creatorKey), QStringLiteral("t100"));
         finalTrack = &returnedTrack;
+        // Make the re-acquired track visible to later stages (speaker
+        // association and planning).
+        tracks.append(returnedTrack);
     }
 
     ReframePlan plan;
@@ -7038,6 +7079,83 @@ void ProjectTest::realDetectorIntegration()
                  &renderError),
              qPrintable(renderError));
     QCOMPARE(decoded.size(), QSize(640, 360));
+
+    // --- Real speech / speaker evidence (Objective 6) -----------------------
+    const QString speakerPython = qEnvironmentVariable("REELCRAFT_SPEAKER_PY");
+    const QString speakerScript = qEnvironmentVariable("REELCRAFT_SPEAKER_SCRIPT");
+    const QString sileroModel = qEnvironmentVariable("REELCRAFT_SILERO_MODEL");
+    if (!speakerPython.isEmpty() && !speakerScript.isEmpty() && !sileroModel.isEmpty()) {
+        ProcessSpeakerProvider speakerProvider(
+            speakerPython, { speakerScript, QStringLiteral("--model"), sileroModel });
+        SpeakerTargetAssociator associator;
+        // The creator identifies the speaking presenter once; the audio provider
+        // then tracks speech activity over time.
+        associator.bind(QStringLiteral("spk1"), finalTrack->id());
+        SpeakerEvidenceAnalyzer speakerAnalyzer;
+        const qint64 speakerWindowEndMs = 12000;
+        const SpeakerEvidenceAnalyzer::Result speakerResult =
+            speakerAnalyzer.analyze(clip, 0, speakerWindowEndMs, tracks,
+                                    &speakerProvider, associator);
+        for (const QString &note : speakerResult.notes) {
+            qInfo("  speaker note: %s", qPrintable(note));
+        }
+        qInfo("speaker: available=%d intervals=%d segments=%d evidence=%d",
+              speakerResult.analysis.available ? 1 : 0,
+              static_cast<int>(speakerResult.analysis.intervals.size()),
+              static_cast<int>(speakerResult.segments.size()),
+              static_cast<int>(speakerResult.evidence.size()));
+        QVERIFY2(speakerResult.analysis.available,
+                 qPrintable(speakerResult.notes.join(QStringLiteral("; "))));
+        QVERIFY(!speakerResult.analysis.intervals.isEmpty());
+        bool boundTargetActive = false;
+        for (const SpeakerEvidence &evidence : speakerResult.evidence) {
+            if (evidence.targetId == finalTrack->id()
+                && evidence.verdict == SpeakerVerdict::Active) {
+                boundTargetActive = true;
+            }
+        }
+        QVERIFY2(boundTargetActive,
+                 "real speaker evidence did not associate with the selected target");
+
+        ReframePlan speakerPlan;
+        QString speakerPlanError;
+        QVERIFY2(SpeakerReframePlanner::plan(
+                     speakerResult.segments, tracks,
+                     ReframePlan::TimeRange{ 0, speakerWindowEndMs },
+                     ReframePlan::OutputSpec{ 640, 360, 2.0 }, {}, &speakerPlan,
+                     &speakerPlanError),
+                 qPrintable(speakerPlanError));
+        QTemporaryDir speakerDirectory;
+        QString speakerOutputPath = qEnvironmentVariable("REELCRAFT_SPEAKER_OUTPUT");
+        if (speakerOutputPath.isEmpty()) {
+            QVERIFY(speakerDirectory.isValid());
+            speakerOutputPath =
+                speakerDirectory.filePath(QStringLiteral("speaker_follow.mp4"));
+        }
+        const QString speakerFramesDir =
+            QDir(QFileInfo(speakerOutputPath).absolutePath())
+                .filePath(QFileInfo(speakerOutputPath).completeBaseName()
+                          + QStringLiteral("_frames"));
+        QStringList speakerPaths;
+        QString speakerRenderError;
+        QVERIFY2(ReframeRenderer::renderToPngSequence(
+                     speakerPlan, &provider, speakerFramesDir, &speakerPaths,
+                     &speakerRenderError),
+                 qPrintable(speakerRenderError));
+        const QString speakerPattern =
+            QDir(speakerFramesDir)
+                .filePath(ReframeRenderer::frameFileNamePattern());
+        QVERIFY2(ReframeRenderer::encodeVideo(
+                     FrameExtractor::defaultExecutablePath(), speakerPattern,
+                     speakerPlan.output().fps, speakerOutputPath,
+                     &speakerRenderError),
+                 qPrintable(speakerRenderError));
+        QVERIFY(QFileInfo::exists(speakerOutputPath));
+        qInfo("speaker plan: %d keyframe(s); rendered %d frame(s) -> %s",
+              static_cast<int>(speakerPlan.keyframes().size()),
+              static_cast<int>(speakerPaths.size()),
+              qPrintable(speakerOutputPath));
+    }
 }
 
 // ================= 360 target identity & selection (Phase 4, Obj 4) =================
@@ -8264,6 +8382,752 @@ void ProjectTest::appearanceReidentifierGeometryConfirmsAppearance()
              QStringLiteral("continuity-rebind"));
     QCOMPARE(registry.binding(QStringLiteral("me"))->appearanceVerdict,
              QStringLiteral("agree"));
+}
+
+// ================= 360 speaker / audio-visual association (Phase 4, Obj 6) =================
+// Deterministic, model-free tests for the speaker evidence model, the
+// subprocess provider, association, temporal hysteresis, orchestration, and the
+// speaker-follow planner. Real Silero VAD runs only in the integration test.
+
+namespace {
+
+SpeakerInterval makeSpeakerInterval(qint64 startMs, qint64 endMs,
+                                    const QString &id = QStringLiteral("spk1"),
+                                    double confidence = 0.9,
+                                    bool overlap = false)
+{
+    SpeakerInterval interval;
+    interval.startMs = startMs;
+    interval.endMs = endMs;
+    interval.speakerId = id;
+    interval.confidence = confidence;
+    interval.overlap = overlap;
+    return interval;
+}
+
+class ScriptedSpeakerProvider : public SpeakerEvidenceProvider
+{
+public:
+    void setIntervals(const QList<SpeakerInterval> &intervals)
+    {
+        m_analysis = SpeakerAnalysis();
+        m_analysis.available = true;
+        m_analysis.provider = QStringLiteral("scripted");
+        m_analysis.startMs = 0;
+        m_analysis.endMs = 10000;
+        m_analysis.intervals = intervals;
+    }
+    void setUnavailable(const QString &error)
+    {
+        m_analysis = SpeakerAnalysis();
+        m_analysis.available = false;
+        m_analysis.provider = QStringLiteral("scripted");
+        m_analysis.error = error;
+    }
+    void setFail(bool fail) { m_fail = fail; }
+    QString name() const override { return QStringLiteral("scripted"); }
+
+    bool analyze(const QString &, qint64, qint64, SpeakerAnalysis *out,
+                 QString *error) override
+    {
+        if (error) {
+            error->clear();
+        }
+        if (m_fail) {
+            if (error) {
+                *error = QStringLiteral("speaker provider failure");
+            }
+            return false;
+        }
+        if (out) {
+            *out = m_analysis;
+        }
+        return true;
+    }
+
+private:
+    SpeakerAnalysis m_analysis;
+    bool m_fail = false;
+};
+
+int activeSegmentCount(const QList<SpeakerSegment> &segments)
+{
+    int count = 0;
+    for (const SpeakerSegment &segment : segments) {
+        if (segment.verdict == SpeakerVerdict::Active) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+QList<SpeakerSegment> activeSegments(const QList<SpeakerSegment> &segments)
+{
+    QList<SpeakerSegment> active;
+    for (const SpeakerSegment &segment : segments) {
+        if (segment.verdict == SpeakerVerdict::Active) {
+            active.append(segment);
+        }
+    }
+    return active;
+}
+
+} // namespace
+
+void ProjectTest::speakerIntervalAndAnalysisJson()
+{
+    const SpeakerInterval interval = makeSpeakerInterval(100, 900);
+    SpeakerInterval restored;
+    QString error;
+    QVERIFY(SpeakerInterval::readFromJsonObject(interval.toJsonObject(),
+                                                &restored, &error));
+    QCOMPARE(restored.startMs, qint64(100));
+    QCOMPARE(restored.endMs, qint64(900));
+    QCOMPARE(restored.speakerId, QStringLiteral("spk1"));
+
+    SpeakerAnalysis analysis;
+    analysis.available = true;
+    analysis.provider = QStringLiteral("p");
+    analysis.startMs = 0;
+    analysis.endMs = 1000;
+    analysis.intervals.append(interval);
+    SpeakerAnalysis analysisBack;
+    QVERIFY(SpeakerAnalysis::readFromJsonObject(analysis.toJsonObject(),
+                                                &analysisBack, &error));
+    QCOMPARE(analysisBack.intervals.size(), 1);
+    QCOMPARE(analysisBack.provider, QStringLiteral("p"));
+
+    SpeakerAnalysis unavailable;
+    unavailable.available = false;
+    unavailable.startMs = 0;
+    unavailable.endMs = 1000;
+    QVERIFY(unavailable.isValid(&error));
+}
+
+void ProjectTest::speakerVerdictEvidenceAndSegmentJson()
+{
+    QCOMPARE(speakerVerdictToString(SpeakerVerdict::Active),
+             QStringLiteral("active"));
+    QCOMPARE(speakerVerdictFromString(QStringLiteral("overlap")),
+             SpeakerVerdict::Overlap);
+    QCOMPARE(speakerVerdictFromString(QStringLiteral("bogus")),
+             SpeakerVerdict::Unavailable);
+
+    SpeakerEvidence evidence;
+    evidence.targetId = QStringLiteral("t1");
+    evidence.speakerId = QStringLiteral("spk1");
+    evidence.verdict = SpeakerVerdict::Active;
+    evidence.confidence = 0.9;
+    evidence.startMs = 0;
+    evidence.endMs = 500;
+    evidence.provider = QStringLiteral("p");
+    evidence.detail = QStringLiteral("d");
+    SpeakerEvidence evidenceBack;
+    QString error;
+    QVERIFY(SpeakerEvidence::readFromJsonObject(evidence.toJsonObject(),
+                                                &evidenceBack, &error));
+    QCOMPARE(evidenceBack.targetId, QStringLiteral("t1"));
+    QVERIFY(evidenceBack.verdict == SpeakerVerdict::Active);
+
+    SpeakerSegment segment;
+    segment.startMs = 0;
+    segment.endMs = 500;
+    segment.speakerId = QStringLiteral("spk1");
+    segment.targetId = QStringLiteral("t1");
+    segment.verdict = SpeakerVerdict::Active;
+    segment.confidence = 0.8;
+    SpeakerSegment segmentBack;
+    QVERIFY(SpeakerSegment::readFromJsonObject(segment.toJsonObject(),
+                                               &segmentBack, &error));
+    QVERIFY(segmentBack.verdict == SpeakerVerdict::Active);
+    QCOMPARE(segmentBack.targetId, QStringLiteral("t1"));
+}
+
+void ProjectTest::speakerIntervalRejectsInvalid()
+{
+    QString error;
+    SpeakerInterval empty;
+    QVERIFY(!empty.isValid(&error));
+    SpeakerInterval reversed = makeSpeakerInterval(900, 100);
+    QVERIFY(!reversed.isValid(&error));
+    SpeakerInterval badConfidence = makeSpeakerInterval(100, 900);
+    badConfidence.confidence = 2.0;
+    QVERIFY(!badConfidence.isValid(&error));
+
+    SpeakerAnalysis analysis;
+    analysis.available = true;
+    analysis.startMs = 0;
+    analysis.endMs = 1000;
+    analysis.intervals.append(reversed);
+    QVERIFY(!analysis.isValid(&error));
+
+    SpeakerAnalysis out;
+    QVERIFY(!SpeakerAnalysis::readFromJsonObject(QJsonObject(), &out, &error));
+}
+
+void ProjectTest::speakerProcessParseResponse()
+{
+    SpeakerAnalysis out;
+    QString error;
+    QVERIFY(ProcessSpeakerProvider::parseResponse(
+        "{\"available\":true,\"provider\":\"p\",\"startMs\":0,\"endMs\":1000,"
+        "\"intervals\":[{\"startMs\":0,\"endMs\":500,\"speakerId\":\"a\","
+        "\"confidence\":0.9}]}",
+        &out, &error));
+    QCOMPARE(out.intervals.size(), 1);
+    QVERIFY(!ProcessSpeakerProvider::parseResponse("not json", &out, &error));
+    QVERIFY(!ProcessSpeakerProvider::parseResponse(
+        "{\"available\":true,\"startMs\":0,\"endMs\":0}", &out, &error));
+    QVERIFY(!ProcessSpeakerProvider::parseResponse(
+        "{\"available\":true,\"provider\":\"p\",\"startMs\":0,\"endMs\":1000,"
+        "\"intervals\":[{\"startMs\":500,\"endMs\":100,\"speakerId\":\"a\","
+        "\"confidence\":0.9}]}",
+        &out, &error));
+}
+
+void ProjectTest::speakerProcessRunsHelper()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString media = directory.filePath(QStringLiteral("media.bin"));
+    QFile mediaFile(media);
+    QVERIFY(mediaFile.open(QIODevice::WriteOnly));
+    mediaFile.write("x");
+    mediaFile.close();
+
+    const QString script = directory.filePath(QStringLiteral("helper.sh"));
+    QFile file(script);
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
+    file.write("#!/bin/sh\n"
+               "cat > \"$2\" <<'EOF'\n"
+               "{\"available\":true,\"provider\":\"shell\",\"startMs\":0,"
+               "\"endMs\":1000,\"intervals\":[{\"startMs\":0,\"endMs\":500,"
+               "\"speakerId\":\"spk1\",\"confidence\":0.9}]}\n"
+               "EOF\n");
+    file.close();
+    QVERIFY(QFile::setPermissions(
+        script, QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                    | QFileDevice::ExeOwner));
+
+    ProcessSpeakerProvider provider(QStringLiteral("/bin/sh"), { script });
+    SpeakerAnalysis out;
+    QString error;
+    QVERIFY2(provider.analyze(media, 0, 1000, &out, &error), qPrintable(error));
+    QCOMPARE(out.intervals.size(), 1);
+    QCOMPARE(out.provider, QStringLiteral("shell"));
+}
+
+void ProjectTest::speakerProcessFailsOnMissingExecutable()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString media = directory.filePath(QStringLiteral("media.bin"));
+    QFile mediaFile(media);
+    QVERIFY(mediaFile.open(QIODevice::WriteOnly));
+    mediaFile.write("x");
+    mediaFile.close();
+
+    ProcessSpeakerProvider provider(QStringLiteral("/nonexistent/speaker-xyz"));
+    SpeakerAnalysis out;
+    QString error;
+    QVERIFY(!provider.analyze(media, 0, 1000, &out, &error));
+    QVERIFY(!error.isEmpty());
+}
+
+void ProjectTest::speakerProcessFailsOnBadExit()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString media = directory.filePath(QStringLiteral("media.bin"));
+    QFile mediaFile(media);
+    QVERIFY(mediaFile.open(QIODevice::WriteOnly));
+    mediaFile.write("x");
+    mediaFile.close();
+    const QString script = directory.filePath(QStringLiteral("bad.sh"));
+    QFile file(script);
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
+    file.write("#!/bin/sh\nexit 3\n");
+    file.close();
+    QVERIFY(QFile::setPermissions(
+        script, QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                    | QFileDevice::ExeOwner));
+
+    ProcessSpeakerProvider provider(QStringLiteral("/bin/sh"), { script });
+    SpeakerAnalysis out;
+    QString error;
+    QVERIFY(!provider.analyze(media, 0, 1000, &out, &error));
+    QVERIFY(error.contains(QStringLiteral("failed")));
+}
+
+void ProjectTest::speakerAssociatorExplicitBinding()
+{
+    SpeakerTargetAssociator associator;
+    associator.bind(QStringLiteral("spk1"), QStringLiteral("t2"));
+    const QList<TargetTrack> tracks = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 0.0, 0.0) }),
+        makeIdTrack(QStringLiteral("t2"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 50.0, 0.0) })
+    };
+    QString target;
+    QString method;
+    bool ambiguous = false;
+    QString error;
+    QVERIFY(associator.associate(makeSpeakerInterval(0, 500), tracks,
+                                 SpeakerTargetAssociator::Config{}, &target,
+                                 &ambiguous, &method, &error));
+    QCOMPARE(target, QStringLiteral("t2"));
+    QCOMPARE(method, QStringLiteral("explicit"));
+    QVERIFY(!ambiguous);
+}
+
+void ProjectTest::speakerAssociatorExplicitBindingNotVisible()
+{
+    SpeakerTargetAssociator associator;
+    associator.bind(QStringLiteral("spk1"), QStringLiteral("t9"));
+    const QList<TargetTrack> tracks = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 0.0, 0.0) })
+    };
+    QString target;
+    QString method;
+    bool ambiguous = false;
+    QString error;
+    QVERIFY(associator.associate(makeSpeakerInterval(0, 500), tracks,
+                                 SpeakerTargetAssociator::Config{}, &target,
+                                 &ambiguous, &method, &error));
+    QVERIFY(target.isEmpty());
+    QVERIFY(!ambiguous);
+}
+
+void ProjectTest::speakerAssociatorSingleVisible()
+{
+    SpeakerTargetAssociator associator;
+    const QList<TargetTrack> tracks = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 0.0, 0.0) })
+    };
+    QString target;
+    QString method;
+    bool ambiguous = false;
+    QString error;
+    QVERIFY(associator.associate(makeSpeakerInterval(0, 500), tracks,
+                                 SpeakerTargetAssociator::Config{}, &target,
+                                 &ambiguous, &method, &error));
+    QCOMPARE(target, QStringLiteral("t1"));
+    QCOMPARE(method, QStringLiteral("single-visible"));
+}
+
+void ProjectTest::speakerAssociatorMultipleVisibleIsAmbiguous()
+{
+    SpeakerTargetAssociator associator;
+    const QList<TargetTrack> tracks = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 0.0, 0.0) }),
+        makeIdTrack(QStringLiteral("t2"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 50.0, 0.0) })
+    };
+    QString target;
+    QString method;
+    bool ambiguous = false;
+    QString error;
+    QVERIFY(associator.associate(makeSpeakerInterval(0, 500), tracks,
+                                 SpeakerTargetAssociator::Config{}, &target,
+                                 &ambiguous, &method, &error));
+    QVERIFY(target.isEmpty());
+    QVERIFY(ambiguous);
+}
+
+void ProjectTest::speakerAssociatorSpatialAzimuth()
+{
+    SpeakerTargetAssociator associator;
+    const QList<TargetTrack> tracks = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, -10.0, 0.0) }),
+        makeIdTrack(QStringLiteral("t2"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 40.0, 0.0) })
+    };
+    SpeakerInterval interval = makeSpeakerInterval(0, 500);
+    interval.hasAzimuth = true;
+    interval.azimuthDeg = 35.0;
+    QString target;
+    QString method;
+    bool ambiguous = false;
+    QString error;
+    QVERIFY(associator.associate(interval, tracks,
+                                 SpeakerTargetAssociator::Config{}, &target,
+                                 &ambiguous, &method, &error));
+    QCOMPARE(target, QStringLiteral("t2"));
+    QCOMPARE(method, QStringLiteral("spatial"));
+}
+
+void ProjectTest::speakerTimelineSingleSpeaker()
+{
+    SpeakerTimeline::Config config;
+    const QList<SpeakerSegment> segments = SpeakerTimeline::build(
+        { makeSpeakerInterval(0, 2000) }, config);
+    QCOMPARE(segments.size(), 1);
+    QVERIFY(segments.at(0).verdict == SpeakerVerdict::Active);
+    QCOMPARE(segments.at(0).speakerId, QStringLiteral("spk1"));
+    QCOMPARE(segments.at(0).endMs, qint64(2000));
+}
+
+void ProjectTest::speakerTimelineSpeakerChange()
+{
+    SpeakerTimeline::Config config;
+    const QList<SpeakerSegment> segments = SpeakerTimeline::build(
+        { makeSpeakerInterval(0, 2000, QStringLiteral("A")),
+          makeSpeakerInterval(3000, 5000, QStringLiteral("B")) },
+        config);
+    const QList<SpeakerSegment> active = activeSegments(segments);
+    QCOMPARE(active.size(), 2);
+    QCOMPARE(active.at(0).speakerId, QStringLiteral("A"));
+    QCOMPARE(active.at(1).speakerId, QStringLiteral("B"));
+}
+
+void ProjectTest::speakerTimelineShortPauseIsHeld()
+{
+    SpeakerTimeline::Config config;
+    const QList<SpeakerSegment> segments = SpeakerTimeline::build(
+        { makeSpeakerInterval(0, 2000, QStringLiteral("A")),
+          makeSpeakerInterval(2400, 4000, QStringLiteral("A")) },
+        config);
+    const QList<SpeakerSegment> active = activeSegments(segments);
+    QCOMPARE(active.size(), 1);
+    QCOMPARE(active.at(0).endMs, qint64(4000));
+}
+
+void ProjectTest::speakerTimelineRapidAlternationDoesNotThrash()
+{
+    SpeakerTimeline::Config config;
+    const QList<SpeakerSegment> segments = SpeakerTimeline::build(
+        { makeSpeakerInterval(0, 2000, QStringLiteral("A")),
+          makeSpeakerInterval(2100, 2500, QStringLiteral("B")),
+          makeSpeakerInterval(2600, 4000, QStringLiteral("A")) },
+        config);
+    QCOMPARE(activeSegmentCount(segments), 1);
+    QCOMPARE(segments.at(0).speakerId, QStringLiteral("A"));
+}
+
+void ProjectTest::speakerTimelineOverlapIsPreserved()
+{
+    SpeakerTimeline::Config config;
+    const QList<SpeakerSegment> segments = SpeakerTimeline::build(
+        { makeSpeakerInterval(0, 3000, QStringLiteral("A")),
+          makeSpeakerInterval(500, 3500, QStringLiteral("B"), 0.9, true) },
+        config);
+    bool sawOverlap = false;
+    for (const SpeakerSegment &segment : segments) {
+        if (segment.verdict == SpeakerVerdict::Overlap) {
+            sawOverlap = true;
+        }
+    }
+    QVERIFY(sawOverlap);
+}
+
+void ProjectTest::speakerTimelineFiltersShortAndLowConfidence()
+{
+    SpeakerTimeline::Config config;
+    QVERIFY(SpeakerTimeline::build({ makeSpeakerInterval(0, 200) }, config).isEmpty());
+    QVERIFY(SpeakerTimeline::build(
+                { makeSpeakerInterval(0, 2000, QStringLiteral("spk1"), 0.3) },
+                config)
+                .isEmpty());
+    QVERIFY(SpeakerTimeline::build({}, config).isEmpty());
+}
+
+void ProjectTest::speakerAnalyzerAssociatesSingleSpeaker()
+{
+    ScriptedSpeakerProvider provider;
+    provider.setIntervals({ makeSpeakerInterval(0, 2000) });
+    const QList<TargetTrack> tracks = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, -20.0, 0.0),
+                      makeTargetObservation(2000, -20.0, 0.0) })
+    };
+    SpeakerEvidenceAnalyzer analyzer;
+    const auto result = analyzer.analyze(
+        QStringLiteral("dummy"), 0, 2000, tracks, &provider,
+        SpeakerTargetAssociator());
+    QVERIFY(result.analysis.available);
+    QCOMPARE(result.evidence.size(), 1);
+    QCOMPARE(result.evidence.at(0).targetId, QStringLiteral("t1"));
+    QVERIFY(result.evidence.at(0).verdict == SpeakerVerdict::Active);
+    // The association is also recorded on the timeline segment so the planner
+    // can consume it.
+    QCOMPARE(result.segments.size(), 1);
+    QCOMPARE(result.segments.at(0).targetId, QStringLiteral("t1"));
+}
+
+void ProjectTest::speakerAnalyzerExplicitBindingWithTwoVisible()
+{
+    ScriptedSpeakerProvider provider;
+    provider.setIntervals({ makeSpeakerInterval(0, 2000) });
+    const QList<TargetTrack> tracks = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, -20.0, 0.0) }),
+        makeIdTrack(QStringLiteral("t2"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 40.0, 0.0) })
+    };
+    SpeakerTargetAssociator associator;
+    associator.bind(QStringLiteral("spk1"), QStringLiteral("t2"));
+    SpeakerEvidenceAnalyzer analyzer;
+    const auto result = analyzer.analyze(
+        QStringLiteral("dummy"), 0, 2000, tracks, &provider, associator);
+    QCOMPARE(result.evidence.size(), 1);
+    QCOMPARE(result.evidence.at(0).targetId, QStringLiteral("t2"));
+}
+
+void ProjectTest::speakerAnalyzerWithoutProviderIsUnavailable()
+{
+    const QList<TargetTrack> tracks = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 0.0, 0.0) })
+    };
+    SpeakerEvidenceAnalyzer analyzer;
+    const auto result = analyzer.analyze(
+        QStringLiteral("dummy"), 0, 1000, tracks, nullptr,
+        SpeakerTargetAssociator());
+    QVERIFY(!result.analysis.available);
+    QVERIFY(result.evidence.isEmpty());
+    QVERIFY(!result.notes.isEmpty());
+}
+
+void ProjectTest::speakerAnalyzerProviderFailureIsFailSafe()
+{
+    ScriptedSpeakerProvider provider;
+    provider.setFail(true);
+    const QList<TargetTrack> tracks = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 0.0, 0.0) })
+    };
+    SpeakerEvidenceAnalyzer analyzer;
+    const auto result = analyzer.analyze(
+        QStringLiteral("dummy"), 0, 1000, tracks, &provider,
+        SpeakerTargetAssociator());
+    QVERIFY(!result.analysis.available);
+    QVERIFY(result.evidence.isEmpty());
+    QVERIFY(result.notes.join(QStringLiteral("\n"))
+                .contains(QStringLiteral("failed")));
+}
+
+void ProjectTest::speakerAnalyzerUnassociatedSpeechDoesNotInventTarget()
+{
+    ScriptedSpeakerProvider provider;
+    provider.setIntervals({ makeSpeakerInterval(0, 2000) });
+    const QList<TargetTrack> tracks = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, -20.0, 0.0) }),
+        makeIdTrack(QStringLiteral("t2"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 40.0, 0.0) })
+    };
+    SpeakerEvidenceAnalyzer analyzer;
+    const auto result = analyzer.analyze(
+        QStringLiteral("dummy"), 0, 2000, tracks, &provider,
+        SpeakerTargetAssociator());
+    QCOMPARE(result.evidence.size(), 1);
+    QVERIFY(result.evidence.at(0).targetId.isEmpty());
+    QVERIFY(result.evidence.at(0).verdict == SpeakerVerdict::Ambiguous);
+}
+
+void ProjectTest::speakerAnalyzerTrackingLossKeepsNoTarget()
+{
+    ScriptedSpeakerProvider provider;
+    provider.setIntervals({ makeSpeakerInterval(0, 2000) });
+    TargetTrack bound = makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                                    { makeTargetObservation(0, -20.0, 0.0) });
+    bound.setActive(false);
+    const QList<TargetTrack> tracks = {
+        bound,
+        makeIdTrack(QStringLiteral("t2"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 40.0, 0.0) })
+    };
+    SpeakerTargetAssociator associator;
+    associator.bind(QStringLiteral("spk1"), QStringLiteral("t1"));
+    SpeakerEvidenceAnalyzer analyzer;
+    const auto result = analyzer.analyze(
+        QStringLiteral("dummy"), 0, 2000, tracks, &provider, associator);
+    QCOMPARE(result.evidence.size(), 1);
+    QVERIFY(result.evidence.at(0).targetId.isEmpty());
+    QVERIFY(result.evidence.at(0).verdict == SpeakerVerdict::Unassociated);
+}
+
+void ProjectTest::speakerAnalyzerOverlapIsPreserved()
+{
+    ScriptedSpeakerProvider provider;
+    provider.setIntervals({ makeSpeakerInterval(0, 3000, QStringLiteral("A")),
+                            makeSpeakerInterval(500, 3500, QStringLiteral("B"),
+                                                0.9, true) });
+    const QList<TargetTrack> tracks = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 0.0, 0.0) })
+    };
+    SpeakerEvidenceAnalyzer analyzer;
+    const auto result = analyzer.analyze(
+        QStringLiteral("dummy"), 0, 3500, tracks, &provider,
+        SpeakerTargetAssociator());
+    bool sawOverlap = false;
+    for (const SpeakerEvidence &evidence : result.evidence) {
+        if (evidence.verdict == SpeakerVerdict::Overlap) {
+            sawOverlap = true;
+        }
+    }
+    QVERIFY(sawOverlap);
+}
+
+void ProjectTest::speakerAnalyzerIsDeterministic()
+{
+    ScriptedSpeakerProvider provider;
+    provider.setIntervals({ makeSpeakerInterval(0, 2000, QStringLiteral("A")),
+                            makeSpeakerInterval(2200, 4000, QStringLiteral("B"),
+                                                0.9) });
+    const QList<TargetTrack> tracks = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, -20.0, 0.0),
+                      makeTargetObservation(4000, -20.0, 0.0) }),
+        makeIdTrack(QStringLiteral("t2"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 40.0, 0.0),
+                      makeTargetObservation(4000, 40.0, 0.0) })
+    };
+    SpeakerTargetAssociator associator;
+    associator.bind(QStringLiteral("A"), QStringLiteral("t1"));
+    associator.bind(QStringLiteral("B"), QStringLiteral("t2"));
+    SpeakerEvidenceAnalyzer analyzer;
+    const auto first = analyzer.analyze(QStringLiteral("dummy"), 0, 4000, tracks,
+                                        &provider, associator);
+    const auto second = analyzer.analyze(QStringLiteral("dummy"), 0, 4000, tracks,
+                                         &provider, associator);
+    QCOMPARE(first.segments.size(), second.segments.size());
+    QCOMPARE(first.evidence.size(), second.evidence.size());
+    for (int i = 0; i < first.evidence.size(); ++i) {
+        QCOMPARE(first.evidence.at(i).targetId, second.evidence.at(i).targetId);
+        QVERIFY(first.evidence.at(i).verdict == second.evidence.at(i).verdict);
+    }
+
+    // Reversed interval input produces the same timeline (deterministic).
+    const auto forward = SpeakerTimeline::build(
+        { makeSpeakerInterval(0, 2000, QStringLiteral("A")),
+          makeSpeakerInterval(3000, 5000, QStringLiteral("B")) },
+        SpeakerTimeline::Config{});
+    const auto reversed = SpeakerTimeline::build(
+        { makeSpeakerInterval(3000, 5000, QStringLiteral("B")),
+          makeSpeakerInterval(0, 2000, QStringLiteral("A")) },
+        SpeakerTimeline::Config{});
+    QCOMPARE(forward.size(), reversed.size());
+    for (int i = 0; i < forward.size(); ++i) {
+        QCOMPARE(forward.at(i).speakerId, reversed.at(i).speakerId);
+    }
+}
+
+void ProjectTest::speakerAnalyzerEvidenceDoesNotChangeIdentity()
+{
+    TargetIdentityRegistry registry;
+    QString error;
+    const QList<TargetTrack> tracks = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, -20.0, 0.0) }),
+        makeIdTrack(QStringLiteral("t2"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 40.0, 0.0) })
+    };
+    QVERIFY(registry.bindToTrack(QStringLiteral("me"), QStringLiteral("t1"), 0,
+                                 tracks, &error));
+    registry.annotateSpeaker(QStringLiteral("me"), QStringLiteral("spk1"), 0.9,
+                             SpeakerVerdict::Active,
+                             QStringLiteral("speaker suggests t2"));
+    QVERIFY(registry.isResolved(QStringLiteral("me")));
+    QCOMPARE(registry.targetId(QStringLiteral("me")), QStringLiteral("t1"));
+    const IdentityBinding *binding = registry.binding(QStringLiteral("me"));
+    QVERIFY(binding != nullptr);
+    QCOMPARE(binding->speakerId, QStringLiteral("spk1"));
+    QCOMPARE(binding->speakerVerdict, QStringLiteral("active"));
+}
+
+void ProjectTest::speakerPlannerFollowsSingleSpeaker()
+{
+    const QList<SpeakerSegment> segments = {
+        SpeakerSegment{ 0, 2000, QStringLiteral("spk1"), QStringLiteral("t1"),
+                        SpeakerVerdict::Active, 0.9 }
+    };
+    const QList<TargetTrack> tracks = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, -20.0, 0.0),
+                      makeTargetObservation(2000, -20.0, 0.0) })
+    };
+    ReframePlan plan;
+    QString error;
+    QVERIFY2(SpeakerReframePlanner::plan(
+                 segments, tracks, ReframePlan::TimeRange{ 0, 2000 },
+                 ReframePlan::OutputSpec{ 160, 90, 2.0 }, {}, &plan, &error),
+             qPrintable(error));
+    QCOMPARE(plan.keyframes().size(), 1);
+    QVERIFY(qAbs(plan.keyframes().at(0).yawDeg + 20.0) < 1e-9);
+}
+
+void ProjectTest::speakerPlannerCutsOnSpeakerChange()
+{
+    const QList<SpeakerSegment> segments = {
+        SpeakerSegment{ 0, 1000, QStringLiteral("A"), QStringLiteral("t1"),
+                        SpeakerVerdict::Active, 0.9 },
+        SpeakerSegment{ 1000, 2000, QStringLiteral("B"), QStringLiteral("t2"),
+                        SpeakerVerdict::Active, 0.9 }
+    };
+    const QList<TargetTrack> tracks = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, -20.0, 0.0),
+                      makeTargetObservation(1000, -20.0, 0.0) }),
+        makeIdTrack(QStringLiteral("t2"), QStringLiteral("person"),
+                    { makeTargetObservation(1000, 40.0, 0.0),
+                      makeTargetObservation(2000, 40.0, 0.0) })
+    };
+    ReframePlan plan;
+    QString error;
+    QVERIFY2(SpeakerReframePlanner::plan(
+                 segments, tracks, ReframePlan::TimeRange{ 0, 2000 },
+                 ReframePlan::OutputSpec{ 160, 90, 2.0 }, {}, &plan, &error),
+             qPrintable(error));
+    QCOMPARE(plan.keyframes().size(), 3);
+    const CameraState before = CameraPath::stateAt(plan, 999);
+    const CameraState atSwitch = CameraPath::stateAt(plan, 1000);
+    QVERIFY(qAbs(before.yawDeg + 20.0) < 1e-6);
+    QVERIFY(qAbs(atSwitch.yawDeg - 40.0) < 1e-6);
+}
+
+void ProjectTest::speakerPlannerRejectsNoActiveSegment()
+{
+    const QList<SpeakerSegment> segments = {
+        SpeakerSegment{ 0, 1000, QString(), QString(),
+                        SpeakerVerdict::Silence, 0.0 }
+    };
+    ReframePlan plan;
+    QString error;
+    QVERIFY(!SpeakerReframePlanner::plan(
+        segments, {}, ReframePlan::TimeRange{ 0, 1000 },
+        ReframePlan::OutputSpec{ 160, 90, 1.0 }, {}, &plan, &error));
+    QVERIFY(!error.isEmpty());
+}
+
+void ProjectTest::speakerRegistryAnnotateDoesNotChangeResolution()
+{
+    const QList<TargetTrack> tracks = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, -20.0, 0.0) })
+    };
+    TargetIdentityRegistry registry;
+    QString error;
+    QVERIFY(registry.bindToTrack(QStringLiteral("me"), QStringLiteral("t1"), 0,
+                                 tracks, &error));
+    registry.annotateSpeaker(QStringLiteral("me"), QStringLiteral("spk1"), 0.75,
+                             SpeakerVerdict::Active,
+                             QStringLiteral("speaker evidence"));
+    QVERIFY(registry.isResolved(QStringLiteral("me")));
+    QCOMPARE(registry.targetId(QStringLiteral("me")), QStringLiteral("t1"));
+
+    TargetIdentityRegistry restored;
+    QVERIFY2(restored.readFromJsonObject(registry.toJsonObject(), &error),
+             qPrintable(error));
+    QCOMPARE(restored.targetId(QStringLiteral("me")), QStringLiteral("t1"));
+    QCOMPARE(restored.binding(QStringLiteral("me"))->speakerId,
+             QStringLiteral("spk1"));
 }
 
 QTEST_MAIN(ProjectTest)

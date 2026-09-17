@@ -721,3 +721,33 @@ Decision 021 made identity geometric and creator-selected, but it cannot re-iden
 - Appearance is not biometric certainty; "me" remains the creator-selected identity, and appearance only supports bounded re-acquisition or vetoes an unjustified geometric transfer.
 - No detector, geometry, planner, or renderer changes; Decisions 017-021 preserved.
 
+
+# Decision 023 — Optional Audio/Speaker Evidence: Replaceable Provider, Evidence-Only Identity Integration
+
+**Status:** Accepted (2026-09-17, 360 Reframing Objective 6)
+
+## Context
+
+Identity is geometric with optional appearance re-identification (Decisions 021/022). The product capability "follow whoever is speaking" needs audio evidence about which visible tracked person is speaking. Audio must not become the authoritative identity source and must not silently override the creator's explicit selection.
+
+## Decisions
+
+- **Optional audio seam:** `SpeakerEvidenceProvider` + `ProcessSpeakerProvider` (external file/JSON helper). The C++ core links no audio or ML runtime.
+- **Structured evidence:** `SpeakerInterval`, `SpeakerAnalysis`, `SpeakerEvidence`, `SpeakerSegment`, and an explicit `SpeakerVerdict` (Unavailable / Active / Ambiguous / Overlap / Silence / Unassociated). JSON-serializable; provider-local `speakerId`; optional direction-of-arrival.
+- **Deterministic association:** `SpeakerTargetAssociator` maps a speakerId to an existing target track in this order: explicit creator/structured binding > optional spatial (direction of arrival) nearest within a gate > single-visible-person > unassociated/ambiguous. It never creates a target and reports ambiguity rather than guessing.
+- **Temporal hysteresis:** `SpeakerTimeline` merges same-speaker intervals across short pauses (`holdMs`), requires a different speaker to persist `switchConfirmMs` before taking over, ignores speech shorter than `minSpeechMs`, and represents simultaneous speech as an Overlap segment. This prevents camera thrashing.
+- **Evidence-only identity integration:** audio never rebinds identity. `TargetIdentityRegistry::annotateSpeaker` records `speakerId`, confidence, and verdict on the binding without changing resolution. Audio drives deterministic **selection** for "follow the speaker" through `SpeakerReframePlanner`, not identity mutation.
+- **Provider selected for real validation:** Silero VAD (`silero_vad.onnx`), **MIT** code and weights, local CPU via ONNX Runtime (MIT) with FFmpeg audio decode. VAD provides speech activity, not speaker identity; association uses an explicit creator binding (or the single-visible-person/DoA rules).
+- **Rejected/deferred:** pyannote diarization (gated models plus a PyTorch stack), SpeechBrain/torchreid speaker embeddings (heavy runtime, VoxCeleb weight provenance), cloud speaker APIs (no cloud dependence), and audio-visual active-speaker models (research-grade or unclear weight licensing).
+
+## Rationale for audio's position in the precedence hierarchy
+
+Audio is placed below appearance and is deliberately **not allowed to trigger an identity rebind**. The objective explicitly warns against identity swaps driven by a model's numerical confidence; audio provides evidence and a selection signal, while geometry/appearance continue to own re-identification. This is a conservative choice and is flagged for checkpoint review.
+
+## Consequences
+
+- 31 new model-free tests; full model-free suite: 295 passed / 0 failed / 1 skipped.
+- Real footage (audio+video proxy; original untouched): Silero VAD detects speech in the real 360 clip; with a creator speaker→target binding, the evidence associates to the visible presenter, and `SpeakerReframePlanner` produces a `ReframePlan` consumed by the existing deterministic renderer.
+- "Follow whoever is speaking" now works through the structured selection layer. Automatic audio-visual speaker attribution without an explicit binding (diarization / active-speaker models) remains future work.
+- No changes to the detector, geometry, identity resolution, or renderer; Decisions 017-022 preserved.
+

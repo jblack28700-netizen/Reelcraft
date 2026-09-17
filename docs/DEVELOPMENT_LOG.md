@@ -1209,6 +1209,50 @@ Identity was geometric only (Decision 021), so a person could not be re-acquired
 
 - Decision 022 recorded. Decisions 017-021 preserved unchanged.
 
+---
+
+# 2026-09-17 — 360 Reframing Objective 6: Optional Audio/Speaker Evidence
+
+### Context
+
+"Follow whoever is speaking" requires audio evidence about which visible tracked person is speaking. Audio must remain evidence, not the authoritative identity source, and must never override an explicit creator selection or swap an identity on model confidence alone.
+
+### Research and licensing
+
+- Selected **Silero VAD** (`silero_vad.onnx`): **MIT** code and weights, local CPU via ONNX Runtime (MIT), FFmpeg audio decode. Verified on the real clip and a positive control (Silero's own MIT test audio).
+- Rejected/deferred: pyannote diarization (gated models plus PyTorch), SpeechBrain/torchreid speaker embeddings (heavy; VoxCeleb provenance), cloud speaker APIs (no cloud dependence), audio-visual active-speaker models (research-grade or unclear weight licensing).
+
+### Work completed
+
+- `app/target/SpeakerTypes.{h,cpp}`: `SpeakerInterval`, `SpeakerAnalysis`, `SpeakerEvidence`, `SpeakerSegment`, explicit `SpeakerVerdict`; JSON round-trip; strict parsing (an explicit `available` flag is required, so malformed responses fail rather than masquerading as "unavailable").
+- `app/target/SpeakerEvidenceProvider.h` + `ProcessSpeakerProvider.{h,cpp}`: external file/JSON helper; fail-safe on missing executable/media, non-zero exit, timeout, malformed JSON, or invalid intervals. No audio/ML runtime linked.
+- `app/target/SpeakerTargetAssociator.{h,cpp}`: deterministic association (explicit binding > spatial DoA > single visible > ambiguous/unassociated); never invents a target.
+- `app/target/SpeakerTimeline.{h,cpp}`: documented hysteresis, plus a coalescing pass so held speakers become one segment.
+- `app/target/SpeakerEvidenceAnalyzer.{h,cpp}` and `SpeakerReframePlanner.{h,cpp}`.
+- `TargetIdentityRegistry::annotateSpeaker` (evidence only; resolution unchanged; JSON round-trip).
+- Optional helper `tools/speaker_helper/` (Silero VAD) and README with the licensing record.
+- 31 model-free tests.
+
+### Failure recovery
+
+- The real integration test initially ran against the video-only proxy from Objective 5 (created with `-an`), so the audio helper correctly reported "no decodable audio stream". Fixed by creating an audio+video proxy of the same window; the original media is untouched.
+- A malformed `{}` speaker response was accepted as "unavailable"; parsing was tightened to require an explicit `available` boolean.
+- Rapid-alternation timeline output split a held speaker into two adjacent Active segments; added a deterministic coalescing pass.
+
+### Verification
+
+- Model-free suite: 295 passed, 0 failed, 1 skipped (~46 s). New tests cover the evidence model/JSON, process provider parse/execute/failure, association (explicit/not-visible/single-visible/ambiguous/spatial), timeline (single, change, held pause, rapid alternation, overlap, filters), analyzer (association, explicit binding, no provider, provider failure, unassociated speech, tracking loss, overlap, determinism, evidence-does-not-change-identity), registry annotation, and the speaker planner (single, cut on change, no active segment).
+- Real footage: Silero VAD detects speech in the real 360 clip; with a creator speaker->target binding the evidence associates to the visible presenter; `SpeakerReframePlanner` produces a `ReframePlan` rendered by the existing renderer.
+
+### Boundary notes / not implemented
+
+- Audio is evidence and a selection signal only; it never rebinds identity.
+- Automatic audio-visual attribution without an explicit binding, GPU optimization, and UI integration remain future work.
+
+### Decisions
+
+- Decision 023 recorded. Decisions 017-022 preserved unchanged.
+
 
 
 

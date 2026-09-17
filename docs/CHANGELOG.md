@@ -582,4 +582,14 @@ Date: 2026-09-17
 - 24 new model-free tests; full suite 264 passed, 0 failed, 1 skipped. Decision 022 recorded; Decisions 017-021 preserved.
 - Not implemented: active-speaker/audio-visual association, GPU optimization, UI integration, biometric face recognition.
 
+## v0.2.43 — Optional Audio/Speaker Evidence (Active Speaker)
+
+Date: 2026-09-17
+
+- Added an optional, replaceable audio/speaker layer: `SpeakerEvidenceProvider` + `ProcessSpeakerProvider` (external helper, no audio/ML runtime linked), structured `SpeakerTypes` (intervals, analysis, per-target evidence, timeline segments, explicit verdicts), `SpeakerTargetAssociator` (deterministic speaker->target mapping), `SpeakerTimeline` (documented hysteresis), `SpeakerEvidenceAnalyzer`, and `SpeakerReframePlanner` (speaker-follow `ReframePlan` with cuts).
+- Audio is evidence only: `TargetIdentityRegistry::annotateSpeaker` records speaker evidence without changing identity resolution; explicit creator selection remains authoritative. Identity precedence is unchanged (explicit > continuity > geometry > appearance > audio > unresolved).
+- Selected Silero VAD (MIT code and weights) via ONNX Runtime for real speech activity; rejected/deferred pyannote, SpeechBrain/torchreid, cloud APIs, and audio-visual active-speaker models.
+- 31 new model-free tests; full suite 295 passed, 0 failed, 1 skipped. Real speech detection and speaker-associated rendering verified on real 360 footage (audio+video proxy; original untouched). Decision 023 recorded; Decisions 017-022 preserved.
+- "Follow whoever is speaking" works through the structured selection layer; automatic audio-visual attribution without an explicit binding, GPU optimization, and UI integration remain future work.
+
 

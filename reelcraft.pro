@@ -38,6 +38,12 @@ SOURCES += \
     app/target/AppearanceTypes.cpp \
     app/target/IdentityReidentifier.cpp \
     app/target/ProcessAppearanceProvider.cpp \
+    app/target/ProcessSpeakerProvider.cpp \
+    app/target/SpeakerEvidenceAnalyzer.cpp \
+    app/target/SpeakerReframePlanner.cpp \
+    app/target/SpeakerTargetAssociator.cpp \
+    app/target/SpeakerTimeline.cpp \
+    app/target/SpeakerTypes.cpp \
     app/target/TargetCropExtractor.cpp \
     app/target/TargetIdentity.cpp \
     app/target/TargetResolver.cpp \
@@ -84,6 +90,13 @@ HEADERS += \
     app/target/AppearanceTypes.h \
     app/target/IdentityReidentifier.h \
     app/target/ProcessAppearanceProvider.h \
+    app/target/SpeakerEvidenceAnalyzer.h \
+    app/target/SpeakerEvidenceProvider.h \
+    app/target/SpeakerReframePlanner.h \
+    app/target/SpeakerTargetAssociator.h \
+    app/target/SpeakerTimeline.h \
+    app/target/SpeakerTypes.h \
+    app/target/ProcessSpeakerProvider.h \
     app/target/TargetCropExtractor.h \
     app/target/TargetIdentity.h \
     app/target/TargetResolver.h \

@@ -232,8 +232,30 @@ Explicit creator selection / active binding > valid tracker continuity > unique 
 ### Not implemented
 Active-speaker/audio-visual association; GPU/CUDA optimization; UI integration; face recognition/biometric identity (explicitly out of scope).
 
-## Next Objective (360 Reframing Objective 6) — NOT STARTED
+## 360 Reframing Objective 6 — Optional Audio/Speaker Evidence — Complete
 
-Active-speaker / audio-visual association: use audio evidence to identify the speaking person and feed it into the existing identity/selection layer, while keeping audio models optional and the unit suite model-free. Requires its own scoped objective.
+Status: **Complete — implemented and verified (2026-09-17).**
+
+### Objective
+Add an optional, replaceable audio/speaker evidence layer that answers "which visible tracked person is speaking" and feeds the existing deterministic selection/plan/render pipeline, without making audio the authoritative identity source.
+
+### Scope (implemented)
+- `app/target/SpeakerTypes.{h,cpp}`: structured speech intervals, analysis, per-target evidence, timeline segments, and verdicts.
+- `app/target/SpeakerEvidenceProvider.h` + `ProcessSpeakerProvider.{h,cpp}`: external provider seam (fail-safe).
+- `app/target/SpeakerTargetAssociator.{h,cpp}`: deterministic speakerId -> target association (explicit > spatial DoA > single visible > ambiguous/unassociated).
+- `app/target/SpeakerTimeline.{h,cpp}`: documented temporal hysteresis (pauses, switch confirmation, overlap).
+- `app/target/SpeakerEvidenceAnalyzer.{h,cpp}` and `SpeakerReframePlanner.{h,cpp}`.
+- `TargetIdentityRegistry::annotateSpeaker`: evidence only; never changes resolution.
+- Optional helper `tools/speaker_helper/` with Silero VAD (MIT).
+
+### Precedence
+Identity precedence is unchanged: explicit creator selection > tracker continuity > unique geometric continuation > appearance > audio evidence > unresolved. Audio never rebinds identity and never overrides an explicit selection; it drives deterministic *selection* for "follow the speaker".
+
+### Not implemented
+Automatic audio-visual speaker attribution without an explicit binding (diarization / active-speaker models); GPU/CUDA optimization; UI integration.
+
+## Next Objective (360 Reframing Objective 7) — NOT STARTED
+
+Automatic audio-visual speaker attribution: use diarization or an audio-visual active-speaker model to attribute speech to visible tracks without a creator binding, behind the existing replaceable provider seam, keeping models optional and the unit suite model-free. Requires its own scoped objective.
 
 

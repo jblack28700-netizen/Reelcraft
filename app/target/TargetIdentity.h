@@ -6,6 +6,7 @@
 #include <QStringList>
 
 #include "target/AppearanceTypes.h"
+#include "target/SpeakerTypes.h"
 #include "target/TargetTypes.h"
 
 // 360 Reframing Objective 4 — structured creator-target identity.
@@ -58,6 +59,11 @@ struct IdentityBinding
     // Targets that appearance evidence has vetoed for this identity; geometric
     // re-binding must not silently re-accept them.
     QStringList rejectedTargetIds;
+    // Audio/speaker evidence annotation (optional; -1 = no evidence). This is
+    // recorded evidence only: it never changes resolution.
+    QString speakerId;
+    double speakerConfidence = -1.0;
+    QString speakerVerdict;
 
     QJsonObject toJsonObject() const;
     static bool readFromJsonObject(const QJsonObject &object, IdentityBinding *out,
@@ -140,6 +146,14 @@ public:
     // the identity unresolved. Geometric re-binding will not re-accept it.
     void rejectTarget(const QString &identity, const QString &targetId,
                       const QString &reason);
+
+    // --- audio/speaker evidence (Objective 6) ------------------------------
+    // Records speaker evidence on the binding WITHOUT changing resolution.
+    // Audio is evidence, not authority: it never rebinds an identity and never
+    // overrides an explicit creator selection.
+    void annotateSpeaker(const QString &identity, const QString &speakerId,
+                         double confidence, SpeakerVerdict verdict,
+                         const QString &detail);
 
     QJsonObject toJsonObject() const;
     bool readFromJsonObject(const QJsonObject &object, QString *error = nullptr);

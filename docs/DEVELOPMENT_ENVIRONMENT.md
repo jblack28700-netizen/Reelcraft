@@ -236,5 +236,7 @@ The real target-detection and appearance helpers are optional and external; the 
   - `reid_0277.onnx` — OpenVINO OMZ `person-reidentification-retail-0277` (Apache-2.0), 256-d appearance embedding.
 - **Environment variables:** `REELCRAFT_FFMPEG`; detector: `REELCRAFT_TARGET_DETECTOR_PY`, `REELCRAFT_TARGET_DETECTOR_SCRIPT`, `REELCRAFT_TARGET_YOLOX_MODEL`, `REELCRAFT_TARGET_CLIP`, `REELCRAFT_TARGET_OUTPUT`; appearance: `REELCRAFT_REID_PY`, `REELCRAFT_REID_SCRIPT`, `REELCRAFT_REID_MODEL`.
 - **GPU:** inference is CPU-only in this environment; the helpers can select CUDA/other backends later (RunPod) without changing the C++ core.
-- Install examples and licensing records live in `tools/detector_helper/README.md` and `tools/appearance_helper/README.md`; the technology evaluation is in `docs/TARGET_RESOLUTION_TECHNOLOGY.md`.
+- **Speaker evidence helper** (`tools/speaker_helper/`): Python 3 + ONNX Runtime; model `silero_vad.onnx` (Silero VAD, **MIT** code and weights).
+- Install examples and licensing records live in `tools/detector_helper/README.md`, `tools/appearance_helper/README.md`, and `tools/speaker_helper/README.md`; the technology evaluation is in `docs/TARGET_RESOLUTION_TECHNOLOGY.md`.
+- Speaker helper environment variables: `REELCRAFT_SPEAKER_PY`, `REELCRAFT_SPEAKER_SCRIPT`, `REELCRAFT_SILERO_MODEL`, and (for integration output) `REELCRAFT_SPEAKER_OUTPUT`.
 

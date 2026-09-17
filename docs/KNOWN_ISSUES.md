@@ -312,6 +312,30 @@ Keep the appearance provider replaceable; add active-speaker/audio-visual associ
 
 ---
 
+# Issue — Audio provides evidence, not speaker identity (2026-09-17)
+
+### Status
+
+Open — intentional boundary; not a defect.
+
+### Description
+
+The audio layer uses Silero VAD (voice activity detection), which reports *when* speech occurs, not *who* is speaking. A provider-local `speakerId` ("spk1" for VAD-only) is associated with a visible track by an explicit creator binding, an optional provider-supplied direction of arrival, or the single-visible-person rule. With several visible people and no explicit binding, the result is correctly reported as ambiguous/unassociated rather than guessed.
+
+Audio never changes identity resolution: `TargetIdentityRegistry::annotateSpeaker` records evidence only, and identity precedence remains explicit selection > tracker continuity > geometry > appearance > audio > unresolved.
+
+Weight licensing was checked: Silero VAD is MIT (code and the ONNX weights). pyannote diarization models are gated and the runtime is heavy; SpeechBrain/torchreid speaker embeddings carry VoxCeleb weight provenance; cloud APIs and audio-visual active-speaker models were deferred.
+
+### Impact
+
+"Follow whoever is speaking" works when the creator identifies the speaker once (or when only one person is visible). Fully automatic attribution among multiple people requires a diarization or audio-visual active-speaker model and remains unresolved otherwise.
+
+### Planned Resolution
+
+Add an optional diarization/audio-visual provider behind the existing `SpeakerEvidenceProvider` seam (Objective 7), keeping models optional and the unit suite model-free.
+
+---
+
 # Issue Management Rules
 
 For each future issue:

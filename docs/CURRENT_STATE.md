@@ -2,7 +2,7 @@
 
 ## Current Version
 
-0.2.42
+0.2.43
 
 ## Current Branch
 
@@ -10,7 +10,7 @@ main
 
 ## Current Stage
 
-Phase 4 — 360 Reframing Engine (deterministic vertical slice), Target/Subject Resolution, real detector integration, structured target identity/selection, and optional appearance-based re-identification implemented and verified. Phase 3 Media Engine remains open; its player-lifecycle objective is intentionally superseded for now by the human-approved 360 priority.
+Phase 4 — 360 Reframing Engine (deterministic vertical slice), Target/Subject Resolution, real detector integration, structured target identity/selection, optional appearance-based re-identification, and optional audio/speaker evidence implemented and verified. Phase 3 Media Engine remains open; its player-lifecycle objective is intentionally superseded for now by the human-approved 360 priority.
 
 ## Project Status
 
@@ -81,7 +81,7 @@ Status: Partially implemented — deterministic reframing vertical slice complet
 
 Status: Implemented and continuously verified.
 
-A Qt Test suite covers project state, viewer/media, the media-source seam and frame pump, player/timing, the 360 reframing engine (plan validation/round-trip, camera interpolation, rendering determinism, intent parsing, plan building, and a real FFmpeg end-to-end render), and target resolution (equirect/view geometry, seam and pitch boundaries, view coverage, deterministic tracking, resolver behavior, the subprocess detector protocol, the track planner, and a model-free detection -> plan -> render path). Current result: 264 passed, 0 failed, 1 skipped (~45 s). The single skip is the real-detector integration test, which runs only when a detector helper, model, and clip are configured; the normal suite stays model-free.
+A Qt Test suite covers project state, viewer/media, the media-source seam and frame pump, player/timing, the 360 reframing engine (plan validation/round-trip, camera interpolation, rendering determinism, intent parsing, plan building, and a real FFmpeg end-to-end render), and target resolution (equirect/view geometry, seam and pitch boundaries, view coverage, deterministic tracking, resolver behavior, the subprocess detector protocol, the track planner, and a model-free detection -> plan -> render path). Current result: 295 passed, 0 failed, 1 skipped (~46 s). The single skip is the real-detector integration test, which runs only when a detector helper, model, and clip are configured; the normal suite stays model-free.
 
 ## Technology Direction
 
@@ -973,7 +973,24 @@ Verification:
 - Model: OpenVINO OMZ `person-reidentification-retail-0277` (Apache-2.0 code and weights, internal training data) via ONNX Runtime; see `tools/appearance_helper/README.md`.
 - Architecture decision: Decision 022.
 
-Next: active-speaker/audio-visual association, then GPU optimization and UI integration.
+## Phase 4 Objective 6 — Optional Audio/Speaker Evidence — Complete
+
+Status: Complete (2026-09-17). Optional, replaceable audio/speaker layer that drives deterministic target selection; no GPU optimization, no UI.
+
+- Added `app/target/SpeakerTypes.{h,cpp}`: `SpeakerInterval`, `SpeakerAnalysis`, `SpeakerEvidence`, `SpeakerSegment`, and an explicit `SpeakerVerdict` (Unavailable/Active/Ambiguous/Overlap/Silence/Unassociated); JSON-serializable.
+- Added `SpeakerEvidenceProvider` + `ProcessSpeakerProvider`: external file/JSON helper; fail-safe on missing executable/media, non-zero exit, timeout, malformed output, or invalid intervals.
+- Added `SpeakerTargetAssociator`: deterministic speakerId -> existing target id (explicit creator binding > spatial DoA nearest within a gate > single visible person > unassociated/ambiguous). It never creates a target.
+- Added `SpeakerTimeline`: documented hysteresis (merge same-speaker pauses, `switchConfirmMs` before a speaker change, short silences held, overlaps preserved) so the camera does not thrash.
+- Added `SpeakerEvidenceAnalyzer` (provider -> timeline -> association -> structured per-target evidence) and `SpeakerReframePlanner` (associated speaker timeline -> `ReframePlan` with cuts at speaker changes).
+- Extended `TargetIdentityRegistry` with `annotateSpeaker`: audio evidence is recorded on the binding but never changes identity resolution (explicit selection remains authoritative).
+- Optional real helper `tools/speaker_helper/silero_vad_helper.py` using **Silero VAD** (MIT code and weights) via ONNX Runtime.
+
+Verification:
+- 31 new model-free tests; full model-free suite 295 passed, 0 failed, 1 skipped.
+- Real footage (audio+video proxy; original untouched): Silero VAD detects speech in the 360 clip; with an explicit speaker->target binding the evidence associates to the visible presenter; `SpeakerReframePlanner` produced a `ReframePlan` rendered by the existing renderer.
+- Architecture decision: Decision 023.
+
+Next: automatic audio-visual speaker attribution (diarization/active-speaker), then GPU optimization and UI integration.
 
 
 

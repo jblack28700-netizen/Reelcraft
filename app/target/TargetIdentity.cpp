@@ -156,6 +156,13 @@ QJsonObject IdentityBinding::toJsonObject() const
         }
         object.insert(QStringLiteral("rejectedTargetIds"), rejected);
     }
+    object.insert(QStringLiteral("speakerConfidence"), speakerConfidence);
+    if (!speakerId.isEmpty()) {
+        object.insert(QStringLiteral("speakerId"), speakerId);
+    }
+    if (!speakerVerdict.isEmpty()) {
+        object.insert(QStringLiteral("speakerVerdict"), speakerVerdict);
+    }
     return object;
 }
 
@@ -200,6 +207,11 @@ bool IdentityBinding::readFromJsonObject(const QJsonObject &object,
             }
         }
     }
+    binding.speakerId = object.value(QStringLiteral("speakerId")).toString();
+    binding.speakerConfidence =
+        object.value(QStringLiteral("speakerConfidence")).toDouble(-1.0);
+    binding.speakerVerdict =
+        object.value(QStringLiteral("speakerVerdict")).toString();
     *out = binding;
     return true;
 }
@@ -699,6 +711,25 @@ void TargetIdentityRegistry::markUnresolved(const QString &identity,
     if (!reason.isEmpty()) {
         m_notes.append(QStringLiteral("Identity '%1' unresolved: %2")
                            .arg(binding->identity, reason));
+    }
+}
+
+void TargetIdentityRegistry::annotateSpeaker(const QString &identity,
+                                             const QString &speakerId,
+                                             double confidence,
+                                             SpeakerVerdict verdict,
+                                             const QString &detail)
+{
+    IdentityBinding *binding = bindingFor(identity);
+    if (!binding) {
+        return;
+    }
+    binding->speakerId = speakerId;
+    binding->speakerConfidence = confidence;
+    binding->speakerVerdict = speakerVerdictToString(verdict);
+    if (!detail.isEmpty()) {
+        m_notes.append(QStringLiteral("Identity '%1' speaker: %2")
+                           .arg(binding->identity, detail));
     }
 }
 
