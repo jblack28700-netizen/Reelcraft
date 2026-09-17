@@ -565,6 +565,8 @@ bool Application::runReframeCommandTo(const QString &instruction, qint64 startMs
     request.defaultRange = ReframePlan::TimeRange{ effectiveStartMs, effectiveEndMs };
     request.defaultOutput = ReframePlan::OutputSpec{
         m_reframeOutputWidth, m_reframeOutputHeight, m_reframeOutputFps };
+    request.speakerProvider = m_speakerProvider;
+    request.speakerBindings = m_speakerBindings;
 
     const ReframeCommandResult result =
         m_commandExecutor(request, m_targetDetector, m_commandFrameProvider);
@@ -673,6 +675,27 @@ void Application::setMediaDurationProbe(MediaDurationProbe *probe)
 MediaDurationProbe *Application::mediaDurationProbe() const
 {
     return m_durationProbe;
+}
+
+void Application::setSpeakerEvidenceProvider(SpeakerEvidenceProvider *provider)
+{
+    m_speakerProvider = provider;
+}
+
+SpeakerEvidenceProvider *Application::speakerEvidenceProvider() const
+{
+    return m_speakerProvider;
+}
+
+void Application::setSpeakerBindings(
+    const QList<QPair<QString, QString>> &bindings)
+{
+    m_speakerBindings = bindings;
+}
+
+QList<QPair<QString, QString>> Application::speakerBindings() const
+{
+    return m_speakerBindings;
 }
 
 QJsonArray Application::reframeOutputsJson() const

@@ -631,3 +631,13 @@ Date: 2026-09-17
 - A zero start/end range now means "the whole clip": `Application::runReframeCommandTo()` resolves it through the probe to `[0, durationMs]`. Explicit ranges are used directly and never probe; when the duration is unknown the command runner honestly reports an invalid range (or uses a range in the command). The UI range controls default to 0/0 (whole clip).
 - Generated render records are now persisted: every command that reaches an output target appends its structured `ReframeCommandOutcome` (success or failure with its error); `Project` gained an additive `reframeOutputs` section and `CurrentSchemaVersion` is 3 (schema-2 projects load with an empty list; future schemas are still rejected). The application emits `reframeOutputsChanged` and the UI re-lists the records.
 - 13 new model-free tests; full model-free suite 339 passed / 0 failed / 3 skipped. `realApplicationCommandIntegration` extended to whole-clip ranges and save/open persistence. Decision 027 recorded; Decisions 017-026 preserved.
+
+## v0.2.48 — Speaker-Aware 360 Commands
+
+Date: 2026-09-17
+
+- The 360 command path now understands speaker references: `ReframeCommandRunner` recognizes "follow the speaker", "keep the speaker centered", "center the speaker", and related phrasings and reuses the existing Objective 6/7 layers (`SpeakerEvidenceAnalyzer` + `SpeakerReframePlanner`) to turn the associated speaker timeline into the deterministic plan. No new perception and no parallel command system.
+- Audio is evidence: an optional, replaceable `SpeakerEvidenceProvider` is required for a speaker command; explicit creator `speakerId -> targetId` bindings are honoured first; an unassociated or ambiguous speaker, or a command mixing a speaker reference with another subject or an explicit direction, is reported honestly with no fabricated plan.
+- Added `ReframePipeline::renderPlan()` to render an already-validated plan with the same deterministic renderer; `run()` delegates to it and `ReframeCommandRunner::run()` renders the prepared speaker plan instead of re-deriving it.
+- `Application` holds a non-owned speaker provider and optional bindings and copies them into each command request; `main.cpp` builds a `ProcessSpeakerProvider` from `REELCRAFT_SPEAKER_PY`/`_SCRIPT`/`REELCRAFT_SILERO_MODEL` when configured.
+- 9 new model-free tests; full model-free suite 348 passed / 0 failed / 4 skipped. New env-gated `realSpeakerCommandIntegration`. Decision 028 recorded; Decisions 017-027 preserved.

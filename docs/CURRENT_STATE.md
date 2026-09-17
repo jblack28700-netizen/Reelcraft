@@ -2,7 +2,7 @@
 
 ## Current Version
 
-0.2.47
+0.2.48
 
 ## Current Branch
 
@@ -10,7 +10,7 @@ main
 
 ## Current Stage
 
-Phase 4 — 360 Reframing Engine (deterministic vertical slice), Target/Subject Resolution, real detector integration, structured target identity/selection, optional appearance-based re-identification, optional audio/speaker evidence, an audio-visual provider-attribution seam, end-to-end user-command execution, application-level command orchestration, and persisted render records with duration-aware ranges implemented and verified. Phase 3 Media Engine remains open; its player-lifecycle objective is intentionally superseded for now by the human-approved 360 priority.
+Phase 4 — 360 Reframing Engine (deterministic vertical slice), Target/Subject Resolution, real detector integration, structured target identity/selection, optional appearance-based re-identification, optional audio/speaker evidence, an audio-visual provider-attribution seam, end-to-end user-command execution, application-level command orchestration, persisted render records with duration-aware ranges, and speaker-aware commands implemented and verified. Phase 3 Media Engine remains open; its player-lifecycle objective is intentionally superseded for now by the human-approved 360 priority.
 
 ## Project Status
 
@@ -1036,7 +1036,19 @@ Status: Complete (2026-09-17). Persists generated 360 render records in the proj
 - Real footage (`realApplicationCommandIntegration`, audio+video proxy; original untouched): the whole-clip probe resolved 0..12012 ms, "follow person 1" resolved to t1 and rendered 24 frames to a 640x360 clip, and the render record survived save/open.
 - Architecture decision: Decision 027.
 
-Next: speaker-aware 360 commands (reusing the Objective 6/7 speaker layer in the application command path) and GPU optimization remain the leading candidates; the deferred Phase 3 player-lifecycle objective also remains available when it serves the 360 capability. Requires its own scoped objective.
+## Phase 4 Objective 11 — Speaker-Aware 360 Commands — Complete
+
+Status: Complete (2026-09-17). Reuses the Objective 6/7 speaker evidence layer inside the command path so commands such as "follow the speaker" select the active speaking target, keeping audio as evidence.
+
+- `ReframeCommandRunner` recognizes speaker references (`speaker`, `active speaker`, `person speaking`, `whoever is speaking`, plus `keep <subject> centered` / `center <subject>`) and routes them through the existing `SpeakerEvidenceAnalyzer` (provider -> timeline -> association) and `SpeakerReframePlanner` (-> `ReframePlan` with cuts at speaker changes). No new perception, no parallel command system.
+- Audio is evidence: an optional, replaceable `SpeakerEvidenceProvider` is required for a speaker command; explicit creator `speakerId -> targetId` bindings are honoured first; an unassociated/ambiguous speaker or a mixed speaker/subject/direction command is reported honestly with no fabricated direction or plan.
+- New `ReframePipeline::renderPlan()` renders an already-validated plan with the same deterministic renderer; `ReframePipeline::run()` delegates to it, and `ReframeCommandRunner::run()` renders the prepared (speaker) plan instead of re-deriving it.
+- `Application` holds a non-owned speaker provider and optional bindings and copies them into each request; `main.cpp` builds a `ProcessSpeakerProvider` from `REELCRAFT_SPEAKER_PY`/`_SCRIPT`/`REELCRAFT_SILERO_MODEL` when configured.
+- 9 new model-free tests; full model-free suite 348 passed, 0 failed, 4 skipped. New env-gated `realSpeakerCommandIntegration`.
+- Real footage (`realSpeakerCommandIntegration`, audio+video proxy; original untouched): "follow the speaker" used 9 pre-resolved tracks, associated the VAD speech to t1 through an explicit creator speaker binding, and rendered 24 frames to a 640x360 clip.
+- Architecture decision: Decision 028.
+
+Next: GPU optimization and the deferred Phase 3 player-lifecycle objective remain the leading candidates, along with UI polish for the persisted render records. Requires its own scoped objective.
 
 
 

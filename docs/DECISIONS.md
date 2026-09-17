@@ -849,3 +849,26 @@ Decision 017 deferred ffprobe duration metadata to "its own decision/objective",
 - 13 new model-free tests cover duration-output parsing, whole-clip range defaulting, explicit-range probe skipping, probe-failure honesty, record creation (success and failure), save/open persistence, new-project clearing, the project-section round-trip, outcome JSON round-trip, the UI record list, and the whole-clip UI default; one ffmpeg/ffprobe-gated test probes a generated clip. Full model-free suite: 339 passed / 0 failed / 3 skipped.
 - Real-footage validation at completion: `realApplicationCommandIntegration` now uses the whole-clip range (probed from the ~12 s proxy) and verifies the render record survives save/open; the result is recorded in `CURRENT_STATE.md` and `DEVELOPMENT_LOG.md`.
 - Decisions 017–026 preserved. The deferred Phase 3 ffprobe gate is satisfied for the 360 command path; general playback duration metadata remains future work.
+
+# Decision 028 — Speaker-Aware Command Path: Audio as Evidence, Explicit Binding First
+
+**Status:** Accepted (2026-09-17, 360 Reframing Objective 11)
+
+## Context
+
+Objectives 6/7 delivered an optional audio/speaker evidence layer (`SpeakerEvidenceAnalyzer`, `SpeakerTimeline`, `SpeakerTargetAssociator`, `SpeakerReframePlanner`), and Objectives 8/9 wired a general 360 command path (`ReframeCommandRunner`, `Application`). That command path resolved subject references through a detector, but a "speaker" reference was unrecognized, so audio could not drive a command. Objective 11 scopes exactly that: "Reuse the Objective 6/7 speaker evidence layer inside the application command path so commands such as 'follow the speaker' select the active speaking target, keeping audio as evidence and never overriding an explicit creator selection."
+
+## Decisions
+
+- **The speaker layer is reused, not duplicated.** `ReframeCommandRunner` recognizes speaker references (`speaker`, `active speaker`, `person speaking`, `whoever is speaking`, plus the new `keep <subject> centered` / `center <subject>` phrasings) and routes them through the existing `SpeakerEvidenceAnalyzer` (provider -> timeline -> association) and `SpeakerReframePlanner` (associated timeline -> `ReframePlan` with cuts at speaker changes). No new perception and no parallel command system.
+- **Audio is evidence, never authority.** The speaker path requires an optional, replaceable `SpeakerEvidenceProvider`; without one it reports honestly. Explicit creator `speakerId -> targetId` bindings are applied to the associator and are honoured first (explicit > visible provider hint > spatial > single visible > ambiguous). An explicit creator identity is never rebound by audio, and no speaker direction is fabricated.
+- **No silent reinterpretation.** A command that mixes a speaker reference with another subject reference or with an explicit camera direction is reported as unsupported rather than partially executed. An unassociated or ambiguous speaker produces an error and no plan.
+- **Plans are rendered directly.** `ReframePipeline::renderPlan()` renders an already-validated plan with the same deterministic renderer/encoder, and `ReframePipeline::run()` now delegates to it. `ReframeCommandRunner::run()` renders the prepared plan, so a `SpeakerReframePlanner` plan is not re-derived by `ReframePlanBuilder`.
+- **Application plumbing.** `Application` holds a non-owned `SpeakerEvidenceProvider` and optional `speakerBindings`, copies them into each `ReframeCommandRequest`, and `main.cpp` builds a `ProcessSpeakerProvider` from `REELCRAFT_SPEAKER_PY`/`_SCRIPT`/`REELCRAFT_SILERO_MODEL` when configured. `ReframeCommandRequest` also accepts optional pre-resolved tracks, so a caller that already resolved targets does not resolve twice.
+- **Preserved invariants.** Original media remains read-only; detector/identity/appearance/speaker boundaries remain replaceable; the deterministic renderer executes, never perceives.
+
+## Consequences
+
+- 9 new model-free tests: speaker phrasing parsing, speaker-follow with a scripted provider, honest failure without a provider, honest ambiguity/unassociated behavior, explicit-binding precedence, unsupported mixing (subject and direction), `renderPlan` input validation, and application plumbing. Full model-free suite: 348 passed / 0 failed / 4 skipped.
+- A new env-gated `realSpeakerCommandIntegration` resolves real presenter tracks once with the Apache-2.0 YOLOX detector, then runs "follow the speaker" with the real Silero VAD provider and an explicit creator speaker binding through the deterministic renderer. Result recorded in `CURRENT_STATE.md` and `DEVELOPMENT_LOG.md`.
+- Decisions 017–027 preserved. GPU optimization and the deferred Phase 3 player-lifecycle objective remain future work.

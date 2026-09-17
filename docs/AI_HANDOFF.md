@@ -66,6 +66,8 @@ That command path is now reachable from the application (Decision 026): `Applica
 
 Objective 10 (Decision 027) closed both gaps: a replaceable `MediaDurationProbe`/`FfprobeDurationProbe` seam (external ffprobe, no linked codec) resolves a zero ("whole clip") range to `[0, durationMs]`, and generated renders are persisted as an additive `reframeOutputs` project section (`CurrentSchemaVersion` 3) surfaced through `reframeOutputsChanged`. The application still never modifies the source media, and the deterministic command runner is unchanged.
 
+Speaker-aware commands are implemented (Decision 028, Objective 11): `ReframeCommandRunner` recognizes speaker references ("follow the speaker", "keep the speaker centered") and reuses the Objective 6/7 `SpeakerEvidenceAnalyzer` + `SpeakerReframePlanner` to turn the associated speaker timeline into the deterministic plan. Audio is evidence: an optional `SpeakerEvidenceProvider` is required, explicit creator `speakerId -> targetId` bindings are honoured first, and an unassociated/ambiguous speaker or a mixed speaker/subject/direction command is reported honestly. `ReframePipeline::renderPlan()` renders an already-validated plan so the speaker plan is not re-derived. `main.cpp` builds a `ProcessSpeakerProvider` from `REELCRAFT_SPEAKER_*` when configured.
+
 ---
 
 # 4. Current Development Camera

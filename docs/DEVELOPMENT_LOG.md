@@ -1385,3 +1385,37 @@ Persist generated renders in the project and add duration-aware full-clip ranges
 ### Decisions
 
 - Decision 027 recorded. Decisions 017-026 preserved unchanged.
+---
+
+## 2026-09-17 — 360 Reframing Objective 11: Speaker-Aware 360 Commands
+
+### Objective
+
+Reuse the Objective 6/7 speaker evidence layer inside the application command path so commands such as "follow the speaker" select the active speaking target, keeping audio as evidence and never overriding an explicit creator selection.
+
+### Work completed
+
+- `ReframeCommandRunner`: speaker references are recognized and routed through `SpeakerEvidenceAnalyzer` (provider -> timeline -> association) and `SpeakerReframePlanner` (-> `ReframePlan` with cuts at speaker changes). `ReframeCommandRequest` gained an optional non-owned `speakerProvider`, optional explicit `speakerBindings` (speakerId -> targetId), and optional pre-resolved tracks.
+- Honest failure modes: no provider, unavailable evidence, unassociated/ambiguous speaker, and unsupported mixing (speaker + subject, speaker + explicit direction) all produce an error and no plan. No direction is fabricated.
+- `ReframePipeline::renderPlan()` renders an already-validated plan; `run()` delegates to it; `ReframeCommandRunner::run()` renders the prepared plan so a speaker plan is not re-derived by `ReframePlanBuilder`.
+- `ReframeIntentParser` recognizes "keep the speaker centered" / "center the speaker".
+- `Application` holds a non-owned speaker provider + bindings and copies them into each request; `main.cpp` builds a `ProcessSpeakerProvider` from `REELCRAFT_SPEAKER_*`.
+- 9 new model-free tests; new env-gated `realSpeakerCommandIntegration`.
+
+### Verification
+
+- Model-free suite: 348 passed, 0 failed, 4 skipped (~65 s).
+- Focused Objective 11 tests: 9 passed.
+- Test build and standalone application build both succeed.
+- Real footage (audio+video proxy; original untouched): `realSpeakerCommandIntegration` used 9 pre-resolved tracks, associated the Silero VAD speech to t1 through an explicit creator speaker binding, and rendered 24 frames to a 640x360 clip.
+- Change-impact: the deterministic renderer, detector, geometry, identity, appearance, and speaker layers are unchanged; the command path now composes the existing speaker layer and renders the prepared plan.
+
+### Boundary notes / not implemented
+
+- On mono, multi-person footage a provider-local speaker id still needs an explicit creator binding (or a single visible person) to associate; fully automatic attribution depends on a future licensed audio-visual/diarization provider.
+- Speaker-aware commands are supported for a single unambiguous speaker request; mixing is reported, not silently reinterpreted.
+- GPU optimization and the deferred Phase 3 player-lifecycle objective remain future work.
+
+### Decisions
+
+- Decision 028 recorded. Decisions 017-027 preserved unchanged.

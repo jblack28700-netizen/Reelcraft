@@ -149,6 +149,10 @@ QString subjectFromClause(const QString &clause)
             "keep\\s+me\\s+centered")),
         QRegularExpression(QStringLiteral(
             "centered?\\s+on\\s+(?:the\\s+)?(.+)$")),
+        QRegularExpression(QStringLiteral(
+            "keep\\s+(?:the\\s+)?(.+?)\\s+center(?:ed|red)$")),
+        QRegularExpression(QStringLiteral(
+            "center(?:ed|red)?\\s+(?:the\\s+)?(.+)$")),
     };
     static const int patternCount =
         static_cast<int>(sizeof(patterns) / sizeof(patterns[0]));

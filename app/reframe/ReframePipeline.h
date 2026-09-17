@@ -3,6 +3,7 @@
 #include <QString>
 #include <QStringList>
 
+#include "reframe/ReframeFrameProvider.h"
 #include "reframe/ReframeIntent.h"
 #include "reframe/ReframePlan.h"
 
@@ -43,4 +44,12 @@ public:
     };
 
     static Result run(const Request &request);
+
+    // Renders an already-validated plan (the decision stage's output) without
+    // re-parsing or re-building it. This lets a caller whose plan is produced by
+    // a different planner (for example SpeakerReframePlanner) reuse the exact
+    // same deterministic renderer/encoder. The source media is only read.
+    static Result renderPlan(const ReframePlan &plan, const QString &sourcePath,
+                             const QString &outputPath,
+                             ReframeFrameProvider *provider = nullptr);
 };

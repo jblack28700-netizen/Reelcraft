@@ -4,6 +4,8 @@
 #include <QImage>
 #include <QList>
 
+#include <QPair>
+
 #include <functional>
 #include <memory>
 
@@ -14,6 +16,7 @@
 #include "reframe/ReframeCommandRunner.h"
 
 class ViewportState;
+class SpeakerEvidenceProvider;
 
 // The application-level command execution function. It defaults to
 // ReframeCommandRunner::run; tests inject a fake or a prepare-only executor so
@@ -151,6 +154,17 @@ public slots:
     void setMediaDurationProbe(MediaDurationProbe *probe);
     MediaDurationProbe *mediaDurationProbe() const;
 
+    // Optional, non-owned speaker evidence provider used by speaker references
+    // such as "follow the speaker" (Objective 11). The application does NOT own
+    // it. When absent, a speaker command is reported honestly as unresolved.
+    void setSpeakerEvidenceProvider(SpeakerEvidenceProvider *provider);
+    SpeakerEvidenceProvider *speakerEvidenceProvider() const;
+
+    // Optional explicit speakerId -> targetId creator bindings honoured before
+    // any speaker inference, so audio never overrides an explicit choice.
+    void setSpeakerBindings(const QList<QPair<QString, QString>> &bindings);
+    QList<QPair<QString, QString>> speakerBindings() const;
+
 signals:
     void projectChanged(const Project &project);
     void backgroundCompleted(const QString &message);
@@ -208,5 +222,7 @@ private:
 
     std::unique_ptr<MediaDurationProbe> m_ownedDurationProbe;
     MediaDurationProbe *m_durationProbe = nullptr;
+    SpeakerEvidenceProvider *m_speakerProvider = nullptr;
+    QList<QPair<QString, QString>> m_speakerBindings;
     QList<ReframeCommandOutcome> m_reframeOutputs;
 };

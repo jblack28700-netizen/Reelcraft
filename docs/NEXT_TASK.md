@@ -319,8 +319,22 @@ Persist generated renders in the project and add duration-aware full-clip ranges
 - 13 new model-free tests; full model-free suite 339 passed / 0 failed / 3 skipped. `realApplicationCommandIntegration` extended to whole-clip + persistence.
 - Architecture decision: Decision 027.
 
-## Next Objective — Speaker-Aware 360 Commands — NOT STARTED
+## 360 Reframing Objective 11 — Speaker-Aware 360 Commands — Complete
 
-Reuse the Objective 6/7 speaker evidence layer inside the application command path so commands such as "follow the speaker" select the active speaking target, keeping audio as evidence and never overriding an explicit creator selection. GPU optimization and the deferred Phase 3 player-lifecycle objective remain further candidates. Requires its own scoped objective; do not begin automatically.
+Status: **Complete — implemented and verified (2026-09-17).**
+
+### Objective
+Reuse the Objective 6/7 speaker evidence layer inside the application command path so commands such as "follow the speaker" select the active speaking target, keeping audio as evidence and never overriding an explicit creator selection.
+
+### Scope (implemented)
+- `ReframeCommandRunner` recognizes speaker references (`speaker`, `active speaker`, `person speaking`, `whoever is speaking`, `keep <subject> centered` / `center <subject>`) and routes them through the existing `SpeakerEvidenceAnalyzer` + `SpeakerReframePlanner`. `ReframeCommandRequest` gained an optional speaker provider, optional explicit speaker bindings, and optional pre-resolved tracks.
+- `ReframePipeline::renderPlan()` renders an already-validated plan (and `run()` delegates to it); `ReframeCommandRunner::run()` renders the prepared plan so a speaker plan is not re-derived.
+- `Application` holds a non-owned speaker provider + bindings and copies them into each request; `main.cpp` builds a `ProcessSpeakerProvider` from `REELCRAFT_SPEAKER_PY`/`_SCRIPT`/`REELCRAFT_SILERO_MODEL`.
+- 9 new model-free tests; full model-free suite 348 passed / 0 failed / 4 skipped. New env-gated `realSpeakerCommandIntegration`.
+- Architecture decision: Decision 028.
+
+## Next Objective — GPU Optimization or Phase 3 Player Lifecycle — NOT STARTED
+
+The remaining leading candidates are GPU optimization of the ML helpers (behind the existing replaceable seams) and the deferred Phase 3 Application-level player-lifecycle objective; richer UI for the persisted render records is also a candidate. Requires its own scoped objective; do not begin automatically.
 
 

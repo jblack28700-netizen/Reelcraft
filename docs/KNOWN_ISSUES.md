@@ -368,6 +368,26 @@ Implemented in Objective 10 (Decision 027). `Project` gained an additive `refram
 
 ---
 
+# Issue — Speaker association on mono multi-person footage needs a creator binding (2026-09-17)
+
+### Status
+
+Open — documented limitation; not a defect.
+
+### Description
+
+The speaker-aware command path (Objective 11) reuses the Objective 6/7 association layer. On the project's real footage the audio is mono (no direction of arrival) and several people are visible, so a provider-local speaker id cannot be spatially associated automatically; the command reports unassociated/ambiguous unless the creator provides an explicit `speakerId -> targetId` binding (as the real integration test does), or a single person is visible. This is the intended no-fabrication behavior.
+
+### Impact
+
+"Follow the speaker" works when the creator identifies the speaker once (or when a single person is visible); fully automatic attribution among multiple people remains dependent on a future licensed audio-visual/diarization provider.
+
+### Planned Resolution
+
+Revisit when a permissively licensed audio-visual active-speaker or diarization provider is available; the Objective 7 `targetIdHint` seam and the Objective 11 command path already accept one.
+
+---
+
 # Issue Management Rules
 
 For each future issue:

@@ -1002,6 +1002,16 @@ private slots:
     void reframeCommandOutcomeJsonRoundTrip();
     void mainWindowShowsReframeOutputs();
     void mainWindowWholeClipDefaultRange();
+    void reframeIntentParsesSpeakerCenteredPhrases();
+    void reframeCommandRunnerSpeakerFollowsActiveSpeaker();
+    void reframeCommandRunnerSpeakerWithoutProviderIsHonest();
+    void reframeCommandRunnerSpeakerUnassociatedIsHonest();
+    void reframeCommandRunnerSpeakerExplicitBindingWins();
+    void reframeCommandRunnerSpeakerMixedWithSubjectIsHonest();
+    void reframeCommandRunnerSpeakerMixedWithDirectionIsHonest();
+    void reframePipelineRenderPlanValidatesInputs();
+    void applicationPassesSpeakerProviderAndBindings();
+    void realSpeakerCommandIntegration();
     void realApplicationCommandIntegration();
     void equirectDirectionFromCenterAndSides();
     void equirectPixelRoundTrip();
@@ -7934,6 +7944,362 @@ void ProjectTest::mainWindowWholeClipDefaultRange()
     QCOMPARE(spy.count(), 1);
     QCOMPARE(spy.first().at(1).toLongLong(), qint64(0));
     QCOMPARE(spy.first().at(2).toLongLong(), qint64(0));
+}
+
+// ================= 360 speaker-aware commands (Phase 4, Obj 11) ==================
+// Model-free tests for speaker references in the command path: the existing
+// speaker evidence layer (analyzer + timeline + associator + planner) is reused,
+// audio stays evidence, and nothing is fabricated when the speaker is unknown.
+
+namespace {
+
+class SpeakerScriptProvider : public SpeakerEvidenceProvider
+{
+public:
+    void setIntervals(const QList<SpeakerInterval> &intervals)
+    {
+        m_analysis = SpeakerAnalysis();
+        m_analysis.available = true;
+        m_analysis.provider = QStringLiteral("scripted");
+        m_analysis.startMs = 0;
+        m_analysis.endMs = 12000;
+        m_analysis.intervals = intervals;
+    }
+    void setUnavailable(const QString &error)
+    {
+        m_analysis = SpeakerAnalysis();
+        m_analysis.available = false;
+        m_analysis.provider = QStringLiteral("scripted");
+        m_analysis.error = error;
+    }
+    QString name() const override { return QStringLiteral("scripted"); }
+    bool analyze(const QString &, qint64, qint64, SpeakerAnalysis *out,
+                 QString *error) override
+    {
+        if (error) {
+            error->clear();
+        }
+        if (out) {
+            *out = m_analysis;
+        }
+        return true;
+    }
+
+private:
+    SpeakerAnalysis m_analysis;
+};
+
+SpeakerInterval speakerInterval(qint64 startMs, qint64 endMs,
+                                const QString &id = QStringLiteral("spk1"))
+{
+    SpeakerInterval interval;
+    interval.startMs = startMs;
+    interval.endMs = endMs;
+    interval.speakerId = id;
+    interval.confidence = 0.9;
+    return interval;
+}
+
+// A visible person track spanning the sample range at a fixed yaw.
+TargetTrack speakerTrack(const QString &id, double yawDeg)
+{
+    TargetTrack track(id, QStringLiteral("person"));
+    track.append(makeTargetObservation(0, yawDeg, 0.0));
+    track.append(makeTargetObservation(2000, yawDeg, 0.0));
+    return track;
+}
+
+} // namespace
+
+void ProjectTest::reframeIntentParsesSpeakerCenteredPhrases()
+{
+    const ReframeIntent keep =
+        ReframeIntentParser::parse(QStringLiteral("keep the speaker centered"));
+    QCOMPARE(keep.moves.size(), 1);
+    QCOMPARE(keep.moves.at(0).targetRef, QStringLiteral("speaker"));
+
+    const ReframeIntent center =
+        ReframeIntentParser::parse(QStringLiteral("center the speaker"));
+    QCOMPARE(center.moves.size(), 1);
+    QCOMPARE(center.moves.at(0).targetRef, QStringLiteral("speaker"));
+
+    const ReframeIntent follow =
+        ReframeIntentParser::parse(QStringLiteral("follow the speaker"));
+    QCOMPARE(follow.moves.size(), 1);
+    QCOMPARE(follow.moves.at(0).targetRef, QStringLiteral("speaker"));
+
+    // The existing "me" shorthand is unchanged.
+    const ReframeIntent me =
+        ReframeIntentParser::parse(QStringLiteral("keep me centered"));
+    QCOMPARE(me.moves.size(), 1);
+    QCOMPARE(me.moves.at(0).targetRef, QStringLiteral("me"));
+}
+
+void ProjectTest::reframeCommandRunnerSpeakerFollowsActiveSpeaker()
+{
+    const QImage frame = buildTargetEquirect(
+        360, 180, { EquirectDisk{ 30.0, 0.0, 10.0, QColor(255, 0, 0) } });
+    StaticEquirectProvider provider(frame);
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+    SpeakerScriptProvider speaker;
+    speaker.setIntervals({ speakerInterval(0, 3000) });
+
+    ReframeCommandRequest request;
+    request.sourcePath = QStringLiteral("/tmp/reelcraft_dummy.mp4");
+    request.instruction = QStringLiteral("follow the speaker");
+    request.defaultRange = ReframePlan::TimeRange{ 0, 3000 };
+    request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+    request.resolveConfig = smallResolverConfig();
+    request.speakerProvider = &speaker;
+
+    const ReframeCommandResult result =
+        ReframeCommandRunner::prepare(request, &detector, &provider);
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QVERIFY(result.speakerCommand);
+    QVERIFY(!result.speakerSegments.isEmpty());
+    QVERIFY(!result.resolvedTargets.isEmpty());
+    QVERIFY(!result.plan.keyframes().isEmpty());
+    QVERIFY(qAbs(CameraPath::stateAt(result.plan, 0).yawDeg - 30.0) < 8.0);
+}
+
+void ProjectTest::reframeCommandRunnerSpeakerWithoutProviderIsHonest()
+{
+    ReframeCommandRequest request;
+    request.sourcePath = QStringLiteral("/tmp/reelcraft_dummy.mp4");
+    request.instruction = QStringLiteral("follow the speaker");
+    request.defaultRange = ReframePlan::TimeRange{ 0, 3000 };
+    request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+
+    const ReframeCommandResult result =
+        ReframeCommandRunner::prepare(request, nullptr, nullptr);
+    QVERIFY(!result.ok);
+    QVERIFY(result.error.contains(QStringLiteral("speaker")));
+    QVERIFY(result.plan.keyframes().isEmpty());
+}
+
+void ProjectTest::reframeCommandRunnerSpeakerUnassociatedIsHonest()
+{
+    SpeakerScriptProvider speaker;
+    speaker.setIntervals({ speakerInterval(0, 3000) });
+
+    ReframeCommandRequest request;
+    request.sourcePath = QStringLiteral("/tmp/reelcraft_dummy.mp4");
+    request.instruction = QStringLiteral("follow the speaker");
+    request.defaultRange = ReframePlan::TimeRange{ 0, 3000 };
+    request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+    request.resolvedTracks = { speakerTrack(QStringLiteral("t1"), 40.0),
+                               speakerTrack(QStringLiteral("t2"), -40.0) };
+    request.speakerProvider = &speaker;
+
+    const ReframeCommandResult result =
+        ReframeCommandRunner::prepare(request, nullptr, nullptr);
+    QVERIFY(!result.ok);
+    QVERIFY(result.plan.keyframes().isEmpty());
+}
+
+void ProjectTest::reframeCommandRunnerSpeakerExplicitBindingWins()
+{
+    SpeakerScriptProvider speaker;
+    speaker.setIntervals({ speakerInterval(0, 3000) });
+
+    ReframeCommandRequest request;
+    request.sourcePath = QStringLiteral("/tmp/reelcraft_dummy.mp4");
+    request.instruction = QStringLiteral("follow the speaker");
+    request.defaultRange = ReframePlan::TimeRange{ 0, 3000 };
+    request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+    request.resolvedTracks = { speakerTrack(QStringLiteral("t1"), 40.0),
+                               speakerTrack(QStringLiteral("t2"), -40.0) };
+    request.speakerProvider = &speaker;
+    request.speakerBindings = { { QStringLiteral("spk1"), QStringLiteral("t2") } };
+
+    const ReframeCommandResult result =
+        ReframeCommandRunner::prepare(request, nullptr, nullptr);
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QCOMPARE(result.resolvedTargets.size(), 1);
+    QCOMPARE(result.resolvedTargets.at(0).id, QStringLiteral("t2"));
+    QVERIFY(qAbs(CameraPath::stateAt(result.plan, 0).yawDeg + 40.0) < 8.0);
+}
+
+void ProjectTest::reframeCommandRunnerSpeakerMixedWithSubjectIsHonest()
+{
+    ReframeCommandRequest request;
+    request.instruction =
+        QStringLiteral("follow the speaker then look at person 1");
+    request.defaultRange = ReframePlan::TimeRange{ 0, 3000 };
+    request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+
+    const ReframeCommandResult result =
+        ReframeCommandRunner::prepare(request, nullptr, nullptr);
+    QVERIFY(!result.ok);
+    QVERIFY(result.error.contains(QStringLiteral("mix")));
+}
+
+void ProjectTest::reframeCommandRunnerSpeakerMixedWithDirectionIsHonest()
+{
+    ReframeCommandRequest request;
+    request.instruction = QStringLiteral("pan right then follow the speaker");
+    request.defaultRange = ReframePlan::TimeRange{ 0, 3000 };
+    request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+
+    const ReframeCommandResult result =
+        ReframeCommandRunner::prepare(request, nullptr, nullptr);
+    QVERIFY(!result.ok);
+    QVERIFY(result.error.contains(QStringLiteral("mix")));
+}
+
+void ProjectTest::reframePipelineRenderPlanValidatesInputs()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString source = directory.filePath(QStringLiteral("clip.bin"));
+    QFile file(source);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write("x");
+    file.close();
+
+    ReframePlan invalidPlan;
+    const ReframePipeline::Result missing = ReframePipeline::renderPlan(
+        invalidPlan, QString(), directory.filePath(QStringLiteral("out.mp4")));
+    QVERIFY(!missing.ok);
+    QVERIFY(missing.error.contains(QStringLiteral("Source")));
+
+    const ReframePipeline::Result noOutput = ReframePipeline::renderPlan(
+        invalidPlan, source, QString());
+    QVERIFY(!noOutput.ok);
+    QVERIFY(noOutput.error.contains(QStringLiteral("Output")));
+
+    // A valid source with an invalid plan fails validation before any decode.
+    const ReframePipeline::Result invalid = ReframePipeline::renderPlan(
+        invalidPlan, source, directory.filePath(QStringLiteral("out.mp4")));
+    QVERIFY(!invalid.ok);
+    QVERIFY(!invalid.error.isEmpty());
+}
+
+void ProjectTest::applicationPassesSpeakerProviderAndBindings()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    SpeakerScriptProvider speaker;
+    speaker.setIntervals({ speakerInterval(0, 2000) });
+    app.setSpeakerEvidenceProvider(&speaker);
+    app.setSpeakerBindings({ { QStringLiteral("spk1"), QStringLiteral("t2") } });
+
+    ReframeCommandRequest captured;
+    bool called = false;
+    app.setReframeCommandExecutor(
+        [&called, &captured](const ReframeCommandRequest &request,
+                             TargetDetector *, ReframeFrameProvider *) {
+            called = true;
+            captured = request;
+            ReframeCommandResult result;
+            result.ok = true;
+            result.outputPath = request.outputPath;
+            return result;
+        });
+
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("follow the speaker"), 0, 2000,
+                                    directory.filePath(QStringLiteral("out.mp4"))));
+    QVERIFY(called);
+    QVERIFY(captured.speakerProvider == &speaker);
+    QCOMPARE(captured.speakerBindings.size(), 1);
+    QCOMPARE(captured.speakerBindings.at(0).first, QStringLiteral("spk1"));
+    QCOMPARE(captured.speakerBindings.at(0).second, QStringLiteral("t2"));
+    QVERIFY(app.speakerEvidenceProvider() == &speaker);
+    QCOMPARE(app.speakerBindings().size(), 1);
+}
+
+// Real speaker-command integration (Objective 11; skipped unless configured).
+// Uses the real YOLOX detector once to resolve presenter tracks, then the real
+// Silero VAD provider and an explicit creator speaker binding to run
+// "follow the speaker" through the deterministic renderer. Never modifies the
+// source media.
+void ProjectTest::realSpeakerCommandIntegration()
+{
+    const QString python = qEnvironmentVariable("REELCRAFT_TARGET_DETECTOR_PY");
+    const QString detectorScript =
+        qEnvironmentVariable("REELCRAFT_TARGET_DETECTOR_SCRIPT");
+    const QString model = qEnvironmentVariable("REELCRAFT_TARGET_YOLOX_MODEL");
+    const QString clip = qEnvironmentVariable("REELCRAFT_TARGET_CLIP");
+    const QString speakerPython = qEnvironmentVariable("REELCRAFT_SPEAKER_PY");
+    const QString speakerScript = qEnvironmentVariable("REELCRAFT_SPEAKER_SCRIPT");
+    const QString sileroModel = qEnvironmentVariable("REELCRAFT_SILERO_MODEL");
+    if (python.isEmpty() || detectorScript.isEmpty() || model.isEmpty()
+        || clip.isEmpty() || speakerPython.isEmpty() || speakerScript.isEmpty()
+        || sileroModel.isEmpty()) {
+        QSKIP("real speaker command integration not configured "
+              "(set REELCRAFT_TARGET_DETECTOR_PY/_SCRIPT, "
+              "REELCRAFT_TARGET_YOLOX_MODEL, REELCRAFT_TARGET_CLIP, "
+              "REELCRAFT_SPEAKER_PY/_SCRIPT, REELCRAFT_SILERO_MODEL)");
+    }
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable");
+    }
+
+    ProcessTargetDetector detector(
+        python, { detectorScript, QStringLiteral("--model"), model });
+    TargetResolveConfig config;
+    config.viewPlan.fieldOfViewDeg = 110.0;
+    config.viewPlan.yawCount = 4;
+    config.viewPlan.pitchCount = 1;
+    config.viewPlan.viewWidth = 512;
+    config.viewPlan.viewHeight = 512;
+    config.minConfidence = 0.35;
+    config.tracker.maxAssociationDistanceDeg = 40.0;
+    config.tracker.maxMisses = 3;
+    TargetResolver resolver(config);
+    FfmpegSeekFrameProvider provider(clip, FrameExtractor::defaultExecutablePath());
+    TargetQuery query;
+    query.label = QStringLiteral("person");
+    query.minConfidence = 0.35;
+    QList<TargetTrack> tracks;
+    QString error;
+    QVERIFY2(resolver.resolveSequence(&provider, { 5500, 6500, 7500 }, query,
+                                      &detector, &tracks, &error),
+             qPrintable(error));
+    QVERIFY(!tracks.isEmpty());
+    const QList<TargetTrack> ordered =
+        TargetSelector::canonicalOrder(tracks, QStringLiteral("person"));
+    QVERIFY(!ordered.isEmpty());
+    const QString presenterId = ordered.first().id();
+
+    ProcessSpeakerProvider speaker(
+        speakerPython, { speakerScript, QStringLiteral("--model"), sileroModel });
+    QTemporaryDir outputDirectory;
+    QString outputPath = qEnvironmentVariable("REELCRAFT_SPEAKER_COMMAND_OUTPUT");
+    if (outputPath.isEmpty()) {
+        QVERIFY(outputDirectory.isValid());
+        outputPath = outputDirectory.filePath(QStringLiteral("speaker_command.mp4"));
+    }
+
+    ReframeCommandRequest request;
+    request.sourcePath = clip;
+    request.sourceMediaId = QStringLiteral("real-360");
+    request.instruction = QStringLiteral("follow the speaker");
+    request.defaultRange = ReframePlan::TimeRange{ 0, 12000 };
+    request.defaultOutput = ReframePlan::OutputSpec{ 640, 360, 2.0 };
+    request.resolvedTracks = tracks;
+    request.speakerProvider = &speaker;
+    request.speakerBindings = { { QStringLiteral("spk1"), presenterId } };
+    request.outputPath = outputPath;
+
+    const ReframeCommandResult result =
+        ReframeCommandRunner::run(request, nullptr, nullptr);
+    qInfo("speaker command: ok=%d segments=%d targets=%d frames=%d output=%s",
+          result.ok ? 1 : 0, static_cast<int>(result.speakerSegments.size()),
+          static_cast<int>(result.resolvedTargets.size()), result.frameCount,
+          qPrintable(result.outputPath));
+    for (const QString &note : result.notes) {
+        qInfo("  speaker command note: %s", qPrintable(note));
+    }
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QVERIFY(result.speakerCommand);
+    QVERIFY(!result.speakerSegments.isEmpty());
+    QVERIFY(!result.plan.keyframes().isEmpty());
+    QVERIFY(QFileInfo::exists(result.outputPath));
+    QVERIFY(QFileInfo(result.outputPath).size() > 0);
 }
 
 // Real application command path (Objective 9; skipped unless configured).

@@ -1,15 +1,19 @@
 #pragma once
 
 #include <QList>
+#include <QPair>
 #include <QString>
 #include <QStringList>
 
 #include "reframe/ReframeFrameProvider.h"
 #include "reframe/ReframeIntent.h"
 #include "reframe/ReframePlan.h"
+#include "target/SpeakerTypes.h"
 #include "target/TargetDetector.h"
 #include "target/TargetIdentity.h"
 #include "target/TargetResolver.h"
+
+class SpeakerEvidenceProvider;
 
 // 360 Reframing Objective 8 — end-to-end 360 user-command execution.
 //
@@ -60,6 +64,19 @@ struct ReframeCommandRequest
     // the effective range (maxResolveSamples evenly spaced samples).
     QList<qint64> resolveTimestamps;
     int maxResolveSamples = 5;
+
+    // Optional pre-resolved tracks (Objective 11). When non-empty, prepare()
+    // uses them instead of running target resolution. The caller remains
+    // responsible for their provenance; nothing is fabricated here.
+    QList<TargetTrack> resolvedTracks;
+
+    // Optional speaker inputs (Objective 11). Used only when the instruction
+    // references a speaker (for example "follow the speaker"). The provider is
+    // replaceable, non-owned, and optional; speakerBindings are optional
+    // explicit speakerId -> targetId creator bindings honoured before any
+    // inference, so audio never overrides an explicit creator choice.
+    SpeakerEvidenceProvider *speakerProvider = nullptr;
+    QList<QPair<QString, QString>> speakerBindings;
 };
 
 struct ReframeCommandResult
@@ -72,6 +89,9 @@ struct ReframeCommandResult
     QStringList unresolvedReferences;
     ReframePlan plan;
     QStringList notes;
+    // Speaker detail when the command referenced a speaker (Objective 11).
+    QList<SpeakerSegment> speakerSegments;
+    bool speakerCommand = false;
     // Execution (run() only).
     int frameCount = 0;
     QString outputPath;

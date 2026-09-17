@@ -3,6 +3,7 @@
 #include <memory>
 
 #include "application/Application.h"
+#include "target/ProcessSpeakerProvider.h"
 #include "target/ProcessTargetDetector.h"
 #include "ui/MainWindow.h"
 #include "ui/ViewerWidget.h"
@@ -109,6 +110,20 @@ int main(int argc, char *argv[])
             QStringList{ detectorScript, QStringLiteral("--model"),
                          detectorModel });
         application.setTargetDetector(commandDetector.get());
+    }
+
+    // Optional external speaker/audio provider for speaker commands ("follow
+    // the speaker"). The VAD model/runtime also stay external and replaceable.
+    std::unique_ptr<SpeakerEvidenceProvider> speakerProvider;
+    const QString speakerPython = qEnvironmentVariable("REELCRAFT_SPEAKER_PY");
+    const QString speakerScript = qEnvironmentVariable("REELCRAFT_SPEAKER_SCRIPT");
+    const QString sileroModel = qEnvironmentVariable("REELCRAFT_SILERO_MODEL");
+    if (!speakerPython.isEmpty() && !speakerScript.isEmpty()
+        && !sileroModel.isEmpty()) {
+        speakerProvider = std::make_unique<ProcessSpeakerProvider>(
+            speakerPython,
+            QStringList{ speakerScript, QStringLiteral("--model"), sileroModel });
+        application.setSpeakerEvidenceProvider(speakerProvider.get());
     }
 
     return app.exec();
