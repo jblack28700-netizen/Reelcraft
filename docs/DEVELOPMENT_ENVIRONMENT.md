@@ -225,3 +225,16 @@ Verified result on this device: application and test builds succeed; full suite 
 
 The `bash` tool is unavailable in this environment (the workspace-write bwrap sandbox backend cannot start). Builds/tests were run through the in-process code runtime with detached background processes. See KNOWN_ISSUES.md.
 
+## Optional Detector/Appearance Helper Runtimes — 2026-09-17
+
+The real target-detection and appearance helpers are optional and external; the C++ build links none of these runtimes, and the model-free unit suite requires none of them.
+
+- **Detection helper** (`tools/detector_helper/`): Python 3 + OpenCV 4.10 (`python3-opencv`, `python3-numpy`); YOLOX ONNX weights.
+- **Appearance helper** (`tools/appearance_helper/`): Python 3 + ONNX Runtime 1.23 (`python3-onnxruntime`); ReID ONNX weights.
+- **Model weights** (downloaded, not committed, under `~/.cache/reelcraft/models/`):
+  - `yolox_2022nov.onnx` — OpenCV Zoo YOLOX (Apache-2.0), person/object detection.
+  - `reid_0277.onnx` — OpenVINO OMZ `person-reidentification-retail-0277` (Apache-2.0), 256-d appearance embedding.
+- **Environment variables:** `REELCRAFT_FFMPEG`; detector: `REELCRAFT_TARGET_DETECTOR_PY`, `REELCRAFT_TARGET_DETECTOR_SCRIPT`, `REELCRAFT_TARGET_YOLOX_MODEL`, `REELCRAFT_TARGET_CLIP`, `REELCRAFT_TARGET_OUTPUT`; appearance: `REELCRAFT_REID_PY`, `REELCRAFT_REID_SCRIPT`, `REELCRAFT_REID_MODEL`.
+- **GPU:** inference is CPU-only in this environment; the helpers can select CUDA/other backends later (RunPod) without changing the C++ core.
+- Install examples and licensing records live in `tools/detector_helper/README.md` and `tools/appearance_helper/README.md`; the technology evaluation is in `docs/TARGET_RESOLUTION_TECHNOLOGY.md`.
+

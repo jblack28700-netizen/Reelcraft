@@ -195,3 +195,28 @@ invocation (process-per-view) is intentionally unoptimized.
 - **Future seam:** appearance/embedding re-identification and audio-visual
   speaker association can extend `IdentityBinding` without changing the
   detector, geometry, planner, or renderer.
+
+## 12. Appearance-Based Re-Identification (2026-09-17, Objective 5)
+
+- **Interface:** `AppearanceProvider` + `ProcessAppearanceProvider` (external
+  file/JSON helper); `TargetCropExtractor` renders a deterministic crop with the
+  existing `EquirectView` projection.
+- **Evidence:** `AppearanceEmbedding` (unit L2 vector), cosine similarity,
+  explicit accept/reject thresholds (defaults 0.75 / 0.55), `AppearanceVerdict`
+  and `AppearanceEvidence`; temporal aggregation = element-wise mean then
+  normalize. Verdicts distinguish agreement, disagreement, weak/ambiguous
+  evidence, and unavailability.
+- **Identity integration:** `IdentityReidentifier` + structured
+  `TargetIdentityRegistry` decisions. Precedence: explicit creator selection /
+  active binding > valid tracker continuity > unique geometric continuation
+  (appearance confirms or vetoes) > appearance-only re-acquisition (exactly one
+  strong candidate) > unresolved/ambiguous.
+- **Model selected:** OpenVINO Open Model Zoo
+  `person-reidentification-retail-0277` (256-d; Apache-2.0 code and weights;
+  internal training data). Runtime: ONNX Runtime (MIT). See
+  `tools/appearance_helper/README.md`.
+- **Rejected (weights-license concerns):** OpenCV Zoo YoutuReID (unlicensed
+  weight source, research datasets), OSNet/torchreid pretrained weights,
+  Ultralytics YOLO (AGPL-3.0).
+- **Limitations:** appearance similarity, not biometric identity; thresholds are
+  domain dependent; CPU; process-per-crop; no speaker/audio association.

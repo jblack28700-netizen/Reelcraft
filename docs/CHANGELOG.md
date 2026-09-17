@@ -572,4 +572,14 @@ Date: 2026-09-17
 - "Me" is geometric identity, not biometric; it does not re-identify after long absence or among similar people. Speaker association and appearance re-identification remain future work.
 - 21 new model-free tests; full suite 240 passed, 0 failed, 1 skipped. Decision 021 recorded; Decisions 017-020 preserved.
 
+## v0.2.42 — Appearance-Based Re-Identification
+
+Date: 2026-09-17
+
+- Added an optional, replaceable appearance/re-identification layer: `AppearanceProvider` + `ProcessAppearanceProvider` (external helper, no ML runtime linked into the C++ core), `AppearanceTypes` (unit embeddings, cosine similarity, explicit accept/reject thresholds, structured `AppearanceVerdict` evidence), `TargetCropExtractor` (deterministic crop via `EquirectView`), and `IdentityReidentifier` (documented precedence: explicit selection > tracker continuity > unique geometric continuation confirmed/vetoed by appearance > appearance-only re-acquisition > unresolved).
+- Extended `TargetIdentityRegistry` with structured appearance profiles and decisions; appearance-vetoed tracks cannot be silently re-accepted by geometry.
+- Selected a permissively licensed model for real validation: OpenVINO OMZ `person-reidentification-retail-0277` (Apache-2.0 code and weights, internal training data) via ONNX Runtime. Rejected OpenCV Zoo YoutuReID (unlicensed weight source, research datasets) and OSNet/torchreid weights.
+- 24 new model-free tests; full suite 264 passed, 0 failed, 1 skipped. Decision 022 recorded; Decisions 017-021 preserved.
+- Not implemented: active-speaker/audio-visual association, GPU optimization, UI integration, biometric face recognition.
+
 

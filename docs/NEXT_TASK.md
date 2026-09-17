@@ -211,8 +211,29 @@ Represent a creator-selected target ("me") as structured data, distinguish it de
 ### Not implemented
 Speaker/active-speaker association; appearance/embedding re-identification; open-vocabulary classes; GPU/RunPod inference.
 
-## Next Objective (360 Reframing Objective 5) — NOT STARTED
+## 360 Reframing Objective 5 — Appearance-Based Re-Identification — Complete
 
-Evidence and appearance-based identity: add optional active-speaker/audio-visual association and a replaceable appearance/embedding re-identification seam behind the existing `IdentityBinding`, so "me" can be re-acquired after long absence and among similar people. Requires its own scoped objective; keep any model optional and the unit suite model-free.
+Status: **Complete — implemented and verified (2026-09-17).**
+
+### Objective
+Add an optional, replaceable visual-appearance layer that strengthens the creator identity when geometry is insufficient, without coupling the core to a model runtime or claiming biometric identity.
+
+### Scope (implemented)
+- `app/target/AppearanceTypes.{h,cpp}`: embeddings, math, profile, structured evidence/verdicts, JSON.
+- `app/target/AppearanceProvider.h`, `ProcessAppearanceProvider.{h,cpp}`: optional external helper boundary.
+- `app/target/TargetCropExtractor.{h,cpp}`: deterministic crop via `EquirectView`.
+- `app/target/IdentityReidentifier.{h,cpp}`: profile maintenance + precedence policy.
+- `TargetIdentityRegistry` appearance extensions (profile storage, re-bind, annotate, veto).
+- Optional real helper `tools/appearance_helper/` with a permissively licensed model.
+
+### Precedence
+Explicit creator selection / active binding > valid tracker continuity > unique geometric continuation (appearance confirms or vetoes) > appearance-only single-strong re-acquisition > unresolved/ambiguous. Appearance never overrides an explicit selection; a disagreement yields unresolved, never a silent swap.
+
+### Not implemented
+Active-speaker/audio-visual association; GPU/CUDA optimization; UI integration; face recognition/biometric identity (explicitly out of scope).
+
+## Next Objective (360 Reframing Objective 6) — NOT STARTED
+
+Active-speaker / audio-visual association: use audio evidence to identify the speaking person and feed it into the existing identity/selection layer, while keeping audio models optional and the unit suite model-free. Requires its own scoped objective.
 
 

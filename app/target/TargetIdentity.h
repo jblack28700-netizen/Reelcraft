@@ -5,6 +5,7 @@
 #include <QString>
 #include <QStringList>
 
+#include "target/AppearanceTypes.h"
 #include "target/TargetTypes.h"
 
 // 360 Reframing Objective 4 — structured creator-target identity.
@@ -48,8 +49,15 @@ struct IdentityBinding
     QString targetId;
     qint64 boundAtMs = 0;
     QString method; // "seed-direction" | "track-id" | "continuity-rebind"
+                    // | "appearance-rebind"
     double distanceDeg = -1.0;
     bool resolved = false;
+    // Appearance evidence annotation (optional; -1 = no evidence).
+    double appearanceSimilarity = -1.0;
+    QString appearanceVerdict; // "agree" | "disagree" | "weak" | "ambiguous"
+    // Targets that appearance evidence has vetoed for this identity; geometric
+    // re-binding must not silently re-accept them.
+    QStringList rejectedTargetIds;
 
     QJsonObject toJsonObject() const;
     static bool readFromJsonObject(const QJsonObject &object, IdentityBinding *out,
@@ -110,6 +118,29 @@ public:
     QStringList identities() const;
     const QStringList &notes() const;
 
+    // --- appearance evidence (Objective 5) ---------------------------------
+    // Stores the appearance reference used for re-acquisition. The registry
+    // remains free of media/model concerns: appearance inference happens in an
+    // external AppearanceProvider orchestrated by IdentityReidentifier.
+    void setAppearanceProfile(const QString &identity,
+                              const AppearanceProfile &profile);
+    const AppearanceProfile *appearanceProfile(const QString &identity) const;
+    bool hasAppearanceProfile(const QString &identity) const;
+
+    // Re-binds an identity to a new track based on appearance evidence.
+    bool rebindWithAppearance(const QString &identity, const QString &targetId,
+                              double similarity, const QString &detail,
+                              QString *error = nullptr);
+    // Records appearance evidence without changing resolution.
+    void annotateAppearance(const QString &identity, double similarity,
+                            AppearanceVerdict verdict, const QString &detail);
+    // Marks an identity unresolved with a reason, preserving the last target.
+    void markUnresolved(const QString &identity, const QString &reason);
+    // Vetoes a specific track for an identity (appearance conflict) and marks
+    // the identity unresolved. Geometric re-binding will not re-accept it.
+    void rejectTarget(const QString &identity, const QString &targetId,
+                      const QString &reason);
+
     QJsonObject toJsonObject() const;
     bool readFromJsonObject(const QJsonObject &object, QString *error = nullptr);
 
@@ -121,5 +152,6 @@ private:
 
     Config m_config;
     QList<IdentityBinding> m_bindings;
+    QList<AppearanceProfile> m_appearanceProfiles;
     QStringList m_notes;
 };

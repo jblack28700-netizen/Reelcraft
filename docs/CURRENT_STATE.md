@@ -2,7 +2,7 @@
 
 ## Current Version
 
-0.2.41
+0.2.42
 
 ## Current Branch
 
@@ -10,7 +10,7 @@ main
 
 ## Current Stage
 
-Phase 4 — 360 Reframing Engine (deterministic vertical slice), Target/Subject Resolution, real detector integration, and structured target identity/selection implemented and verified. Phase 3 Media Engine remains open; its player-lifecycle objective is intentionally superseded for now by the human-approved 360 priority.
+Phase 4 — 360 Reframing Engine (deterministic vertical slice), Target/Subject Resolution, real detector integration, structured target identity/selection, and optional appearance-based re-identification implemented and verified. Phase 3 Media Engine remains open; its player-lifecycle objective is intentionally superseded for now by the human-approved 360 priority.
 
 ## Project Status
 
@@ -81,7 +81,7 @@ Status: Partially implemented — deterministic reframing vertical slice complet
 
 Status: Implemented and continuously verified.
 
-A Qt Test suite covers project state, viewer/media, the media-source seam and frame pump, player/timing, the 360 reframing engine (plan validation/round-trip, camera interpolation, rendering determinism, intent parsing, plan building, and a real FFmpeg end-to-end render), and target resolution (equirect/view geometry, seam and pitch boundaries, view coverage, deterministic tracking, resolver behavior, the subprocess detector protocol, the track planner, and a model-free detection -> plan -> render path). Current result: 240 passed, 0 failed, 1 skipped (~42 s). The single skip is the real-detector integration test, which runs only when a detector helper, model, and clip are configured; the normal suite stays model-free.
+A Qt Test suite covers project state, viewer/media, the media-source seam and frame pump, player/timing, the 360 reframing engine (plan validation/round-trip, camera interpolation, rendering determinism, intent parsing, plan building, and a real FFmpeg end-to-end render), and target resolution (equirect/view geometry, seam and pitch boundaries, view coverage, deterministic tracking, resolver behavior, the subprocess detector protocol, the track planner, and a model-free detection -> plan -> render path). Current result: 264 passed, 0 failed, 1 skipped (~45 s). The single skip is the real-detector integration test, which runs only when a detector helper, model, and clip are configured; the normal suite stays model-free.
 
 ## Technology Direction
 
@@ -956,7 +956,24 @@ Verification (real footage, `360_TEST_4K.mp4`, proxy; original untouched):
 
 Architecture decision: Decision 021 records identity representation, selection semantics, and the future appearance/re-ID seam.
 
-Next: speaker/active-speaker association and appearance-based re-identification (`NEXT_TASK.md` Objective 5).
+## Phase 4 Objective 5 — Appearance-Based Re-Identification — Complete
+
+Status: Complete (2026-09-17). Optional, replaceable visual-appearance layer; no speaker/audio association, no GPU optimization, no UI.
+
+- Added `app/target/AppearanceTypes.{h,cpp}`: `AppearanceEmbedding` (unit L2 vector), `AppearanceMath` (normalize/cosine/aggregate), `AppearanceProfile`, and `AppearanceEvidence` with an explicit `AppearanceVerdict` (Unavailable/Agree/Disagree/Weak/Ambiguous); all JSON-serializable.
+- Added `AppearanceProvider` + `ProcessAppearanceProvider`: an external file/JSON helper boundary; the C++ core links no ML runtime.
+- Added `TargetCropExtractor`: a deterministic crop from the target direction/angular extent via the existing `EquirectView`.
+- Added `IdentityReidentifier`: maintains an appearance profile for a bound identity and applies the documented precedence (explicit selection / active binding > tracker continuity > unique geometric continuation confirmed or vetoed by appearance > appearance-only single-strong re-acquisition > unresolved/ambiguous).
+- Extended `TargetIdentityRegistry` with structured appearance-profile storage and decisions (`setAppearanceProfile`, `rebindWithAppearance`, `annotateAppearance`, `markUnresolved`, `rejectTarget`); appearance-vetoed tracks are recorded so geometry cannot silently re-accept them.
+- Fully optional: with no provider, behavior is exactly geometry-only, and `AppearanceProvider` may be null.
+
+Verification:
+- 24 new model-free tests; full model-free suite 264 passed, 0 failed, 1 skipped.
+- Real footage (proxy; original untouched): real embeddings agree for the same presenter and disagree for the other; a controlled tracker gap plus a returning candidate is re-acquired by appearance through the existing selection/plan/render path.
+- Model: OpenVINO OMZ `person-reidentification-retail-0277` (Apache-2.0 code and weights, internal training data) via ONNX Runtime; see `tools/appearance_helper/README.md`.
+- Architecture decision: Decision 022.
+
+Next: active-speaker/audio-visual association, then GPU optimization and UI integration.
 
 
 

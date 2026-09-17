@@ -290,6 +290,28 @@ Add an optional, replaceable appearance/embedding re-identification seam behind 
 
 ---
 
+# Issue — Appearance re-identification is similarity-based, not biometric (2026-09-17)
+
+### Status
+
+Open — intentional boundary; not a defect.
+
+### Description
+
+The appearance layer uses a person re-identification embedding (OpenVINO OMZ `person-reidentification-retail-0277`) and cosine similarity with configurable accept (0.75) and reject (0.55) thresholds. It supports bounded re-acquisition and can veto an unjustified geometric identity transfer, but it is not face recognition and does not provide biometric certainty. Thresholds are domain dependent and may need retuning for different footage.
+
+Weight licensing was checked explicitly: the OMZ model is Apache-2.0 for code and weights and trained on an internal dataset. OpenCV Zoo's `person_reid_youtureid` weights come from an unlicensed source trained on Market1501/DukeMTMC/MSMT17 and were rejected; OSNet/torchreid pretrained weights have the same research-dataset concern.
+
+### Impact
+
+After a long absence, a strong appearance match is required to re-acquire "me"; weak or conflicting evidence (including geometry/appearance disagreement) leaves the identity unresolved rather than guessing. In crowded or appearance-similar scenes, re-acquisition may remain unresolved.
+
+### Planned Resolution
+
+Keep the appearance provider replaceable; add active-speaker/audio-visual association and, separately, evaluate stronger appearance models and GPU inference behind the same interface.
+
+---
+
 # Issue Management Rules
 
 For each future issue:

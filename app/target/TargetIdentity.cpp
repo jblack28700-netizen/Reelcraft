@@ -145,6 +145,17 @@ QJsonObject IdentityBinding::toJsonObject() const
     object.insert(QStringLiteral("method"), method);
     object.insert(QStringLiteral("distanceDeg"), distanceDeg);
     object.insert(QStringLiteral("resolved"), resolved);
+    object.insert(QStringLiteral("appearanceSimilarity"), appearanceSimilarity);
+    if (!appearanceVerdict.isEmpty()) {
+        object.insert(QStringLiteral("appearanceVerdict"), appearanceVerdict);
+    }
+    if (!rejectedTargetIds.isEmpty()) {
+        QJsonArray rejected;
+        for (const QString &id : rejectedTargetIds) {
+            rejected.append(id);
+        }
+        object.insert(QStringLiteral("rejectedTargetIds"), rejected);
+    }
     return object;
 }
 
@@ -176,6 +187,19 @@ bool IdentityBinding::readFromJsonObject(const QJsonObject &object,
     binding.boundAtMs = static_cast<qint64>(boundValue.toDouble());
     binding.distanceDeg = distanceValue.toDouble();
     binding.resolved = object.value(QStringLiteral("resolved")).toBool(false);
+    binding.appearanceSimilarity =
+        object.value(QStringLiteral("appearanceSimilarity")).toDouble(-1.0);
+    binding.appearanceVerdict =
+        object.value(QStringLiteral("appearanceVerdict")).toString();
+    const QJsonValue rejectedValue =
+        object.value(QStringLiteral("rejectedTargetIds"));
+    if (rejectedValue.isArray()) {
+        for (const QJsonValue &value : rejectedValue.toArray()) {
+            if (value.isString()) {
+                binding.rejectedTargetIds.append(value.toString());
+            }
+        }
+    }
     *out = binding;
     return true;
 }
@@ -188,6 +212,7 @@ TargetIdentityRegistry::TargetIdentityRegistry(Config config)
 void TargetIdentityRegistry::reset()
 {
     m_bindings.clear();
+    m_appearanceProfiles.clear();
     m_notes.clear();
 }
 
@@ -426,7 +451,9 @@ QStringList TargetIdentityRegistry::update(const QList<TargetTrack> &tracks,
             }
         }
 
-        const bool currentlyResolved = track && !track->isEmpty() && track->active();
+        const bool currentlyResolved = track && !track->isEmpty()
+            && track->active()
+            && !binding.rejectedTargetIds.contains(binding.targetId);
         if (currentlyResolved) {
             binding.resolved = true;
             if (!wasResolved) {
@@ -471,6 +498,9 @@ QStringList TargetIdentityRegistry::update(const QList<TargetTrack> &tracks,
                     continue;
                 }
                 if (trackClaimedByOther(candidate.id(), binding.identity)) {
+                    continue;
+                }
+                if (binding.rejectedTargetIds.contains(candidate.id())) {
                     continue;
                 }
                 Rebind rebind;
@@ -566,14 +596,145 @@ const QStringList &TargetIdentityRegistry::notes() const
     return m_notes;
 }
 
+void TargetIdentityRegistry::setAppearanceProfile(
+    const QString &identity, const AppearanceProfile &profile)
+{
+    const QString normalized = normalizeIdentity(identity);
+    AppearanceProfile copy = profile;
+    copy.identity = normalized;
+    for (int i = 0; i < m_appearanceProfiles.size(); ++i) {
+        if (m_appearanceProfiles.at(i).identity == normalized) {
+            m_appearanceProfiles[i] = copy;
+            return;
+        }
+    }
+    m_appearanceProfiles.append(copy);
+}
+
+const AppearanceProfile *TargetIdentityRegistry::appearanceProfile(
+    const QString &identity) const
+{
+    const QString normalized = normalizeIdentity(identity);
+    for (const AppearanceProfile &profile : m_appearanceProfiles) {
+        if (profile.identity == normalized) {
+            return &profile;
+        }
+    }
+    return nullptr;
+}
+
+bool TargetIdentityRegistry::hasAppearanceProfile(const QString &identity) const
+{
+    return appearanceProfile(identity) != nullptr;
+}
+
+bool TargetIdentityRegistry::rebindWithAppearance(
+    const QString &identity, const QString &targetId, double similarity,
+    const QString &detail, QString *error)
+{
+    if (error) {
+        error->clear();
+    }
+    const QString normalized = normalizeIdentity(identity);
+    IdentityBinding *binding = bindingFor(normalized);
+    if (!binding) {
+        if (error) {
+            *error = QStringLiteral("Identity '%1' has no binding.").arg(normalized);
+        }
+        return false;
+    }
+    if (targetId.isEmpty()) {
+        if (error) {
+            *error = QStringLiteral("Appearance re-bind requires a target id.");
+        }
+        return false;
+    }
+    if (trackClaimedByOther(targetId, normalized)) {
+        if (error) {
+            *error = QStringLiteral(
+                "Track %1 is already bound to another identity.").arg(targetId);
+        }
+        return false;
+    }
+    binding->targetId = targetId;
+    binding->method = QStringLiteral("appearance-rebind");
+    binding->resolved = true;
+    binding->appearanceSimilarity = similarity;
+    binding->appearanceVerdict =
+        appearanceVerdictToString(AppearanceVerdict::Agree);
+    binding->rejectedTargetIds.removeAll(targetId);
+    m_notes.append(QStringLiteral(
+        "Identity '%1' re-acquired track %2 by appearance (%3). %4")
+                       .arg(normalized, targetId)
+                       .arg(similarity, 0, 'f', 3)
+                       .arg(detail));
+    return true;
+}
+
+void TargetIdentityRegistry::annotateAppearance(const QString &identity,
+                                                double similarity,
+                                                AppearanceVerdict verdict,
+                                                const QString &detail)
+{
+    IdentityBinding *binding = bindingFor(identity);
+    if (!binding) {
+        return;
+    }
+    binding->appearanceSimilarity = similarity;
+    binding->appearanceVerdict = appearanceVerdictToString(verdict);
+    if (!detail.isEmpty()) {
+        m_notes.append(QStringLiteral("Identity '%1' appearance: %2")
+                           .arg(binding->identity, detail));
+    }
+}
+
+void TargetIdentityRegistry::markUnresolved(const QString &identity,
+                                            const QString &reason)
+{
+    IdentityBinding *binding = bindingFor(identity);
+    if (!binding) {
+        return;
+    }
+    binding->resolved = false;
+    if (!reason.isEmpty()) {
+        m_notes.append(QStringLiteral("Identity '%1' unresolved: %2")
+                           .arg(binding->identity, reason));
+    }
+}
+
+void TargetIdentityRegistry::rejectTarget(const QString &identity,
+                                          const QString &targetId,
+                                          const QString &reason)
+{
+    IdentityBinding *binding = bindingFor(identity);
+    if (!binding) {
+        return;
+    }
+    if (!targetId.isEmpty() && !binding->rejectedTargetIds.contains(targetId)) {
+        binding->rejectedTargetIds.append(targetId);
+    }
+    if (binding->targetId == targetId) {
+        binding->resolved = false;
+    }
+    if (!reason.isEmpty()) {
+        m_notes.append(QStringLiteral("Identity '%1' rejected track %2: %3")
+                           .arg(binding->identity, targetId, reason));
+    }
+}
+
 QJsonObject TargetIdentityRegistry::toJsonObject() const
 {
     QJsonArray array;
     for (const IdentityBinding &binding : m_bindings) {
         array.append(binding.toJsonObject());
     }
+    QJsonArray profiles;
+    for (const AppearanceProfile &profile : m_appearanceProfiles) {
+        profiles.append(profile.toJsonObject());
+    }
     QJsonObject object;
     object.insert(QStringLiteral("bindings"), array);
+    object.insert(QStringLiteral("appearanceProfiles"), profiles);
     return object;
 }
 
@@ -609,6 +770,25 @@ bool TargetIdentityRegistry::readFromJsonObject(const QJsonObject &object,
         bindings.append(binding);
     }
     m_bindings = bindings;
+    m_appearanceProfiles.clear();
+    const QJsonValue profilesValue =
+        object.value(QStringLiteral("appearanceProfiles"));
+    if (profilesValue.isArray()) {
+        for (const QJsonValue &value : profilesValue.toArray()) {
+            if (!value.isObject()) {
+                return fail(QStringLiteral(
+                    "Appearance profile entry is not an object."));
+            }
+            AppearanceProfile profile;
+            QString profileError;
+            if (!AppearanceProfile::readFromJsonObject(value.toObject(), &profile,
+                                                       &profileError)) {
+                return fail(profileError);
+            }
+            profile.identity = normalizeIdentity(profile.identity);
+            m_appearanceProfiles.append(profile);
+        }
+    }
     m_notes.clear();
     return true;
 }

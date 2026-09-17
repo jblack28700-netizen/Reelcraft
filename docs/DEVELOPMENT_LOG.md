@@ -1166,6 +1166,49 @@ Real detection/tracking existed (Objective 3) but there was no structured creato
 
 - Decision 021 recorded. Decisions 017-020 preserved unchanged.
 
+---
+
+# 2026-09-17 — 360 Reframing Objective 5: Appearance-Based Re-Identification
+
+### Context
+
+Identity was geometric only (Decision 021), so a person could not be re-acquired after a long absence or among similar people. The objective was an optional, replaceable appearance layer that strengthens the creator identity without coupling the C++ core to a model runtime and without claiming biometric identity.
+
+### Research and licensing
+
+- Selected OpenVINO Open Model Zoo `person-reidentification-retail-0277` (ONNX `person-reidentification-retail-0265.onnx`, 256-d, input 256x128 BGR 0-255): code and weights **Apache-2.0**, trained on an internal dataset. Runtime: ONNX Runtime (MIT).
+- Rejected: OpenCV Zoo `person_reid_youtureid` (directory LICENSE is Apache-2.0 but the weights come from the unlicensed `ReID-Team/ReID_extra_testdata`, trained on Market1501/DukeMTMC/MSMT17); OSNet/torchreid pretrained weights (research-dataset provenance); Ultralytics YOLO (AGPL-3.0).
+- Verified the ReID ONNX discrimination on real crops: same presenter cosine ~0.97, different presenter ~0.51.
+
+### Work completed
+
+- `app/target/AppearanceTypes.{h,cpp}`: `AppearanceEmbedding` (unit L2), `AppearanceMath` (normalize/cosine/aggregate), `AppearanceProfile`, `AppearanceEvidence`, explicit `AppearanceVerdict`; JSON round-trip.
+- `app/target/AppearanceProvider.h` + `ProcessAppearanceProvider.{h,cpp}`: external file/JSON helper; fail-safe on missing executable/model, non-zero exit, timeout, malformed output, or wrong embedding dimension. No ML runtime linked.
+- `app/target/TargetCropExtractor.{h,cpp}`: deterministic crop via the existing `EquirectView`.
+- `app/target/IdentityReidentifier.{h,cpp}`: profile maintenance and the documented precedence (explicit/active binding > tracker continuity > unique geometric continuation confirmed/vetoed by appearance > appearance-only single-strong re-acquisition > unresolved/ambiguous).
+- `TargetIdentityRegistry` extensions: appearance profile storage and structured decisions (`setAppearanceProfile`, `rebindWithAppearance`, `annotateAppearance`, `markUnresolved`, `rejectTarget`); vetoed tracks cannot be silently re-accepted by geometry.
+- Optional helper `tools/appearance_helper/reid_onnx_helper.py` + README with the full licensing record.
+- 24 model-free tests; real integration test extended with appearance agreement/discrimination and a controlled re-acquisition.
+
+### Failure recovery
+
+- A `-j4` compile crashed under memory pressure and left a corrupt `AppearanceTypes.o` (656 bytes, no symbols) that `make` reused, causing link-time undefined references. Fixed with `make clean` and a serial `-j1` rebuild.
+- The real integration test initially checked the appearance profile under the track id (`t1`) instead of the identity key (`me`); corrected to `TargetIdentityRegistry::creatorIdentity()`.
+
+### Verification
+
+- Model-free suite: 264 passed, 0 failed, 1 skipped (~45 s). New tests cover embedding JSON/invalidity, normalization/similarity, aggregation, verdict/evidence/profile JSON, process provider parse/execute/failure modes, crop determinism, registry profile/veto/re-bind, and the strong/weak/ambiguous/wrong-person/conflict/precedence/missing-provider/provider-failure/determinism re-identification cases.
+- Real-footage integration (proxy; original untouched): real embeddings agree for the same presenter and disagree for the other; a controlled tracker gap plus a returning candidate is re-acquired by appearance and fed through identification -> `ReframePlan` -> render.
+
+### Boundary notes
+
+- Appearance is not biometric identity; it supports bounded re-acquisition and can veto a geometric transfer, but never overrides an explicit creator selection.
+- No active-speaker/audio-visual association, GPU optimization, or UI integration.
+
+### Decisions
+
+- Decision 022 recorded. Decisions 017-021 preserved unchanged.
+
 
 
 

@@ -47,6 +47,11 @@
 #include "target/EquirectViewPlan.h"
 #include "target/ProcessTargetDetector.h"
 #include "target/SphericalTargetTracker.h"
+#include "target/AppearanceProvider.h"
+#include "target/AppearanceTypes.h"
+#include "target/IdentityReidentifier.h"
+#include "target/ProcessAppearanceProvider.h"
+#include "target/TargetCropExtractor.h"
 #include "target/TargetDetector.h"
 #include "target/TargetIdentity.h"
 #include "target/TargetResolver.h"
@@ -1008,6 +1013,30 @@ private slots:
     void targetSelectorTrackIdAndUniqueLabel();
     void targetSelectorIsDeterministic();
     void targetSelectorResolvedTargetsFeedsReframePlanBuilder();
+    void appearanceEmbeddingJsonRoundTrip();
+    void appearanceEmbeddingRejectsInvalid();
+    void appearanceNormalizeAndCosine();
+    void appearanceAggregateAveragesAndNormalizes();
+    void appearanceVerdictAndEvidenceJson();
+    void appearanceProfileJsonRoundTrip();
+    void appearanceProcessParseResponse();
+    void appearanceProcessRunsHelper();
+    void appearanceProcessFailsOnMissingExecutable();
+    void appearanceProcessFailsOnBadExit();
+    void appearanceTargetCropIsDeterministic();
+    void appearanceRegistryProfileAndJson();
+    void appearanceRegistryRejectPreventsGeometricRebind();
+    void appearanceRegistryRebindWithAppearance();
+    void appearanceReidentifierStrongReacquire();
+    void appearanceReidentifierWeakMatchStaysUnresolved();
+    void appearanceReidentifierAmbiguousCandidates();
+    void appearanceReidentifierWrongPersonRejected();
+    void appearanceReidentifierGeometryAppearanceConflict();
+    void appearanceReidentifierExplicitSelectionPrecedence();
+    void appearanceReidentifierMissingProvider();
+    void appearanceReidentifierProviderFailure();
+    void appearanceReidentifierCandidateOrderDeterministic();
+    void appearanceReidentifierGeometryConfirmsAppearance();
 };
 
 void ProjectTest::initTestCase()
@@ -6838,6 +6867,127 @@ void ProjectTest::realDetectorIntegration()
     }
     QVERIFY(track.size() >= 2);
 
+    // --- Real appearance-based re-identification (Objective 5) --------------
+    TargetTrack returnedTrack;
+    const TargetTrack *finalTrack = &track;
+    const QString reidPython = qEnvironmentVariable("REELCRAFT_REID_PY");
+    const QString reidScript = qEnvironmentVariable("REELCRAFT_REID_SCRIPT");
+    const QString reidModel = qEnvironmentVariable("REELCRAFT_REID_MODEL");
+    if (!reidPython.isEmpty() && !reidScript.isEmpty() && !reidModel.isEmpty()) {
+        ProcessAppearanceProvider appearance(
+            reidPython, { reidScript, QStringLiteral("--model"), reidModel });
+        appearance.setExpectedDimension(256);
+        IdentityReidentifier reidentifier;
+        const QString creatorKey = TargetIdentityRegistry::creatorIdentity();
+
+        const IdentityReidentifier::Result profileResult =
+            reidentifier.reidentify(&registry, tracks, &provider, &appearance,
+                                    timestamps.last());
+        for (const QString &note : profileResult.notes) {
+            qInfo("  appearance note: %s", qPrintable(note));
+        }
+        QVERIFY2(registry.hasAppearanceProfile(creatorKey),
+                 qPrintable(profileResult.notes.join(QStringLiteral("; "))));
+
+        QImage appearanceFrame;
+        QVERIFY2(provider.frameAt(timestamps.last(), &appearanceFrame, &error),
+                 qPrintable(error));
+        TargetObservation meObservation;
+        QVERIFY(track.representative(&meObservation));
+        QImage meCrop;
+        QVERIFY2(TargetCropExtractor::crop(
+                     appearanceFrame, meObservation.yawDeg, meObservation.pitchDeg,
+                     meObservation.yawRadiusDeg, meObservation.pitchRadiusDeg,
+                     TargetCropExtractor::Config{}, &meCrop, &error),
+                 qPrintable(error));
+        AppearanceEmbedding meEmbedding;
+        QVERIFY2(appearance.encode(meCrop, meId, timestamps.last(), &meEmbedding,
+                                   &error),
+                 qPrintable(error));
+        double sameSimilarity = 0.0;
+        QVERIFY2(AppearanceMath::cosineSimilarity(
+                     registry.appearanceProfile(creatorKey)->reference, meEmbedding,
+                     &sameSimilarity, &error),
+                 qPrintable(error));
+
+        const TargetSelectionResult secondSelection =
+            TargetSelector::select(QStringLiteral("person 2"), tracks, registry);
+        double otherSimilarity = -1.0;
+        const TargetTrack *secondTrack = nullptr;
+        if (secondSelection.resolved) {
+            for (const TargetTrack &candidate : tracks) {
+                if (candidate.id() == secondSelection.targetId) {
+                    secondTrack = &candidate;
+                }
+            }
+        }
+        if (secondTrack) {
+            TargetObservation secondObservation;
+            secondTrack->representative(&secondObservation);
+            QImage secondCrop;
+            if (TargetCropExtractor::crop(
+                    appearanceFrame, secondObservation.yawDeg,
+                    secondObservation.pitchDeg, secondObservation.yawRadiusDeg,
+                    secondObservation.pitchRadiusDeg, TargetCropExtractor::Config{},
+                    &secondCrop, &error)) {
+                AppearanceEmbedding secondEmbedding;
+                if (appearance.encode(secondCrop, secondSelection.targetId,
+                                      timestamps.last(), &secondEmbedding, &error)) {
+                    AppearanceMath::cosineSimilarity(
+                        registry.appearanceProfile(creatorKey)->reference,
+                        secondEmbedding, &otherSimilarity, &error);
+                }
+            }
+        }
+        qInfo("appearance: same-person=%.3f other-person=%.3f", sameSimilarity,
+              otherSimilarity);
+        QVERIFY2(sameSimilarity >= 0.75,
+                 "appearance did not agree with the same presenter");
+        if (otherSimilarity >= 0.0) {
+            QVERIFY2(otherSimilarity < 0.75,
+                     "appearance did not discriminate the other presenter");
+        }
+
+        // Controlled re-acquisition: a tracker gap beyond the geometric window
+        // gives the returning presenter a new id while the other presenter is
+        // still present. Appearance must re-acquire the correct person.
+        TargetIdentityRegistry::Config gapConfig = registry.config();
+        gapConfig.rebindWindowMs = 0;
+        registry.setConfig(gapConfig);
+        const qint64 returningTimeMs = timestamps.last() + 1;
+        returnedTrack = TargetTrack(QStringLiteral("t100"), QStringLiteral("person"));
+        TargetObservation returningObservation = makeTargetObservation(
+            returningTimeMs, meObservation.yawDeg, meObservation.pitchDeg,
+            QStringLiteral("person"), 0.92, QStringLiteral("t100"));
+        // Match the original detection's angular extent so the appearance crop
+        // uses the same framing as the profile.
+        returningObservation.yawRadiusDeg = meObservation.yawRadiusDeg;
+        returningObservation.pitchRadiusDeg = meObservation.pitchRadiusDeg;
+        returnedTrack.append(returningObservation);
+        returnedTrack.setActive(true);
+        TargetTrack inactiveMe = track;
+        inactiveMe.setActive(false);
+        QList<TargetTrack> gapTracks;
+        gapTracks.append(inactiveMe);
+        gapTracks.append(returnedTrack);
+        if (secondTrack) {
+            gapTracks.append(*secondTrack);
+        }
+        const IdentityReidentifier::Result reacquired =
+            reidentifier.reidentify(&registry, gapTracks, &provider, &appearance,
+                                    returningTimeMs);
+        qInfo("appearance re-acquisition: resolved=%d target=%s",
+              registry.isResolved(creatorKey) ? 1 : 0,
+              qPrintable(registry.targetId(creatorKey)));
+        for (const QString &note : reacquired.notes) {
+            qInfo("  reappearance note: %s", qPrintable(note));
+        }
+        QVERIFY2(registry.isResolved(creatorKey),
+                 qPrintable(reacquired.notes.join(QStringLiteral("; "))));
+        QCOMPARE(registry.targetId(creatorKey), QStringLiteral("t100"));
+        finalTrack = &returnedTrack;
+    }
+
     ReframePlan plan;
     QString planError;
     TargetTrackPlanner::Config plannerConfig;
@@ -6845,7 +6995,7 @@ void ProjectTest::realDetectorIntegration()
     plannerConfig.maxKeyframes = 12;
     plannerConfig.minConfidence = 0.35;
     QVERIFY2(TargetTrackPlanner::planTrack(
-                 track, ReframePlan::TimeRange{ timestamps.first(), timestamps.last() + 1 },
+                 *finalTrack, ReframePlan::TimeRange{ timestamps.first(), 8500 },
                  ReframePlan::OutputSpec{ 640, 360, 2.0 }, plannerConfig, &plan,
                  &planError),
              qPrintable(planError));
@@ -7358,6 +7508,762 @@ void ProjectTest::targetSelectorResolvedTargetsFeedsReframePlanBuilder()
     QVERIFY2(built.ok, qPrintable(built.error));
     const CameraState state = CameraPath::stateAt(built.plan, 0);
     QVERIFY(qAbs(state.yawDeg + 28.0) < 1e-9);
+}
+
+// ================= 360 appearance re-identification (Phase 4, Obj 5) =================
+// Deterministic, model-free tests for the appearance evidence layer, the
+// subprocess appearance provider, and the identity re-identification policy.
+// The real ReID model is exercised only by the separate integration test.
+
+namespace {
+
+struct AppearanceFrameSpec
+{
+    qint64 timeMs = 0;
+    QList<EquirectDisk> disks;
+};
+
+class ScriptedFrameProvider : public ReframeFrameProvider
+{
+public:
+    void addFrame(qint64 timeMs, const QList<EquirectDisk> &disks)
+    {
+        AppearanceFrameSpec spec;
+        spec.timeMs = timeMs;
+        spec.disks = disks;
+        m_specs.append(spec);
+    }
+
+    bool frameAt(qint64 timeMs, QImage *outFrame, QString *error) override
+    {
+        if (error) {
+            error->clear();
+        }
+        const AppearanceFrameSpec *best = nullptr;
+        for (const AppearanceFrameSpec &spec : m_specs) {
+            if (spec.timeMs <= timeMs && (!best || spec.timeMs > best->timeMs)) {
+                best = &spec;
+            }
+        }
+        if (!best) {
+            if (error) {
+                *error = QStringLiteral("no scripted frame");
+            }
+            return false;
+        }
+        if (outFrame) {
+            *outFrame = buildTargetEquirect(360, 180, best->disks);
+        }
+        return true;
+    }
+
+private:
+    QList<AppearanceFrameSpec> m_specs;
+};
+
+// Deterministic fake appearance provider: the embedding is the normalized
+// RGB of the crop's centre pixel. Similarities are therefore exact and
+// controllable (red vs red = 1.0, red vs (r,g,0) = r/sqrt(r^2+g^2), ...).
+class ColorAppearanceProvider : public AppearanceProvider
+{
+public:
+    void setFail(bool fail) { m_fail = fail; }
+    int calls() const { return m_calls; }
+    QString name() const override { return QStringLiteral("color"); }
+
+    bool encode(const QImage &crop, const QString &, qint64,
+                AppearanceEmbedding *out, QString *error) override
+    {
+        ++m_calls;
+        if (error) {
+            error->clear();
+        }
+        if (m_fail) {
+            if (error) {
+                *error = QStringLiteral("provider failure");
+            }
+            return false;
+        }
+        if (!out || crop.isNull()) {
+            if (error) {
+                *error = QStringLiteral("empty crop");
+            }
+            return false;
+        }
+        const QColor color = crop.pixelColor(crop.width() / 2, crop.height() / 2);
+        AppearanceEmbedding embedding;
+        embedding.values = { double(color.red()), double(color.green()),
+                             double(color.blue()) };
+        embedding.provider = QStringLiteral("color");
+        if (!AppearanceMath::normalize(&embedding, error)) {
+            return false;
+        }
+        *out = embedding;
+        return true;
+    }
+
+private:
+    bool m_fail = false;
+    int m_calls = 0;
+};
+
+TargetTrack inactiveCopy(const TargetTrack &track)
+{
+    TargetTrack copy = track;
+    copy.setActive(false);
+    return copy;
+}
+
+} // namespace
+
+void ProjectTest::appearanceEmbeddingJsonRoundTrip()
+{
+    AppearanceEmbedding embedding;
+    embedding.values = { 1.0, 2.0, 3.0 };
+    embedding.quality = 0.8;
+    embedding.provider = QStringLiteral("unit");
+    const QJsonObject object = embedding.toJsonObject();
+    AppearanceEmbedding restored;
+    QString error;
+    QVERIFY2(AppearanceEmbedding::readFromJsonObject(object, &restored, &error),
+             qPrintable(error));
+    QCOMPARE(restored.dimension(), 3);
+    QVERIFY(qAbs(restored.values.at(1) - 2.0) < 1e-12);
+    QVERIFY(qAbs(restored.quality - 0.8) < 1e-12);
+    QCOMPARE(restored.provider, QStringLiteral("unit"));
+}
+
+void ProjectTest::appearanceEmbeddingRejectsInvalid()
+{
+    QString error;
+    AppearanceEmbedding empty;
+    QVERIFY(!empty.isValid(&error));
+    AppearanceEmbedding nonFinite;
+    nonFinite.values = { 1.0, std::nan("") };
+    QVERIFY(!nonFinite.isValid(&error));
+    AppearanceEmbedding badQuality;
+    badQuality.values = { 1.0 };
+    badQuality.quality = 2.0;
+    QVERIFY(!badQuality.isValid(&error));
+
+    AppearanceEmbedding restored;
+    QVERIFY(!AppearanceEmbedding::readFromJsonObject(QJsonObject(), &restored, &error));
+    QJsonObject object;
+    QJsonArray array;
+    array.append(1.0);
+    array.append(QStringLiteral("x"));
+    object.insert(QStringLiteral("embedding"), array);
+    QVERIFY(!AppearanceEmbedding::readFromJsonObject(object, &restored, &error));
+}
+
+void ProjectTest::appearanceNormalizeAndCosine()
+{
+    AppearanceEmbedding a;
+    a.values = { 3.0, 4.0 };
+    QVERIFY(AppearanceMath::normalize(&a));
+    QVERIFY(qAbs(std::sqrt(a.values.at(0) * a.values.at(0)
+                           + a.values.at(1) * a.values.at(1)) - 1.0) < 1e-9);
+    AppearanceEmbedding zero;
+    zero.values = { 0.0, 0.0 };
+    QVERIFY(!AppearanceMath::normalize(&zero));
+
+    AppearanceEmbedding x;
+    x.values = { 1.0, 0.0 };
+    double similarity = 0.0;
+    QVERIFY(AppearanceMath::cosineSimilarity(a, x, &similarity));
+    QVERIFY(qAbs(similarity - 0.6) < 1e-9);
+    AppearanceEmbedding negative;
+    negative.values = { -1.0, 0.0 };
+    QVERIFY(AppearanceMath::cosineSimilarity(x, negative, &similarity));
+    QVERIFY(qAbs(similarity + 1.0) < 1e-9);
+    AppearanceEmbedding y;
+    y.values = { 0.0, 1.0 };
+    QVERIFY(AppearanceMath::cosineSimilarity(x, y, &similarity));
+    QVERIFY(qAbs(similarity) < 1e-9);
+    AppearanceEmbedding three;
+    three.values = { 1.0, 0.0, 0.0 };
+    QVERIFY(!AppearanceMath::cosineSimilarity(x, three, &similarity));
+}
+
+void ProjectTest::appearanceAggregateAveragesAndNormalizes()
+{
+    AppearanceEmbedding first;
+    first.values = { 1.0, 0.0 };
+    first.provider = QStringLiteral("color");
+    AppearanceEmbedding second;
+    second.values = { 0.0, 1.0 };
+    AppearanceEmbedding aggregated;
+    QVERIFY(AppearanceMath::aggregate({ first, second }, &aggregated));
+    QVERIFY(qAbs(aggregated.values.at(0) - aggregated.values.at(1)) < 1e-9);
+    QVERIFY(qAbs(std::sqrt(aggregated.values.at(0) * aggregated.values.at(0)
+                           + aggregated.values.at(1) * aggregated.values.at(1))
+                 - 1.0) < 1e-9);
+    QVERIFY(!AppearanceMath::aggregate({}, &aggregated));
+    AppearanceEmbedding three;
+    three.values = { 1.0, 0.0, 0.0 };
+    QVERIFY(!AppearanceMath::aggregate({ first, three }, &aggregated));
+}
+
+void ProjectTest::appearanceVerdictAndEvidenceJson()
+{
+    QCOMPARE(appearanceVerdictToString(AppearanceVerdict::Agree),
+             QStringLiteral("agree"));
+    QCOMPARE(appearanceVerdictFromString(QStringLiteral("disagree")),
+             AppearanceVerdict::Disagree);
+    QCOMPARE(appearanceVerdictFromString(QStringLiteral("bogus")),
+             AppearanceVerdict::Unavailable);
+
+    AppearanceEvidence evidence;
+    evidence.identity = QStringLiteral("me");
+    evidence.candidateTrackId = QStringLiteral("t2");
+    evidence.verdict = AppearanceVerdict::Weak;
+    evidence.similarity = 0.65;
+    evidence.acceptThreshold = 0.75;
+    evidence.rejectThreshold = 0.55;
+    evidence.provider = QStringLiteral("color");
+    evidence.detail = QStringLiteral("candidate");
+    evidence.timeMs = 5;
+    AppearanceEvidence restored;
+    QString error;
+    QVERIFY(AppearanceEvidence::readFromJsonObject(evidence.toJsonObject(),
+                                                   &restored, &error));
+    QCOMPARE(restored.identity, QStringLiteral("me"));
+    QCOMPARE(restored.candidateTrackId, QStringLiteral("t2"));
+    QVERIFY(restored.verdict == AppearanceVerdict::Weak);
+    QVERIFY(qAbs(restored.similarity - 0.65) < 1e-12);
+    QCOMPARE(restored.provider, QStringLiteral("color"));
+}
+
+void ProjectTest::appearanceProfileJsonRoundTrip()
+{
+    AppearanceProfile profile;
+    profile.identity = QStringLiteral("me");
+    profile.reference.values = { 1.0, 0.0 };
+    profile.reference.provider = QStringLiteral("color");
+    profile.sampleCount = 3;
+    profile.updatedAtMs = 42;
+    profile.provider = QStringLiteral("color");
+    AppearanceProfile restored;
+    QString error;
+    QVERIFY2(AppearanceProfile::readFromJsonObject(profile.toJsonObject(),
+                                                   &restored, &error),
+             qPrintable(error));
+    QCOMPARE(restored.identity, QStringLiteral("me"));
+    QCOMPARE(restored.sampleCount, 3);
+    QVERIFY(qAbs(restored.updatedAtMs - 42) < 1e-9);
+    QCOMPARE(restored.reference.dimension(), 2);
+}
+
+void ProjectTest::appearanceProcessParseResponse()
+{
+    AppearanceEmbedding out;
+    QString error;
+    QVERIFY(ProcessAppearanceProvider::parseResponse(
+        "{\"embedding\":[1,2,3],\"quality\":0.9}", 0, &out, &error));
+    QCOMPARE(out.dimension(), 3);
+    QVERIFY(!ProcessAppearanceProvider::parseResponse("not json", 0, &out, &error));
+    QVERIFY(!ProcessAppearanceProvider::parseResponse("{}", 0, &out, &error));
+    QVERIFY(!ProcessAppearanceProvider::parseResponse(
+        "{\"embedding\":[1,2,3]}", 4, &out, &error));
+    QVERIFY(!ProcessAppearanceProvider::parseResponse(
+        "{\"embedding\":[\"x\"]}", 0, &out, &error));
+}
+
+void ProjectTest::appearanceProcessRunsHelper()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString script = directory.filePath(QStringLiteral("helper.sh"));
+    QFile file(script);
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
+    file.write("#!/bin/sh\n"
+               "cat > \"$2\" <<'EOF'\n"
+               "{\"embedding\":[0.6,0.8],\"quality\":1.0,\"provider\":\"shell\"}\n"
+               "EOF\n");
+    file.close();
+    QVERIFY(QFile::setPermissions(
+        script, QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                    | QFileDevice::ExeOwner));
+
+    ProcessAppearanceProvider provider(QStringLiteral("/bin/sh"), { script });
+    provider.setExpectedDimension(2);
+    QImage crop(128, 256, QImage::Format_ARGB32);
+    crop.fill(QColor(0, 0, 0));
+    AppearanceEmbedding out;
+    QString error;
+    QVERIFY2(provider.encode(crop, QStringLiteral("t1"), 0, &out, &error),
+             qPrintable(error));
+    QCOMPARE(out.dimension(), 2);
+    QVERIFY(qAbs(out.values.at(1) - 0.8) < 1e-9);
+}
+
+void ProjectTest::appearanceProcessFailsOnMissingExecutable()
+{
+    ProcessAppearanceProvider provider(QStringLiteral("/nonexistent/rc-reid-xyz"));
+    QImage crop(32, 32, QImage::Format_ARGB32);
+    crop.fill(QColor(0, 0, 0));
+    AppearanceEmbedding out;
+    QString error;
+    QVERIFY(!provider.encode(crop, QStringLiteral("t1"), 0, &out, &error));
+    QVERIFY(!error.isEmpty());
+}
+
+void ProjectTest::appearanceProcessFailsOnBadExit()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString script = directory.filePath(QStringLiteral("bad.sh"));
+    QFile file(script);
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
+    file.write("#!/bin/sh\nexit 3\n");
+    file.close();
+    QVERIFY(QFile::setPermissions(
+        script, QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                    | QFileDevice::ExeOwner));
+
+    ProcessAppearanceProvider provider(QStringLiteral("/bin/sh"), { script });
+    QImage crop(32, 32, QImage::Format_ARGB32);
+    crop.fill(QColor(0, 0, 0));
+    AppearanceEmbedding out;
+    QString error;
+    QVERIFY(!provider.encode(crop, QStringLiteral("t1"), 0, &out, &error));
+    QVERIFY(error.contains(QStringLiteral("failed")));
+}
+
+void ProjectTest::appearanceTargetCropIsDeterministic()
+{
+    const QImage equirect = buildTargetEquirect(
+        360, 180, { EquirectDisk{ 10.0, 0.0, 30.0, QColor(255, 0, 0) } });
+    TargetCropExtractor::Config config;
+    config.width = 128;
+    config.height = 256;
+    QImage first;
+    QImage second;
+    QString error;
+    QVERIFY(TargetCropExtractor::crop(equirect, 10.0, 0.0, 30.0, 40.0, config,
+                                      &first, &error));
+    QVERIFY(TargetCropExtractor::crop(equirect, 10.0, 0.0, 30.0, 40.0, config,
+                                      &second, &error));
+    QCOMPARE(first.size(), QSize(128, 256));
+    QVERIFY(imagesIdentical(first, second));
+    QVERIFY(first.pixelColor(64, 128).red() > 200);
+}
+
+void ProjectTest::appearanceRegistryProfileAndJson()
+{
+    TargetIdentityRegistry registry;
+    QString error;
+    const QList<TargetTrack> tracks = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, -28.0, 0.0) })
+    };
+    QVERIFY(registry.bindToTrack(QStringLiteral("me"), QStringLiteral("t1"), 0,
+                                 tracks, &error));
+    AppearanceProfile profile;
+    profile.identity = QStringLiteral("me");
+    profile.reference.values = { 1.0, 0.0 };
+    profile.reference.provider = QStringLiteral("color");
+    profile.sampleCount = 2;
+    profile.updatedAtMs = 10;
+    profile.provider = QStringLiteral("color");
+    registry.setAppearanceProfile(QStringLiteral("me"), profile);
+    QVERIFY(registry.hasAppearanceProfile(QStringLiteral("me")));
+    QCOMPARE(registry.appearanceProfile(QStringLiteral("me"))->sampleCount, 2);
+
+    TargetIdentityRegistry restored;
+    QVERIFY2(restored.readFromJsonObject(registry.toJsonObject(), &error),
+             qPrintable(error));
+    QVERIFY(restored.hasAppearanceProfile(QStringLiteral("me")));
+    QCOMPARE(restored.appearanceProfile(QStringLiteral("me"))->sampleCount, 2);
+    QCOMPARE(restored.appearanceProfile(QStringLiteral("me"))->reference.dimension(), 2);
+}
+
+void ProjectTest::appearanceRegistryRejectPreventsGeometricRebind()
+{
+    TargetIdentityRegistry registry;
+    QString error;
+    const QList<TargetTrack> initial = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 0.0, 0.0),
+                      makeTargetObservation(500, 0.0, 0.0) })
+    };
+    QVERIFY(registry.bindToTrack(QStringLiteral("me"), QStringLiteral("t1"), 0,
+                                 initial, &error));
+    const TargetTrack inactive = inactiveCopy(initial.at(0));
+    const TargetTrack continuation = makeIdTrack(
+        QStringLiteral("t2"), QStringLiteral("person"),
+        { makeTargetObservation(1000, 0.0, 0.0) });
+    registry.update({ inactive, continuation }, 1000);
+    QVERIFY(registry.isResolved(QStringLiteral("me")));
+    QCOMPARE(registry.targetId(QStringLiteral("me")), QStringLiteral("t2"));
+
+    registry.rejectTarget(QStringLiteral("me"), QStringLiteral("t2"),
+                          QStringLiteral("appearance conflict"));
+    QVERIFY(!registry.isResolved(QStringLiteral("me")));
+    registry.update({ inactive, continuation }, 2000);
+    QVERIFY(!registry.isResolved(QStringLiteral("me")));
+}
+
+void ProjectTest::appearanceRegistryRebindWithAppearance()
+{
+    TargetIdentityRegistry registry;
+    QString error;
+    const QList<TargetTrack> initial = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 0.0, 0.0) })
+    };
+    QVERIFY(registry.bindToTrack(QStringLiteral("me"), QStringLiteral("t1"), 0,
+                                 initial, &error));
+    const TargetTrack inactive = inactiveCopy(initial.at(0));
+    const TargetTrack returning = makeIdTrack(
+        QStringLiteral("t10"), QStringLiteral("person"),
+        { makeTargetObservation(1000, 80.0, 0.0) });
+    registry.update({ inactive, returning }, 1000);
+    QVERIFY(!registry.isResolved(QStringLiteral("me")));
+
+    QVERIFY(registry.rebindWithAppearance(QStringLiteral("me"),
+                                          QStringLiteral("t10"), 0.95,
+                                          QStringLiteral("test"), &error));
+    QVERIFY(registry.isResolved(QStringLiteral("me")));
+    QCOMPARE(registry.targetId(QStringLiteral("me")), QStringLiteral("t10"));
+    QCOMPARE(registry.binding(QStringLiteral("me"))->method,
+             QStringLiteral("appearance-rebind"));
+    QVERIFY(qAbs(registry.binding(QStringLiteral("me"))->appearanceSimilarity - 0.95)
+            < 1e-9);
+}
+
+void ProjectTest::appearanceReidentifierStrongReacquire()
+{
+    ScriptedFrameProvider frames;
+    frames.addFrame(0, { EquirectDisk{ 0.0, 0.0, 30.0, QColor(255, 0, 0) } });
+    frames.addFrame(1000, { EquirectDisk{ 80.0, 0.0, 30.0, QColor(255, 0, 0) } });
+    ColorAppearanceProvider provider;
+    IdentityReidentifier reidentifier;
+
+    TargetIdentityRegistry registry;
+    QString error;
+    const QList<TargetTrack> initial = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 0.0, 0.0) })
+    };
+    QVERIFY(registry.bindToTrack(QStringLiteral("me"), QStringLiteral("t1"), 0,
+                                 initial, &error));
+    reidentifier.reidentify(&registry, initial, &frames, &provider, 0);
+    QVERIFY(registry.hasAppearanceProfile(QStringLiteral("me")));
+
+    const TargetTrack inactive = inactiveCopy(initial.at(0));
+    const TargetTrack returning = makeIdTrack(
+        QStringLiteral("t2"), QStringLiteral("person"),
+        { makeTargetObservation(1000, 80.0, 0.0) });
+    const IdentityReidentifier::Result result =
+        reidentifier.reidentify(&registry, { inactive, returning }, &frames,
+                                &provider, 1000);
+    QVERIFY2(registry.isResolved(QStringLiteral("me")),
+             qPrintable(result.notes.join(QStringLiteral("; "))));
+    QCOMPARE(registry.targetId(QStringLiteral("me")), QStringLiteral("t2"));
+    QCOMPARE(registry.binding(QStringLiteral("me"))->method,
+             QStringLiteral("appearance-rebind"));
+}
+
+void ProjectTest::appearanceReidentifierWeakMatchStaysUnresolved()
+{
+    ScriptedFrameProvider frames;
+    frames.addFrame(0, { EquirectDisk{ 0.0, 0.0, 30.0, QColor(255, 0, 0) } });
+    frames.addFrame(1000, { EquirectDisk{ 80.0, 0.0, 30.0, QColor(255, 255, 150) } });
+    ColorAppearanceProvider provider;
+    IdentityReidentifier reidentifier;
+
+    TargetIdentityRegistry registry;
+    QString error;
+    const QList<TargetTrack> initial = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 0.0, 0.0) })
+    };
+    QVERIFY(registry.bindToTrack(QStringLiteral("me"), QStringLiteral("t1"), 0,
+                                 initial, &error));
+    reidentifier.reidentify(&registry, initial, &frames, &provider, 0);
+
+    const TargetTrack inactive = inactiveCopy(initial.at(0));
+    const TargetTrack returning = makeIdTrack(
+        QStringLiteral("t2"), QStringLiteral("person"),
+        { makeTargetObservation(1000, 80.0, 0.0) });
+    const IdentityReidentifier::Result result =
+        reidentifier.reidentify(&registry, { inactive, returning }, &frames,
+                                &provider, 1000);
+    QVERIFY(!registry.isResolved(QStringLiteral("me")));
+    bool sawWeak = false;
+    for (const AppearanceEvidence &evidence : result.evidence) {
+        if (evidence.verdict == AppearanceVerdict::Weak) {
+            sawWeak = true;
+        }
+    }
+    QVERIFY(sawWeak);
+}
+
+void ProjectTest::appearanceReidentifierAmbiguousCandidates()
+{
+    ScriptedFrameProvider frames;
+    frames.addFrame(0, { EquirectDisk{ 0.0, 0.0, 30.0, QColor(255, 0, 0) } });
+    frames.addFrame(1000, { EquirectDisk{ 80.0, 0.0, 30.0, QColor(255, 0, 0) },
+                            EquirectDisk{ -80.0, 0.0, 30.0, QColor(255, 0, 0) } });
+    ColorAppearanceProvider provider;
+    IdentityReidentifier reidentifier;
+
+    TargetIdentityRegistry registry;
+    QString error;
+    const QList<TargetTrack> initial = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 0.0, 0.0) })
+    };
+    QVERIFY(registry.bindToTrack(QStringLiteral("me"), QStringLiteral("t1"), 0,
+                                 initial, &error));
+    reidentifier.reidentify(&registry, initial, &frames, &provider, 0);
+
+    const TargetTrack inactive = inactiveCopy(initial.at(0));
+    const TargetTrack first = makeIdTrack(QStringLiteral("t2"), QStringLiteral("person"),
+                                          { makeTargetObservation(1000, 80.0, 0.0) });
+    const TargetTrack second = makeIdTrack(QStringLiteral("t3"), QStringLiteral("person"),
+                                           { makeTargetObservation(1000, -80.0, 0.0) });
+    const IdentityReidentifier::Result result =
+        reidentifier.reidentify(&registry, { inactive, first, second }, &frames,
+                                &provider, 1000);
+    QVERIFY(!registry.isResolved(QStringLiteral("me")));
+    int strong = 0;
+    for (const AppearanceEvidence &evidence : result.evidence) {
+        if (evidence.verdict == AppearanceVerdict::Agree) {
+            ++strong;
+        }
+    }
+    QVERIFY(strong >= 2);
+    QVERIFY(result.notes.join(QStringLiteral("\n"))
+                .contains(QStringLiteral("ambiguous")));
+}
+
+void ProjectTest::appearanceReidentifierWrongPersonRejected()
+{
+    ScriptedFrameProvider frames;
+    frames.addFrame(0, { EquirectDisk{ 0.0, 0.0, 30.0, QColor(255, 0, 0) } });
+    frames.addFrame(1000, { EquirectDisk{ 80.0, 0.0, 30.0, QColor(0, 0, 255) } });
+    ColorAppearanceProvider provider;
+    IdentityReidentifier reidentifier;
+
+    TargetIdentityRegistry registry;
+    QString error;
+    const QList<TargetTrack> initial = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 0.0, 0.0) })
+    };
+    QVERIFY(registry.bindToTrack(QStringLiteral("me"), QStringLiteral("t1"), 0,
+                                 initial, &error));
+    reidentifier.reidentify(&registry, initial, &frames, &provider, 0);
+
+    const TargetTrack inactive = inactiveCopy(initial.at(0));
+    const TargetTrack stranger = makeIdTrack(
+        QStringLiteral("t2"), QStringLiteral("person"),
+        { makeTargetObservation(1000, 80.0, 0.0) });
+    const IdentityReidentifier::Result result =
+        reidentifier.reidentify(&registry, { inactive, stranger }, &frames,
+                                &provider, 1000);
+    QVERIFY(!registry.isResolved(QStringLiteral("me")));
+    bool sawDisagree = false;
+    for (const AppearanceEvidence &evidence : result.evidence) {
+        if (evidence.verdict == AppearanceVerdict::Disagree) {
+            sawDisagree = true;
+        }
+    }
+    QVERIFY(sawDisagree);
+}
+
+void ProjectTest::appearanceReidentifierGeometryAppearanceConflict()
+{
+    ScriptedFrameProvider frames;
+    frames.addFrame(0, { EquirectDisk{ 0.0, 0.0, 30.0, QColor(255, 0, 0) } });
+    frames.addFrame(500, { EquirectDisk{ 0.0, 0.0, 30.0, QColor(255, 0, 0) } });
+    frames.addFrame(1000, { EquirectDisk{ 0.0, 0.0, 30.0, QColor(0, 0, 255) },
+                            EquirectDisk{ 80.0, 0.0, 30.0, QColor(255, 0, 0) } });
+    ColorAppearanceProvider provider;
+    IdentityReidentifier reidentifier;
+
+    TargetIdentityRegistry registry;
+    QString error;
+    const QList<TargetTrack> initial = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 0.0, 0.0),
+                      makeTargetObservation(500, 0.0, 0.0) })
+    };
+    QVERIFY(registry.bindToTrack(QStringLiteral("me"), QStringLiteral("t1"), 0,
+                                 initial, &error));
+    reidentifier.reidentify(&registry, initial, &frames, &provider, 500);
+
+    const TargetTrack inactive = inactiveCopy(initial.at(0));
+    const TargetTrack geometric = makeIdTrack(
+        QStringLiteral("t2"), QStringLiteral("person"),
+        { makeTargetObservation(1000, 0.0, 0.0) });
+    const TargetTrack appearance = makeIdTrack(
+        QStringLiteral("t3"), QStringLiteral("person"),
+        { makeTargetObservation(1000, 80.0, 0.0) });
+    const IdentityReidentifier::Result result =
+        reidentifier.reidentify(&registry, { inactive, geometric, appearance },
+                                &frames, &provider, 1000);
+
+    QVERIFY(!registry.isResolved(QStringLiteral("me")));
+    QCOMPARE(registry.targetId(QStringLiteral("me")), QStringLiteral("t2"));
+    QVERIFY(registry.binding(QStringLiteral("me"))->rejectedTargetIds
+                .contains(QStringLiteral("t2")));
+    QVERIFY(result.notes.join(QStringLiteral("\n"))
+                .contains(QStringLiteral("Conflict")));
+}
+
+void ProjectTest::appearanceReidentifierExplicitSelectionPrecedence()
+{
+    ScriptedFrameProvider frames;
+    frames.addFrame(0, { EquirectDisk{ 0.0, 0.0, 30.0, QColor(255, 0, 0) } });
+    frames.addFrame(1000, { EquirectDisk{ 0.0, 0.0, 30.0, QColor(255, 0, 0) },
+                            EquirectDisk{ 80.0, 0.0, 30.0, QColor(255, 0, 0) } });
+    ColorAppearanceProvider provider;
+    IdentityReidentifier reidentifier;
+
+    TargetIdentityRegistry registry;
+    QString error;
+    const QList<TargetTrack> tracks = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 0.0, 0.0) }),
+        makeIdTrack(QStringLiteral("t2"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 80.0, 0.0) })
+    };
+    QVERIFY(registry.bindToTrack(QStringLiteral("me"), QStringLiteral("t1"), 0,
+                                 tracks, &error));
+    reidentifier.reidentify(&registry, tracks, &frames, &provider, 1000);
+    QVERIFY(registry.isResolved(QStringLiteral("me")));
+    QCOMPARE(registry.targetId(QStringLiteral("me")), QStringLiteral("t1"));
+}
+
+void ProjectTest::appearanceReidentifierMissingProvider()
+{
+    ScriptedFrameProvider frames;
+    frames.addFrame(0, { EquirectDisk{ 0.0, 0.0, 30.0, QColor(255, 0, 0) } });
+    IdentityReidentifier reidentifier;
+    TargetIdentityRegistry registry;
+    QString error;
+    const QList<TargetTrack> tracks = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 0.0, 0.0) })
+    };
+    QVERIFY(registry.bindToTrack(QStringLiteral("me"), QStringLiteral("t1"), 0,
+                                 tracks, &error));
+    const IdentityReidentifier::Result result =
+        reidentifier.reidentify(&registry, tracks, &frames, nullptr, 0);
+    QVERIFY(registry.isResolved(QStringLiteral("me")));
+    QVERIFY(result.evidence.isEmpty());
+    QVERIFY(!result.notes.isEmpty());
+}
+
+void ProjectTest::appearanceReidentifierProviderFailure()
+{
+    ScriptedFrameProvider frames;
+    frames.addFrame(0, { EquirectDisk{ 0.0, 0.0, 30.0, QColor(255, 0, 0) } });
+    frames.addFrame(1000, { EquirectDisk{ 80.0, 0.0, 30.0, QColor(255, 0, 0) } });
+    ColorAppearanceProvider provider;
+    IdentityReidentifier reidentifier;
+
+    TargetIdentityRegistry registry;
+    QString error;
+    const QList<TargetTrack> initial = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 0.0, 0.0) })
+    };
+    QVERIFY(registry.bindToTrack(QStringLiteral("me"), QStringLiteral("t1"), 0,
+                                 initial, &error));
+    reidentifier.reidentify(&registry, initial, &frames, &provider, 0);
+    QVERIFY(registry.hasAppearanceProfile(QStringLiteral("me")));
+
+    provider.setFail(true);
+    const TargetTrack inactive = inactiveCopy(initial.at(0));
+    const TargetTrack returning = makeIdTrack(
+        QStringLiteral("t2"), QStringLiteral("person"),
+        { makeTargetObservation(1000, 80.0, 0.0) });
+    const IdentityReidentifier::Result result =
+        reidentifier.reidentify(&registry, { inactive, returning }, &frames,
+                                &provider, 1000);
+    QVERIFY(!registry.isResolved(QStringLiteral("me")));
+    bool sawUnavailable = false;
+    for (const AppearanceEvidence &evidence : result.evidence) {
+        if (evidence.verdict == AppearanceVerdict::Unavailable) {
+            sawUnavailable = true;
+        }
+    }
+    QVERIFY(sawUnavailable);
+}
+
+void ProjectTest::appearanceReidentifierCandidateOrderDeterministic()
+{
+    ScriptedFrameProvider frames;
+    frames.addFrame(0, { EquirectDisk{ 0.0, 0.0, 30.0, QColor(255, 0, 0) } });
+    frames.addFrame(1000, { EquirectDisk{ 80.0, 0.0, 30.0, QColor(255, 0, 0) },
+                            EquirectDisk{ -80.0, 0.0, 30.0, QColor(0, 0, 255) } });
+    ColorAppearanceProvider provider;
+
+    const auto run = [&frames, &provider](bool reversed) {
+        IdentityReidentifier reidentifier;
+        TargetIdentityRegistry registry;
+        QString error;
+        const QList<TargetTrack> initial = {
+            makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                        { makeTargetObservation(0, 0.0, 0.0) })
+        };
+        registry.bindToTrack(QStringLiteral("me"), QStringLiteral("t1"), 0,
+                             initial, &error);
+        reidentifier.reidentify(&registry, initial, &frames, &provider, 0);
+        const TargetTrack inactive = inactiveCopy(initial.at(0));
+        const TargetTrack match = makeIdTrack(QStringLiteral("t2"), QStringLiteral("person"),
+                                              { makeTargetObservation(1000, 80.0, 0.0) });
+        const TargetTrack decoy = makeIdTrack(QStringLiteral("t3"), QStringLiteral("person"),
+                                              { makeTargetObservation(1000, -80.0, 0.0) });
+        const QList<TargetTrack> tracks = reversed ? QList<TargetTrack>{ inactive, decoy, match }
+                                                   : QList<TargetTrack>{ inactive, match, decoy };
+        reidentifier.reidentify(&registry, tracks, &frames, &provider, 1000);
+        return registry.targetId(QStringLiteral("me"));
+    };
+    const QString first = run(false);
+    const QString second = run(true);
+    QCOMPARE(first, QStringLiteral("t2"));
+    QCOMPARE(second, QStringLiteral("t2"));
+}
+
+void ProjectTest::appearanceReidentifierGeometryConfirmsAppearance()
+{
+    ScriptedFrameProvider frames;
+    frames.addFrame(0, { EquirectDisk{ 0.0, 0.0, 30.0, QColor(255, 0, 0) } });
+    frames.addFrame(500, { EquirectDisk{ 0.0, 0.0, 30.0, QColor(255, 0, 0) } });
+    frames.addFrame(1000, { EquirectDisk{ 0.0, 0.0, 30.0, QColor(255, 0, 0) } });
+    ColorAppearanceProvider provider;
+    IdentityReidentifier reidentifier;
+
+    TargetIdentityRegistry registry;
+    QString error;
+    const QList<TargetTrack> initial = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 0.0, 0.0),
+                      makeTargetObservation(500, 0.0, 0.0) })
+    };
+    QVERIFY(registry.bindToTrack(QStringLiteral("me"), QStringLiteral("t1"), 0,
+                                 initial, &error));
+    reidentifier.reidentify(&registry, initial, &frames, &provider, 500);
+
+    const TargetTrack inactive = inactiveCopy(initial.at(0));
+    const TargetTrack continuation = makeIdTrack(
+        QStringLiteral("t2"), QStringLiteral("person"),
+        { makeTargetObservation(1000, 0.0, 0.0) });
+    const IdentityReidentifier::Result result =
+        reidentifier.reidentify(&registry, { inactive, continuation }, &frames,
+                                &provider, 1000);
+    QVERIFY2(registry.isResolved(QStringLiteral("me")),
+             qPrintable(result.notes.join(QStringLiteral("; "))));
+    QCOMPARE(registry.targetId(QStringLiteral("me")), QStringLiteral("t2"));
+    QCOMPARE(registry.binding(QStringLiteral("me"))->method,
+             QStringLiteral("continuity-rebind"));
+    QCOMPARE(registry.binding(QStringLiteral("me"))->appearanceVerdict,
+             QStringLiteral("agree"));
 }
 
 QTEST_MAIN(ProjectTest)

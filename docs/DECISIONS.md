@@ -691,3 +691,33 @@ Objective 3 proved real detection and tracking, but there was no structured crea
 - "Me" currently means "the track the creator selected (or its unique geometric continuation)". It is not biometric identity and cannot re-identify a person after a long absence or among similar people without a future appearance model.
 - No detector, model/runtime, renderer, or geometry changes; Decisions 017-020 preserved.
 
+
+# Decision 022 — Appearance-Based Re-Identification: Optional External Embedding Seam
+
+**Status:** Accepted (2026-09-17, 360 Reframing Objective 5)
+
+## Context
+
+Decision 021 made identity geometric and creator-selected, but it cannot re-identify a person after a long absence or among similar people. The objective was to add an optional, replaceable visual-appearance layer that strengthens (never overrides) the creator identity, without coupling the C++ core to a model runtime and without claiming biometric identity.
+
+## Decisions
+
+- **Optional appearance seam:** `AppearanceProvider` (interface) + `ProcessAppearanceProvider` (external helper over a file/JSON protocol). The C++ core links no Python, OpenCV, ONNX Runtime, or model.
+- **Structured evidence, not a magic score:** `AppearanceEmbedding` (L2-normalized vector), `AppearanceProfile`, and `AppearanceEvidence` with an explicit `AppearanceVerdict` (Unavailable / Agree / Disagree / Weak / Ambiguous), cosine similarity, explicit accept (0.75) and reject (0.55) thresholds, and deterministic temporal aggregation (element-wise mean, then normalize).
+- **Deterministic orchestration:** `IdentityReidentifier` maintains a profile for a bound identity and applies a documented precedence:
+  1. explicit creator selection / active bound track is authoritative — appearance never overrides it;
+  2. valid tracker continuity needs no re-identification;
+  3. a unique geometric continuation is accepted and verified; strong appearance disagreement vetoes it and the identity becomes unresolved (recorded, no silent swap);
+  4. appearance may re-acquire exactly one strong candidate when geometry provides none; multiple strong candidates are ambiguous;
+  5. otherwise the identity remains unresolved.
+- **Registry stays media/model free:** `TargetIdentityRegistry` only stores profiles and applies structured decisions (`setAppearanceProfile`, `rebindWithAppearance`, `annotateAppearance`, `markUnresolved`, `rejectTarget`). Vetoed targets are recorded so geometry cannot silently re-accept them.
+- **Crop extraction:** `TargetCropExtractor` reuses `EquirectView` to render a deterministic crop from the target direction and angular extent.
+- **Model selected for real validation:** OpenVINO Open Model Zoo `person-reidentification-retail-0277` (ONNX `person-reidentification-retail-0265.onnx`, 256-d, input 256x128 BGR 0-255); code and weights are **Apache-2.0** and it is trained on an internal dataset. Runtime: ONNX Runtime (MIT) in an external helper. Rejected: OpenCV Zoo YoutuReID (weights from an unlicensed source trained on Market1501/DukeMTMC/MSMT17), OSNet/torchreid weights (research-dataset provenance), and Ultralytics (AGPL-3.0).
+
+## Consequences
+
+- 24 model-free tests cover serialization, normalization/similarity, thresholds, strong/weak/ambiguous/wrong-person behavior, geometry/appearance conflict, explicit-selection precedence, missing/failed provider, deterministic ordering, and geometry confirmation. Full model-free suite: 264 passed / 0 failed / 1 skipped.
+- Real-footage integration verifies real embeddings (same-person cosine ~0.97, different-person ~0.51) and a controlled re-acquisition through a simulated tracker gap, feeding the existing selection/plan/render path.
+- Appearance is not biometric certainty; "me" remains the creator-selected identity, and appearance only supports bounded re-acquisition or vetoes an unjustified geometric transfer.
+- No detector, geometry, planner, or renderer changes; Decisions 017-021 preserved.
+
