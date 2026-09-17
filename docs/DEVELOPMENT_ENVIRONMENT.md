@@ -234,9 +234,11 @@ The real target-detection and appearance helpers are optional and external; the 
 - **Model weights** (downloaded, not committed, under `~/.cache/reelcraft/models/`):
   - `yolox_2022nov.onnx` — OpenCV Zoo YOLOX (Apache-2.0), person/object detection.
   - `reid_0277.onnx` — OpenVINO OMZ `person-reidentification-retail-0277` (Apache-2.0), 256-d appearance embedding.
+  - `silero_vad.onnx` — Silero VAD (MIT code and weights), speech-activity detection.
 - **Environment variables:** `REELCRAFT_FFMPEG`; detector: `REELCRAFT_TARGET_DETECTOR_PY`, `REELCRAFT_TARGET_DETECTOR_SCRIPT`, `REELCRAFT_TARGET_YOLOX_MODEL`, `REELCRAFT_TARGET_CLIP`, `REELCRAFT_TARGET_OUTPUT`; appearance: `REELCRAFT_REID_PY`, `REELCRAFT_REID_SCRIPT`, `REELCRAFT_REID_MODEL`.
 - **GPU:** inference is CPU-only in this environment; the helpers can select CUDA/other backends later (RunPod) without changing the C++ core.
 - **Speaker evidence helper** (`tools/speaker_helper/`): Python 3 + ONNX Runtime; model `silero_vad.onnx` (Silero VAD, **MIT** code and weights).
 - Install examples and licensing records live in `tools/detector_helper/README.md`, `tools/appearance_helper/README.md`, and `tools/speaker_helper/README.md`; the technology evaluation is in `docs/TARGET_RESOLUTION_TECHNOLOGY.md`.
 - Speaker helper environment variables: `REELCRAFT_SPEAKER_PY`, `REELCRAFT_SPEAKER_SCRIPT`, `REELCRAFT_SILERO_MODEL`, and (for integration output) `REELCRAFT_SPEAKER_OUTPUT`.
+- **The speaker integration test requires an audio-bearing clip.** `realDetectorIntegration` reads both video and audio through `REELCRAFT_TARGET_CLIP`. The Objective 5 detector proxy `~/.cache/reelcraft/media/proxy_t115_12s.mp4` was created with `-an` (video only); with it the speaker helper correctly reports "no decodable audio stream" and the speaker assertions fail. For any run that exercises the speaker block, point `REELCRAFT_TARGET_CLIP` at the audio+video proxy `~/.cache/reelcraft/media/proxy_t115_12s_av.mp4` (H.264 + AAC mono). The original `360_TEST_4K.mp4` is never modified.
 
