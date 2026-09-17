@@ -14,6 +14,20 @@ namespace {
 constexpr int kMaxDimension = 16384;
 constexpr double kMaxFps = 240.0;
 
+// Deterministic number of output frames for one source range at the given fps.
+int framesForRange(const ReframePlan::TimeRange &range, double fps)
+{
+    if (!range.isValid() || !std::isfinite(fps) || fps <= 0.0) {
+        return 0;
+    }
+    const double count =
+        std::floor(static_cast<double>(range.durationMs()) * fps / 1000.0 + 1e-9);
+    if (!std::isfinite(count) || count < 0.0 || count > 1.0e9) {
+        return 0;
+    }
+    return static_cast<int>(count);
+}
+
 } // namespace
 
 bool ReframePlan::OutputSpec::isValid() const
@@ -35,26 +49,50 @@ void ReframePlan::addKeyframe(const CameraKeyframe &keyframe)
 
 int ReframePlan::frameCount() const
 {
-    if (!m_sourceRange.isValid() || !m_output.isValid()) {
+    if (!m_output.isValid()) {
         return 0;
     }
-    const double count = std::floor(
-        static_cast<double>(m_sourceRange.durationMs()) * m_output.fps / 1000.0
-        + 1e-9);
-    if (!std::isfinite(count) || count < 0.0 || count > 1.0e9) {
-        return 0;
+    if (m_segments.isEmpty()) {
+        return framesForRange(m_sourceRange, m_output.fps);
     }
-    return static_cast<int>(count);
+    int total = 0;
+    for (const TimeRange &segment : m_segments) {
+        const int frames = framesForRange(segment, m_output.fps);
+        if (frames <= 0 || total > 1.0e9 - frames) {
+            return 0;
+        }
+        total += frames;
+    }
+    return total;
 }
 
 qint64 ReframePlan::frameTimeMs(int index) const
 {
-    if (index < 0) {
-        return m_sourceRange.startMs;
+    if (m_segments.isEmpty()) {
+        if (index < 0) {
+            return m_sourceRange.startMs;
+        }
+        return m_sourceRange.startMs
+            + static_cast<qint64>(
+                std::llround(static_cast<double>(index) * 1000.0 / m_output.fps));
     }
-    return m_sourceRange.startMs
-        + static_cast<qint64>(
-            std::llround(static_cast<double>(index) * 1000.0 / m_output.fps));
+
+    int remaining = qMax(0, index);
+    for (const TimeRange &segment : m_segments) {
+        const int frames = framesForRange(segment, m_output.fps);
+        if (remaining < frames) {
+            return segment.startMs
+                + static_cast<qint64>(std::llround(
+                    static_cast<double>(remaining) * 1000.0 / m_output.fps));
+        }
+        remaining -= frames;
+    }
+    // Beyond the end: the last frame of the last segment.
+    const TimeRange &last = m_segments.last();
+    const int lastFrames = qMax(1, framesForRange(last, m_output.fps));
+    return last.startMs
+        + static_cast<qint64>(std::llround(
+            static_cast<double>(lastFrames - 1) * 1000.0 / m_output.fps));
 }
 
 bool ReframePlan::isValid(QString *error) const
@@ -109,6 +147,24 @@ bool ReframePlan::isValid(QString *error) const
         }
     }
 
+    // Objective 14: optional ordered retained ranges.
+    if (!m_segments.isEmpty()) {
+        qint64 previousEnd = m_sourceRange.startMs;
+        for (const TimeRange &segment : m_segments) {
+            if (!segment.isValid()
+                || segment.startMs < m_sourceRange.startMs
+                || segment.endMs > m_sourceRange.endMs) {
+                return fail(QStringLiteral(
+                    "Reframe plan segment is invalid or outside the source range."));
+            }
+            if (segment.startMs < previousEnd) {
+                return fail(QStringLiteral(
+                    "Reframe plan segments must be ordered and non-overlapping."));
+            }
+            previousEnd = segment.endMs;
+        }
+    }
+
     if (frameCount() < 1) {
         return fail(QStringLiteral(
             "Reframe plan range is shorter than one output frame."));
@@ -143,6 +199,19 @@ QJsonObject ReframePlan::toJsonObject() const
         keyframes.append(frame.toJsonObject());
     }
     object.insert(QStringLiteral("keyframes"), keyframes);
+
+    if (!m_segments.isEmpty()) {
+        QJsonArray segments;
+        for (const TimeRange &segment : m_segments) {
+            QJsonObject entry;
+            entry.insert(QStringLiteral("startMs"),
+                         static_cast<double>(segment.startMs));
+            entry.insert(QStringLiteral("endMs"),
+                         static_cast<double>(segment.endMs));
+            segments.append(entry);
+        }
+        object.insert(QStringLiteral("segments"), segments);
+    }
 
     return object;
 }
@@ -226,6 +295,26 @@ bool ReframePlan::readFromJsonObject(const QJsonObject &object, ReframePlan *out
             return fail(frameError);
         }
         plan.m_keyframes.append(frame);
+    }
+
+    const QJsonValue segmentsValue = object.value(QStringLiteral("segments"));
+    if (segmentsValue.isArray()) {
+        for (const QJsonValue &value : segmentsValue.toArray()) {
+            if (!value.isObject()) {
+                return fail(QStringLiteral(
+                    "Reframe plan segment entry is not an object."));
+            }
+            const QJsonObject entry = value.toObject();
+            const QJsonValue startValue = entry.value(QStringLiteral("startMs"));
+            const QJsonValue endValue = entry.value(QStringLiteral("endMs"));
+            if (!startValue.isDouble() || !endValue.isDouble()) {
+                return fail(QStringLiteral(
+                    "Reframe plan segment is missing numeric bounds."));
+            }
+            plan.m_segments.append(TimeRange{
+                static_cast<qint64>(startValue.toDouble()),
+                static_cast<qint64>(endValue.toDouble()) });
+        }
     }
 
     QString validationError;

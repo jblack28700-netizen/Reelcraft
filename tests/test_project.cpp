@@ -47,6 +47,7 @@
 #include "reframe/ReframePlan.h"
 #include "reframe/ReframePlanBuilder.h"
 #include "reframe/ReframePipeline.h"
+#include "reframe/TemporalEditPlan.h"
 #include "reframe/ReframeRenderer.h"
 #include "target/EquirectProjection.h"
 #include "target/EquirectViewPlan.h"
@@ -963,6 +964,17 @@ private slots:
     void reframeBuilderResolvesTargetsCaseInsensitively();
     void reframeBuilderRejectsUnresolvedTargets();
     void reframeBuilderHonorsIntentTimeRangeAndOutput();
+    void temporalEditPlanValidatesAndNormalizes();
+    void temporalEditPlanResolvesOperations();
+    void reframePlanHonorsOrderedSegments();
+    void reframeIntentParsesTemporalEdits();
+    void reframeIntentRejectsInvalidTemporalEdits();
+    void reframeCommandRunnerComposesTemporalEdits();
+    void reframeCommandRunnerTemporalFailuresAreHonest();
+    void reframeCommandRunnerTemporalComposesWithIdentityAndSpeaker();
+    void reframePipelineRendersTemporalSegments();
+    void applicationTemporalCommandResolvesAgainstProbedDuration();
+    void applicationTemporalOutcomePlaysBack();
     void reframePipelineRendersRealVideoEndToEnd();
     void reframeCommandRunnerResolvesSubjectAndBuildsPlan();
     void reframeCommandRunnerDirectionalCommandNeedsNoDetector();
@@ -1033,6 +1045,7 @@ private slots:
     void mainWindowPlaybackButtonsEmitRequests();
     void mainWindowShowsPlaybackStateAndPosition();
     void realReframePlaybackIntegration();
+    void realTemporalEditIntegration();
     void realApplicationCommandIntegration();
     void equirectDirectionFromCenterAndSides();
     void equirectPixelRoundTrip();
@@ -7090,6 +7103,323 @@ void ProjectTest::reframeCommandRunnerIsDeterministic()
     }
 }
 
+// ================= 360 temporal editing (Objective 14) =================
+// Temporal editing is a structured value (TemporalEditPlan) that composes with
+// the existing intent/plan/runner/renderer. These tests are model-free.
+
+void ProjectTest::temporalEditPlanValidatesAndNormalizes()
+{
+    // Keep: unordered, overlapping, and adjacent ranges normalize
+    // deterministically (sorted, merged).
+    const TemporalEditPlan keep = TemporalEditPlan::keep({
+        TemporalRange{ 5000, 6000 },
+        TemporalRange{ 1000, 2000 },
+        TemporalRange{ 1500, 2500 },
+        TemporalRange{ 2500, 3000 },
+    });
+    QVERIFY(keep.isSpecified());
+    QVERIFY(keep.isValid());
+    TemporalEditPlan normalized = keep;
+    QString error;
+    QVERIFY2(normalized.normalize(&error), qPrintable(error));
+    QCOMPARE(normalized.ranges().size(), 2);
+    QCOMPARE(normalized.ranges().at(0).startMs, qint64(1000));
+    QCOMPARE(normalized.ranges().at(0).endMs, qint64(3000));
+    QCOMPARE(normalized.ranges().at(1).startMs, qint64(5000));
+    QCOMPARE(normalized.ranges().at(1).endMs, qint64(6000));
+
+    // Reversed, zero-length, negative, empty, and non-positive durations are
+    // rejected.
+    QVERIFY(!TemporalEditPlan::keep({ TemporalRange{ 2000, 1000 } }).isValid());
+    QVERIFY(!TemporalEditPlan::keep({ TemporalRange{ 1000, 1000 } }).isValid());
+    QVERIFY(!TemporalEditPlan::keep({ TemporalRange{ -1, 1000 } }).isValid());
+    QVERIFY(!TemporalEditPlan::keep({}).isValid());
+    QVERIFY(!TemporalEditPlan::targetDuration(0).isValid());
+
+    // JSON round trip.
+    const TemporalEditPlan remove = TemporalEditPlan::remove({
+        TemporalRange{ 1000, 2000 }, TemporalRange{ 4000, 5000 } });
+    TemporalEditPlan restored;
+    QVERIFY2(TemporalEditPlan::readFromJsonObject(remove.toJsonObject(),
+                                                  &restored, &error),
+             qPrintable(error));
+    QVERIFY(restored.operation() == TemporalEditPlan::Operation::Remove);
+    QCOMPARE(restored.ranges().size(), 2);
+    QCOMPARE(restored.ranges().at(1).startMs, qint64(4000));
+}
+
+void ProjectTest::temporalEditPlanResolvesOperations()
+{
+    QString error;
+    const QList<TemporalRange> kept = TemporalEditPlan::keep({
+        TemporalRange{ 1000, 2000 }, TemporalRange{ 5000, 6000 } })
+        .resolve(30000, 0, &error);
+    QCOMPARE(kept.size(), 2);
+    QCOMPARE(kept.at(0).startMs, qint64(1000));
+    QCOMPARE(kept.at(1).endMs, qint64(6000));
+
+    // Remove resolves to the complement within [0, duration].
+    const QList<TemporalRange> complement = TemporalEditPlan::remove({
+        TemporalRange{ 1000, 2000 } }).resolve(4000, 0, &error);
+    QCOMPARE(complement.size(), 2);
+    QCOMPARE(complement.at(0).startMs, qint64(0));
+    QCOMPARE(complement.at(0).endMs, qint64(1000));
+    QCOMPARE(complement.at(1).startMs, qint64(2000));
+    QCOMPARE(complement.at(1).endMs, qint64(4000));
+
+    // Target duration with a default and an explicit start.
+    const QList<TemporalRange> target =
+        TemporalEditPlan::targetDuration(30000).resolve(120000, 45000, &error);
+    QCOMPARE(target.size(), 1);
+    QCOMPARE(target.at(0).startMs, qint64(45000));
+    QCOMPARE(target.at(0).endMs, qint64(75000));
+    const QList<TemporalRange> explicitStart =
+        TemporalEditPlan::targetDuration(30000, 60000)
+            .resolve(120000, 0, &error);
+    QCOMPARE(explicitStart.at(0).startMs, qint64(60000));
+
+    // Out-of-bounds, empty results, and an unknown duration fail honestly.
+    QVERIFY(TemporalEditPlan::keep({ TemporalRange{ 1000, 40000 } })
+                .resolve(30000, 0, &error).isEmpty());
+    QVERIFY(!error.isEmpty());
+    QVERIFY(TemporalEditPlan::remove({ TemporalRange{ 0, 30000 } })
+                .resolve(30000, 0, &error).isEmpty());
+    QVERIFY(TemporalEditPlan::targetDuration(40000)
+                .resolve(30000, 0, &error).isEmpty());
+    QVERIFY(TemporalEditPlan::keep({ TemporalRange{ 0, 1000 } })
+                .resolve(0, 0, &error).isEmpty());
+}
+
+void ProjectTest::reframePlanHonorsOrderedSegments()
+{
+    ReframePlan plan;
+    plan.setSourceRange(ReframePlan::TimeRange{ 0, 10000 });
+    plan.setOutput(ReframePlan::OutputSpec{ 320, 180, 10.0 });
+    plan.addKeyframe(makeKeyframe(0, 0.0));
+    plan.addKeyframe(makeKeyframe(10000, 0.0));
+    plan.setSegments({ ReframePlan::TimeRange{ 0, 1000 },
+                       ReframePlan::TimeRange{ 2000, 3000 } });
+    QCOMPARE(plan.frameCount(), 20);
+    QCOMPARE(plan.frameTimeMs(0), qint64(0));
+    QCOMPARE(plan.frameTimeMs(9), qint64(900));
+    QCOMPARE(plan.frameTimeMs(10), qint64(2000));
+    QCOMPARE(plan.frameTimeMs(19), qint64(2900));
+    QString error;
+    QVERIFY2(plan.isValid(&error), qPrintable(error));
+
+    // A segment outside the source range invalidates the plan.
+    ReframePlan outside = plan;
+    outside.setSegments({ ReframePlan::TimeRange{ 0, 1000 },
+                          ReframePlan::TimeRange{ 2000, 20000 } });
+    QVERIFY(!outside.isValid());
+
+    // JSON round trip preserves the ordered retained ranges.
+    ReframePlan restored;
+    QVERIFY2(ReframePlan::readFromJsonObject(plan.toJsonObject(), &restored,
+                                             &error),
+             qPrintable(error));
+    QCOMPARE(restored.segments().size(), 2);
+    QCOMPARE(restored.segments().at(1).startMs, qint64(2000));
+    QCOMPARE(restored.frameCount(), 20);
+}
+
+void ProjectTest::reframeIntentParsesTemporalEdits()
+{
+    const ReframeIntent cut = ReframeIntentParser::parse(
+        QStringLiteral("Cut from 35 seconds to 1 minute 10."));
+    QVERIFY(cut.hasTemporalRequest);
+    QVERIFY(cut.temporalError.isEmpty());
+    QVERIFY(cut.temporalEdit.operation() == TemporalEditPlan::Operation::Keep);
+    QCOMPARE(cut.temporalEdit.ranges().size(), 1);
+    QCOMPARE(cut.temporalEdit.ranges().at(0).startMs, qint64(35000));
+    QCOMPARE(cut.temporalEdit.ranges().at(0).endMs, qint64(70000));
+    QVERIFY(!cut.hasTimeRange); // a temporal edit is not a camera window
+
+    const ReframeIntent remove = ReframeIntentParser::parse(
+        QStringLiteral("Remove the boring part from 2:10 to 2:45."));
+    QVERIFY(remove.hasTemporalRequest);
+    QVERIFY(remove.temporalError.isEmpty());
+    QVERIFY(remove.temporalEdit.operation() == TemporalEditPlan::Operation::Remove);
+    QCOMPARE(remove.temporalEdit.ranges().at(0).startMs, qint64(130000));
+    QCOMPARE(remove.temporalEdit.ranges().at(0).endMs, qint64(165000));
+
+    const ReframeIntent keep = ReframeIntentParser::parse(
+        QStringLiteral("Keep 0:00-0:30 and 1:15-2:00."));
+    QVERIFY(keep.hasTemporalRequest);
+    QVERIFY(keep.temporalError.isEmpty());
+    QVERIFY(keep.temporalEdit.operation() == TemporalEditPlan::Operation::Keep);
+    QCOMPARE(keep.temporalEdit.ranges().size(), 2);
+    QCOMPARE(keep.temporalEdit.ranges().at(1).startMs, qint64(75000));
+    QCOMPARE(keep.temporalEdit.ranges().at(1).endMs, qint64(120000));
+
+    const ReframeIntent target = ReframeIntentParser::parse(
+        QStringLiteral("Make a 30-second version from this footage."));
+    QVERIFY(target.hasTemporalRequest);
+    QVERIFY(target.temporalError.isEmpty());
+    QVERIFY(target.temporalEdit.operation()
+            == TemporalEditPlan::Operation::TargetDuration);
+    QCOMPARE(target.temporalEdit.targetDurationMs(), qint64(30000));
+    QCOMPARE(target.temporalEdit.targetStartMs(), qint64(-1));
+
+    // "this section" refers to the command's effective range: no timestamp is
+    // invented by the parser.
+    const ReframeIntent section = ReframeIntentParser::parse(
+        QStringLiteral("Cut out this section but keep the reframing behavior."));
+    QVERIFY(section.hasTemporalRequest);
+    QVERIFY(section.temporalError.isEmpty());
+    QVERIFY(section.temporalUsesDefaultRange);
+    QVERIFY(section.temporalEdit.operation()
+            == TemporalEditPlan::Operation::Remove);
+}
+
+void ProjectTest::reframeIntentRejectsInvalidTemporalEdits()
+{
+    const ReframeIntent ambiguous = ReframeIntentParser::parse(
+        QStringLiteral("Cut 1:00 to 2:00."));
+    QVERIFY(ambiguous.hasTemporalRequest);
+    QVERIFY(!ambiguous.temporalError.isEmpty());
+
+    const ReframeIntent contradictory = ReframeIntentParser::parse(
+        QStringLiteral("Remove 1:00 to 2:00 and keep 3:00 to 4:00."));
+    QVERIFY(contradictory.hasTemporalRequest);
+    QVERIFY(!contradictory.temporalError.isEmpty());
+
+    const ReframeIntent missingRange = ReframeIntentParser::parse(
+        QStringLiteral("Remove the footage."));
+    QVERIFY(missingRange.hasTemporalRequest);
+    QVERIFY(!missingRange.temporalError.isEmpty());
+
+    const ReframeIntent reversed = ReframeIntentParser::parse(
+        QStringLiteral("Keep 2:00 to 1:00."));
+    QVERIFY(reversed.hasTemporalRequest);
+    QVERIFY(!reversed.temporalError.isEmpty());
+
+    // A non-temporal "keep" is still left to the camera parser.
+    const ReframeIntent centered = ReframeIntentParser::parse(
+        QStringLiteral("keep me centered"));
+    QVERIFY(!centered.hasTemporalRequest);
+    QCOMPARE(centered.moves.size(), 1);
+}
+
+void ProjectTest::reframeCommandRunnerComposesTemporalEdits()
+{
+    ReframeCommandRequest request;
+    request.instruction = QStringLiteral(
+        "Keep 0:00-0:30 and 1:15-2:00, then look left.");
+    request.defaultRange = ReframePlan::TimeRange{ 0, 300000 };
+    request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+    request.sourceDurationMs = 300000;
+
+    ReframeCommandResult result =
+        ReframeCommandRunner::prepare(request, nullptr, nullptr);
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QCOMPARE(result.plan.segments().size(), 2);
+    QCOMPARE(result.plan.segments().at(0).startMs, qint64(0));
+    QCOMPARE(result.plan.segments().at(0).endMs, qint64(30000));
+    QCOMPARE(result.plan.segments().at(1).startMs, qint64(75000));
+    QCOMPARE(result.plan.segments().at(1).endMs, qint64(120000));
+    QVERIFY(qAbs(CameraPath::stateAt(result.plan, 0).yawDeg + 90.0) < 1e-9);
+
+    // Remove resolves to the complement of the removed range.
+    request.instruction = QStringLiteral("Remove 2:10 to 2:45.");
+    result = ReframeCommandRunner::prepare(request, nullptr, nullptr);
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QCOMPARE(result.plan.segments().size(), 2);
+    QCOMPARE(result.plan.segments().at(0).startMs, qint64(0));
+    QCOMPARE(result.plan.segments().at(0).endMs, qint64(130000));
+    QCOMPARE(result.plan.segments().at(1).startMs, qint64(165000));
+    QCOMPARE(result.plan.segments().at(1).endMs, qint64(300000));
+
+    // A target-duration edit retains a window anchored at the range start.
+    request.instruction = QStringLiteral("Make a 30-second version.");
+    result = ReframeCommandRunner::prepare(request, nullptr, nullptr);
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QCOMPARE(result.plan.segments().size(), 1);
+    QCOMPARE(result.plan.segments().at(0).startMs, qint64(0));
+    QCOMPARE(result.plan.segments().at(0).endMs, qint64(30000));
+
+    // "this section" uses the effective default range.
+    request.instruction =
+        QStringLiteral("Cut out this section but keep the reframing behavior.");
+    request.defaultRange = ReframePlan::TimeRange{ 30000, 60000 };
+    request.sourceDurationMs = 120000;
+    result = ReframeCommandRunner::prepare(request, nullptr, nullptr);
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QCOMPARE(result.plan.segments().size(), 2);
+    QCOMPARE(result.plan.segments().at(0).endMs, qint64(30000));
+    QCOMPARE(result.plan.segments().at(1).startMs, qint64(60000));
+    QCOMPARE(result.plan.segments().at(1).endMs, qint64(120000));
+}
+
+void ProjectTest::reframeCommandRunnerTemporalFailuresAreHonest()
+{
+    ReframeCommandRequest request;
+    request.defaultRange = ReframePlan::TimeRange{ 0, 300000 };
+    request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+    request.sourceDurationMs = 300000;
+
+    request.instruction = QStringLiteral("Remove 0:00 to 10:00.");
+    ReframeCommandResult result =
+        ReframeCommandRunner::prepare(request, nullptr, nullptr);
+    QVERIFY(!result.ok);
+    QVERIFY(result.error.contains(QStringLiteral("out of bounds")));
+    QVERIFY(result.plan.segments().isEmpty());
+
+    request.instruction = QStringLiteral("Remove 2:10 to 2:45.");
+    request.sourceDurationMs = 0;
+    result = ReframeCommandRunner::prepare(request, nullptr, nullptr);
+    QVERIFY(!result.ok);
+    QVERIFY(result.error.contains(QStringLiteral("duration")));
+
+    request.sourceDurationMs = 300000;
+    request.instruction = QStringLiteral("Cut 1:00 to 2:00.");
+    result = ReframeCommandRunner::prepare(request, nullptr, nullptr);
+    QVERIFY(!result.ok);
+    QVERIFY(result.error.contains(QStringLiteral("ambiguous")));
+
+    request.instruction = QStringLiteral("Remove 0:00 to 5:00.");
+    result = ReframeCommandRunner::prepare(request, nullptr, nullptr);
+    QVERIFY(!result.ok);
+    QVERIFY(result.plan.segments().isEmpty());
+}
+
+void ProjectTest::reframePipelineRendersTemporalSegments()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable in this environment");
+    }
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    QString sourcePath;
+    QVERIFY(createEquirectReviewVideo(
+        dir.path(), FrameExtractor::defaultExecutablePath(), 4, &sourcePath));
+
+    ReframeCommandRequest request;
+    request.sourcePath = sourcePath;
+    request.sourceMediaId = QStringLiteral("temporal-media");
+    request.instruction =
+        QStringLiteral("Keep 0:00 to 0:01 and 0:02 to 0:03.");
+    request.outputPath = dir.filePath(QStringLiteral("temporal.mp4"));
+    request.defaultRange = ReframePlan::TimeRange{ 0, 4000 };
+    request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+    request.sourceDurationMs = 4000;
+
+    const ReframeCommandResult result =
+        ReframeCommandRunner::run(request, nullptr, nullptr);
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QCOMPARE(result.plan.segments().size(), 2);
+    QCOMPARE(result.frameCount, 4); // two 1s ranges at 2 fps
+    QVERIFY(QFileInfo::exists(result.outputPath));
+    QVERIFY(QFileInfo(result.outputPath).size() > 0);
+
+    QImage decoded;
+    QString error;
+    QVERIFY(FrameExtractor::extractFirstFrame(
+        result.outputPath, FrameExtractor::defaultExecutablePath(), &decoded,
+        &error));
+    QCOMPARE(decoded.size(), QSize(160, 90));
+}
+
 // ================= 360 application command orchestration (Phase 4, Obj 9) =========
 // Application-level tests: source selection, validation, delegation to the
 // existing command runner, structured result/error propagation, and the minimal
@@ -7762,6 +8092,46 @@ void ProjectTest::applicationWholeClipProbeFailureIsHonest()
     QVERIFY(outcome.error.contains(QStringLiteral("range")));
 }
 
+void ProjectTest::applicationTemporalCommandResolvesAgainstProbedDuration()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    FakeDurationProbe probe;
+    probe.setDuration(300000);
+    app.setMediaDurationProbe(&probe);
+    app.setReframeCommandExecutor(prepareExecutor());
+    app.setReframeDefaultOutput(160, 90, 2.0);
+
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("Remove 2:10 to 2:45."), 0, 0,
+                                    directory.filePath(QStringLiteral("out.mp4"))));
+    const ReframeCommandOutcome &outcome = app.lastReframeCommandOutcome();
+    QVERIFY2(outcome.ok, qPrintable(outcome.error));
+    QCOMPARE(outcome.temporalSegments.size(), 2);
+    QCOMPARE(outcome.temporalSegments.at(0).first, qint64(0));
+    QCOMPARE(outcome.temporalSegments.at(0).second, qint64(130000));
+    QCOMPARE(outcome.temporalSegments.at(1).first, qint64(165000));
+    QCOMPARE(outcome.temporalSegments.at(1).second, qint64(300000));
+    QCOMPARE(outcome.startMs, qint64(0));
+    QCOMPARE(outcome.endMs, qint64(300000));
+
+    // The persisted record round-trips its temporal segments.
+    ReframeCommandOutcome restored;
+    QString error;
+    QVERIFY2(ReframeCommandOutcome::readFromJsonObject(outcome.toJsonObject(),
+                                                       &restored, &error),
+             qPrintable(error));
+    QCOMPARE(restored.temporalSegments.size(), 2);
+    QCOMPARE(restored.temporalSegments.at(1).second, qint64(300000));
+
+    // An out-of-bounds temporal request is reported before execution.
+    QVERIFY(!app.runReframeCommandTo(QStringLiteral("Remove 0:00 to 10:00."), 0, 0,
+                                     directory.filePath(QStringLiteral("bad.mp4"))));
+    QVERIFY(app.lastReframeCommandOutcome().error.contains(
+        QStringLiteral("out of bounds")));
+}
+
 void ProjectTest::applicationRecordsReframeOutputs()
 {
     QTemporaryDir directory;
@@ -8031,6 +8401,68 @@ TargetTrack speakerTrack(const QString &id, double yawDeg)
 }
 
 } // namespace
+
+void ProjectTest::reframeCommandRunnerTemporalComposesWithIdentityAndSpeaker()
+{
+    {
+        const QImage frame = buildTargetEquirect(
+            360, 180, { EquirectDisk{ 40.0, 0.0, 10.0, QColor(255, 0, 0) },
+                        EquirectDisk{ -40.0, 0.0, 10.0, QColor(0, 0, 255) } });
+        StaticEquirectProvider provider(frame);
+        SyntheticColorDetector detector;
+        detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+        detector.addSpec(QColor(0, 0, 255), QStringLiteral("person"));
+
+        ReframeCommandRequest request;
+        request.instruction = QStringLiteral("Keep 0:00 to 0:30, then follow me.");
+        request.defaultRange = ReframePlan::TimeRange{ 0, 30000 };
+        request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+        request.sourceDurationMs = 30000;
+        request.resolveConfig = smallResolverConfig();
+        request.hasCreatorSelection = true;
+        request.creatorSelection.identity = QStringLiteral("me");
+        request.creatorSelection.timeMs = 0;
+        request.creatorSelection.yawDeg = 40.0;
+        request.creatorSelection.pitchDeg = 0.0;
+        request.creatorSelection.label = QStringLiteral("person");
+
+        const ReframeCommandResult result =
+            ReframeCommandRunner::prepare(request, &detector, &provider);
+        QVERIFY2(result.ok, qPrintable(result.error));
+        QCOMPARE(result.plan.segments().size(), 1);
+        QCOMPARE(result.plan.segments().at(0).endMs, qint64(30000));
+        QCOMPARE(result.resolvedTargets.size(), 1);
+        QVERIFY(qAbs(CameraPath::stateAt(result.plan, 0).yawDeg - 40.0) < 8.0);
+    }
+
+    {
+        const QImage frame = buildTargetEquirect(
+            360, 180, { EquirectDisk{ 30.0, 0.0, 10.0, QColor(255, 0, 0) } });
+        StaticEquirectProvider provider(frame);
+        SyntheticColorDetector detector;
+        detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+        SpeakerScriptProvider speaker;
+        speaker.setIntervals({ speakerInterval(0, 3000) });
+
+        ReframeCommandRequest request;
+        request.sourcePath = QStringLiteral("/tmp/reelcraft_dummy.mp4");
+        request.instruction =
+            QStringLiteral("Keep 0:00 to 0:30, then follow the speaker.");
+        request.defaultRange = ReframePlan::TimeRange{ 0, 30000 };
+        request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+        request.sourceDurationMs = 30000;
+        request.resolveConfig = smallResolverConfig();
+        request.speakerProvider = &speaker;
+
+        const ReframeCommandResult result =
+            ReframeCommandRunner::prepare(request, &detector, &provider);
+        QVERIFY2(result.ok, qPrintable(result.error));
+        QVERIFY(result.speakerCommand);
+        QCOMPARE(result.plan.segments().size(), 1);
+        QCOMPARE(result.plan.segments().at(0).endMs, qint64(30000));
+        QVERIFY(qAbs(CameraPath::stateAt(result.plan, 0).yawDeg - 30.0) < 8.0);
+    }
+}
 
 void ProjectTest::reframeIntentParsesSpeakerCenteredPhrases()
 {
@@ -8910,6 +9342,60 @@ void ProjectTest::applicationPlaybackDecodeErrorStops()
     QVERIFY(!app.isReframeOutputPlaying());
 }
 
+void ProjectTest::applicationTemporalOutcomePlaysBack()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandExecutor(
+        [](const ReframeCommandRequest &request, TargetDetector *,
+           ReframeFrameProvider *) {
+            ReframeCommandResult result;
+            result.ok = true;
+            result.outputPath = request.outputPath;
+            result.plan.setOutput(ReframePlan::OutputSpec{ 320, 180, 2.0 });
+            result.plan.setSegments({ ReframePlan::TimeRange{ 0, 1000 },
+                                      ReframePlan::TimeRange{ 2000, 3000 } });
+            return result;
+        });
+
+    const QString outputPath = directory.filePath(QStringLiteral("render.mp4"));
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 4000,
+                                    outputPath));
+    const ReframeCommandOutcome &record = app.lastReframeCommandOutcome();
+    QVERIFY(record.ok);
+    QCOMPARE(record.temporalSegments.size(), 2);
+    QVERIFY(createPlayableRecord(app, outputPath));
+
+    QList<QImage> frames{ playerTestFrame(0), playerTestFrame(1),
+                          playerTestFrame(2), playerTestFrame(3) };
+    ReframeCommandOutcome capturedRecord;
+    app.setPlaybackSourceFactory(
+        [&frames, &capturedRecord](const ReframeCommandOutcome &playbackRecord,
+                                   QString *) -> std::unique_ptr<FrameSource> {
+            capturedRecord = playbackRecord;
+            return std::unique_ptr<FrameSource>(
+                new PlaybackSourceDouble(frames, nullptr));
+        });
+    ManualClock clock;
+    RecordingPacingPolicy pacing(1);
+    app.setPlaybackClock(&clock);
+    app.setPlaybackPacing(&pacing);
+
+    int presented = 0;
+    QObject::connect(&app, &Application::reframePlaybackFrameReady,
+                     [&presented](const QImage &) { ++presented; });
+
+    // Objective 13 playback is agnostic to the temporal segments in the record.
+    QVERIFY(app.startReframeOutputPlayback(0));
+    QCOMPARE(capturedRecord.temporalSegments.size(), 2);
+    clock.advance(1000);
+    QCOMPARE(app.tickReframeOutputPlayback(), 1);
+    QCOMPARE(presented, 1);
+    app.stopReframeOutputPlayback();
+}
+
 void ProjectTest::mainWindowPlaybackButtonsEmitRequests()
 {
     TestMainWindow window;
@@ -9012,6 +9498,76 @@ void ProjectTest::realReframePlaybackIntegration()
     QVERIFY(frames > 0);
     QVERIFY(ended);
 
+    app.stopReframeOutputPlayback();
+    QVERIFY(!app.isReframeOutputPlaybackActive());
+}
+
+// Real 360 temporal editing (Objective 14; skipped unless configured).
+// Renders a temporally edited result from a real 360 source and plays it back
+// through the existing Objective 13 path. Direction-only: no ML model needed.
+void ProjectTest::realTemporalEditIntegration()
+{
+    const QString clip = qEnvironmentVariable("REELCRAFT_TARGET_CLIP");
+    if (clip.isEmpty()) {
+        QSKIP("real temporal edit validation not configured "
+              "(set REELCRAFT_TARGET_CLIP)");
+    }
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable");
+    }
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString outputPath = qEnvironmentVariable("REELCRAFT_TEMPORAL_OUTPUT");
+    if (outputPath.isEmpty()) {
+        outputPath = directory.filePath(QStringLiteral("temporal_render.mp4"));
+    }
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(clip));
+    QVERIFY(app.setActiveMedia(app.mediaItems().first().id()));
+    app.setReframeDefaultOutput(320, 180, 10.0);
+
+    // Retain the first second and the 4th-5th second of the whole clip. The
+    // zero range means "whole clip" and is resolved through the duration probe.
+    QVERIFY2(app.runReframeCommandTo(
+                 QStringLiteral("Keep 0:00 to 0:01 and 0:04 to 0:05."), 0, 0,
+                 outputPath),
+             qPrintable(app.lastReframeCommandOutcome().error));
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    const ReframeCommandOutcome &record = app.reframeOutputs().at(0);
+    QVERIFY2(record.ok, qPrintable(record.error));
+    QCOMPARE(record.temporalSegments.size(), 2);
+    QCOMPARE(record.temporalSegments.at(0).first, qint64(0));
+    QCOMPARE(record.temporalSegments.at(0).second, qint64(1000));
+    QCOMPARE(record.temporalSegments.at(1).first, qint64(4000));
+    QCOMPARE(record.temporalSegments.at(1).second, qint64(5000));
+    QVERIFY(record.frameCount > 0);
+    QVERIFY(QFileInfo::exists(record.outputPath));
+    QVERIFY(QFileInfo(record.outputPath).size() > 0);
+    qInfo("real temporal render: segments=%lld..%lld,%lld..%lld frames=%d "
+          "output=%s",
+          static_cast<long long>(record.temporalSegments.at(0).first),
+          static_cast<long long>(record.temporalSegments.at(0).second),
+          static_cast<long long>(record.temporalSegments.at(1).first),
+          static_cast<long long>(record.temporalSegments.at(1).second),
+          record.frameCount, qPrintable(record.outputPath));
+
+    int frames = 0;
+    bool ended = false;
+    QObject::connect(&app, &Application::reframePlaybackFrameReady,
+                     [&frames](const QImage &) { ++frames; });
+    QObject::connect(&app, &Application::reframePlaybackEnded,
+                     [&ended]() { ended = true; });
+
+    QVERIFY(app.startReframeOutputPlayback(0));
+    for (int i = 0; i < 200 && !ended; ++i) {
+        QTest::qWait(50);
+    }
+    qInfo("real temporal playback: frames=%d ended=%d", frames, ended ? 1 : 0);
+    QVERIFY(frames > 0);
+    QVERIFY(ended);
     app.stopReframeOutputPlayback();
     QVERIFY(!app.isReframeOutputPlaybackActive());
 }

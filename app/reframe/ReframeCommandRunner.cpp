@@ -74,6 +74,75 @@ ReframeCommandResult ReframeCommandRunner::prepare(
         return result;
     }
 
+
+    // Objective 14: resolve a structured temporal edit against the known
+    // source duration. Deterministic, model-free, and honest: it never invents
+    // a timestamp and fails when the request cannot be satisfied.
+    QList<TemporalRange> temporalSegments;
+    const bool hasTemporalEdit = result.intent.hasTemporalRequest;
+    if (hasTemporalEdit) {
+        if (!result.intent.temporalError.isEmpty()) {
+            result.error = result.intent.temporalError;
+            return result;
+        }
+        TemporalEditPlan edit = result.intent.temporalEdit;
+        if (result.intent.temporalUsesDefaultRange) {
+            if (!range.isValid()) {
+                result.error = QStringLiteral(
+                    "A temporal command that refers to 'this section' needs a "
+                    "valid current selection.");
+                return result;
+            }
+            const QList<TemporalRange> seed{
+                TemporalRange{ range.startMs, range.endMs } };
+            edit = edit.operation() == TemporalEditPlan::Operation::Keep
+                ? TemporalEditPlan::keep(seed)
+                : TemporalEditPlan::remove(seed);
+        }
+        if (!edit.isSpecified()) {
+            result.error = QStringLiteral("Temporal edit is not specified.");
+            return result;
+        }
+        if (request.sourceDurationMs <= 0) {
+            result.error = QStringLiteral(
+                "The source duration is required to resolve a temporal edit.");
+            return result;
+        }
+        QString resolveError;
+        temporalSegments = edit.resolve(
+            request.sourceDurationMs, range.startMs, &resolveError);
+        if (temporalSegments.isEmpty()) {
+            result.error = resolveError.isEmpty()
+                ? QStringLiteral("Temporal edit could not be resolved.")
+                : resolveError;
+            return result;
+        }
+        result.notes.append(QStringLiteral(
+            "Temporal edit resolves to %1 retained source range(s).")
+            .arg(temporalSegments.size()));
+    }
+
+    const auto applyTemporal = [&](ReframePlan *plan) {
+        if (!hasTemporalEdit || !plan) {
+            return;
+        }
+        QList<ReframePlan::TimeRange> segments;
+        for (const TemporalRange &segment : temporalSegments) {
+            segments.append(
+                ReframePlan::TimeRange{ segment.startMs, segment.endMs });
+        }
+        plan->setSegments(segments);
+        // Keep the plan valid: the source range must still contain both the
+        // keyframes and every retained segment.
+        qint64 minStart = plan->sourceRange().startMs;
+        qint64 maxEnd = plan->sourceRange().endMs;
+        for (const TemporalRange &segment : temporalSegments) {
+            minStart = qMin(minStart, segment.startMs);
+            maxEnd = qMax(maxEnd, segment.endMs);
+        }
+        plan->setSourceRange(ReframePlan::TimeRange{ minStart, maxEnd });
+    };
+
     // Unique subject references, in instruction order, classified into speaker
     // references (Objective 11) and ordinary subject references.
     QStringList references;
@@ -268,6 +337,7 @@ ReframeCommandResult ReframeCommandRunner::prepare(
         result.resolvedTargets = targets;
         result.intent.unresolvedTargets.clear();
         result.plan = speakerPlan;
+        applyTemporal(&result.plan);
         result.plan.setSourceMediaId(request.sourceMediaId);
         result.ok = true;
         return result;
@@ -346,6 +416,7 @@ ReframeCommandResult ReframeCommandRunner::prepare(
     }
 
     result.plan = built.plan;
+    applyTemporal(&result.plan);
     result.plan.setSourceMediaId(request.sourceMediaId);
     result.ok = true;
     return result;

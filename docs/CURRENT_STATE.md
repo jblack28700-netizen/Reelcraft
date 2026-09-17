@@ -2,7 +2,7 @@
 
 ## Current Version
 
-0.2.50
+0.2.51
 
 ## Current Branch
 
@@ -10,7 +10,7 @@ main
 
 ## Current Stage
 
-Phase 4 — 360 Reframing Engine (deterministic vertical slice), Target/Subject Resolution, real detector integration, structured target identity/selection, optional appearance-based re-identification, optional audio/speaker evidence, an audio-visual provider-attribution seam, end-to-end user-command execution, application-level command orchestration, persisted render records with duration-aware ranges, speaker-aware commands, application command UI with rendered-result preview, and continuous rendered-result playback implemented and verified. Phase 3 Media Engine remains open; its player-lifecycle objective is intentionally superseded for now by the human-approved 360 priority.
+Phase 4 — 360 Reframing Engine (deterministic vertical slice), Target/Subject Resolution, real detector integration, structured target identity/selection, optional appearance-based re-identification, optional audio/speaker evidence, an audio-visual provider-attribution seam, end-to-end user-command execution, application-level command orchestration, persisted render records with duration-aware ranges, speaker-aware commands, application command UI with rendered-result preview, continuous rendered-result playback, and deterministic 360 temporal editing (retain/remove/target-duration) composed with the existing reframing, persistence, and playback paths implemented and verified. Phase 3 Media Engine remains open; its player-lifecycle objective is intentionally superseded for now by the human-approved 360 priority.
 
 ## Project Status
 
@@ -1073,6 +1073,22 @@ Status: Complete (2026-09-17). Human-selected scope (Decision 030): turn the Obj
 - Architecture decision: Decision 030.
 
 Next: GPU optimization, persisting the creator "me" selection, and general (active-media) playback remain future candidates. Requires its own scoped objective.
+
+## Phase 4 Objective 14 — 360 Temporal Editing Operations — Complete
+
+Status: Complete (2026-09-17). Human-selected scope (Decision 031): deterministic retain / remove / target-duration temporal editing that composes with the existing reframing, persistence, and playback paths.
+
+- \`app/reframe/TemporalEditPlan.{h,cpp}\`: a validated, JSON-serializable, parser-independent representation of a temporal edit (Keep / Remove / TargetDuration, ordered multi-ranges, \`isValid\`, deterministic \`normalize\`, \`resolve(durationMs, defaultStartMs)\`). Reversed, zero-length, negative, and out-of-bounds ranges, empty results, and non-positive durations are rejected; Remove resolves to the complement and TargetDuration to a window.
+- \`ReframeIntentParser\` produces \`ReframeIntent::temporalEdit\` from the documented phrases ("cut from X to Y", "remove X to Y", "keep X and Y", "make a N-second version", "this section") reusing the existing intent architecture, including word timestamps such as "35 seconds" and "1 minute 10". Invalid, ambiguous, contradictory, and out-of-bounds requests are explicit and honest, and no timestamp is invented.
+- \`ReframeCommandRunner\` resolves the structured edit against the known source duration (supplied by \`Application\` from the whole-clip duration probe) and composes it with the existing target/identity/speaker resolution. The temporal clause is not misread as a camera window or subject.
+- \`ReframePlan\` gained an additive ordered \`segments\` list (empty = the existing single \`sourceRange\`) that changes only frame timing and camera-path evaluation time; \`frameCount()\`/\`frameTimeMs()\`/\`isValid()\` honor it and the \`ReframeRenderer\`/\`ReframePipeline\` need no new rendering architecture. The source media stays read-only.
+- \`ReframeCommandOutcome\` persists the ordered retained ranges (JSON round-trippable); the resulting flat render is a normal record that plays through the existing Objective 13 playback with no new playback system.
+- 11 new model-free tests plus an env-gated \`realTemporalEditIntegration\`; full model-free suite 379 passed / 0 failed / 6 skipped.
+- Real-media validation (\`realTemporalEditIntegration\`, audio+video proxy; original untouched): "Keep 0:00 to 0:01 and 0:04 to 0:05." on the whole clip probed to two retained ranges (0..1000 ms, 4000..5000 ms), rendered a 320x180 @ 10 fps result (20 frames), and played all 20 frames back through Objective 13.
+- Architecture decision: Decision 031.
+
+Next: GPU optimization, persisting the creator "me" selection, and general (active-media) playback remain future candidates. Requires its own scoped objective.
+
 
 
 

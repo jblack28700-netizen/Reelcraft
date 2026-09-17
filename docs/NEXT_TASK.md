@@ -10,7 +10,7 @@ Priority pipeline: 360 source -> scene/subject understanding -> natural-language
 
 The Phase 3 Objective 5 entry below remains valid project history but must NOT be started mechanically while the 360 priority is active. It should resume only when it directly serves the 360 capability (for example, previewing/playing reframed results).
 
-**Current 360 status:** Reframing Objectives 1–12 are complete and verified (deterministic vertical slice; target/subject resolution; real detector integration; target identity/selection; appearance re-identification; audio/speaker evidence; audio-visual provider-attribution seam; end-to-end user-command execution; application command orchestration; persisted outputs and duration-aware ranges; speaker-aware commands; application command UI and rendered-result preview). See the end of this file for the next candidates; each requires its own scoped objective.
+**Current 360 status:** Reframing Objectives 1–14 are complete and verified (deterministic vertical slice; target/subject resolution; real detector integration; target identity/selection; appearance re-identification; audio/speaker evidence; audio-visual provider-attribution seam; end-to-end user-command execution; application command orchestration; persisted outputs and duration-aware ranges; speaker-aware commands; application command UI and rendered-result preview; rendered-result playback; deterministic temporal editing). See the end of this file for the next candidates; each requires its own scoped objective.
 
 ---
 
@@ -361,6 +361,21 @@ Human-selected scope (Decision 030): turn the Objective 12 single-frame rendered
 - Minimal UI: Play/Pause/Stop Render controls and a position readout.
 - 9 new model-free tests; full model-free suite 368 passed / 0 failed / 5 skipped. New env-gated `realReframePlaybackIntegration`.
 - Architecture decision: Decision 030.
+
+## 360 Reframing Objective 14 — 360 Temporal Editing Operations — Complete
+
+Status: **Complete — implemented and verified (2026-09-17).**
+
+### Objective
+Human-selected scope (Decision 031): add deterministic temporal editing (retain / remove / target-duration) that composes with the existing reframing, persistence, and playback paths, without building a timeline editor or changing the renderer/projection/playback architecture.
+
+### Scope (implemented)
+- \`app/reframe/TemporalEditPlan.{h,cpp}\`: parser-independent, JSON-serializable Keep / Remove / TargetDuration with ordered multi-ranges, validation, deterministic normalization, and \`resolve(durationMs, defaultStartMs)\`.
+- \`ReframeIntentParser\` -> \`ReframeIntent::temporalEdit\` for "cut from X to Y", "remove X to Y", "keep X and Y", "make a N-second version", and "this section"; invalid / ambiguous / contradictory / out-of-bounds requests are explicit and honest.
+- \`ReframePlan\` additive ordered \`segments\` (empty = the existing single source range) changes only frame timing; \`ReframeCommandRunner\` resolves the edit against the known duration and composes it with target/identity/speaker resolution; \`Application\` supplies the probed duration and persists the segments in \`ReframeCommandOutcome\`.
+- The resulting flat render is a normal record that plays through the existing Objective 13 playback; the source is read-only.
+- 11 new model-free tests; full model-free suite 379 passed / 0 failed / 6 skipped. New env-gated \`realTemporalEditIntegration\` renders a temporally edited 360 result and plays it back.
+- Architecture decision: Decision 031.
 
 ## Next Objective — GPU Optimization, Creator-Selection Persistence, or General Playback — NOT STARTED
 

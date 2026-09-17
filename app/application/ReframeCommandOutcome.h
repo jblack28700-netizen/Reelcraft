@@ -4,6 +4,7 @@
 #include <QJsonObject>
 #include <QList>
 #include <QMetaType>
+#include <QPair>
 #include <QString>
 #include <QStringList>
 
@@ -36,8 +37,12 @@ struct ReframeCommandOutcome
     QStringList notes;
     QStringList unresolvedReferences;
     QList<ReframeTarget> resolvedTargets;
+    // Objective 14: ordered retained source ranges of a temporal edit. Empty
+    // means the render used the single [startMs, endMs] range.
+    QList<QPair<qint64, qint64>> temporalSegments;
 
     bool hasRange() const { return endMs > startMs && startMs >= 0; }
+    bool hasTemporalSegments() const { return !temporalSegments.isEmpty(); }
 
     QJsonObject toJsonObject() const
     {
@@ -75,6 +80,18 @@ struct ReframeCommandOutcome
             targetArray.append(targetObject);
         }
         object.insert(QStringLiteral("resolvedTargets"), targetArray);
+        if (!temporalSegments.isEmpty()) {
+            QJsonArray segmentArray;
+            for (const QPair<qint64, qint64> &segment : temporalSegments) {
+                QJsonObject entry;
+                entry.insert(QStringLiteral("startMs"),
+                             static_cast<double>(segment.first));
+                entry.insert(QStringLiteral("endMs"),
+                             static_cast<double>(segment.second));
+                segmentArray.append(entry);
+            }
+            object.insert(QStringLiteral("temporalSegments"), segmentArray);
+        }
         return object;
     }
 
@@ -145,6 +162,26 @@ struct ReframeCommandOutcome
                 target.pitchDeg =
                     targetObject.value(QStringLiteral("pitchDeg")).toDouble();
                 outcome.resolvedTargets.append(target);
+            }
+        }
+
+        const QJsonValue segmentsValue =
+            object.value(QStringLiteral("temporalSegments"));
+        if (segmentsValue.isArray()) {
+            for (const QJsonValue &value : segmentsValue.toArray()) {
+                if (!value.isObject()) {
+                    continue;
+                }
+                const QJsonObject entry = value.toObject();
+                const QJsonValue startValue =
+                    entry.value(QStringLiteral("startMs"));
+                const QJsonValue endValue = entry.value(QStringLiteral("endMs"));
+                if (!startValue.isDouble() || !endValue.isDouble()) {
+                    continue;
+                }
+                outcome.temporalSegments.append(qMakePair(
+                    static_cast<qint64>(startValue.toDouble()),
+                    static_cast<qint64>(endValue.toDouble())));
             }
         }
 

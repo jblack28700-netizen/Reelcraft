@@ -941,3 +941,43 @@ Out of scope (explicit): QtMultimedia; audio; general-purpose media playback; ti
 - 9 new model-free tests cover start/play/pause/resume/stop/replace/end/error/position and the UI controls. Full model-free suite: 368 passed / 0 failed / 5 skipped.
 - Real-media completion validation renders a real 360 clip to a flat result through the existing pipeline and plays it back; it surfaced and drove a fix for a **pre-existing media-seam bug**: `FfmpegFrameSource::readNextFrame` reported end-of-stream as soon as the ffmpeg process exited, discarding output still buffered in the pipe, so a slow/paced consumer lost the tail (about 10 of 20 frames). The read now drains all buffered output before deciding EOF, and the validation plays all 20 rendered frames. This is a correctness fix inside the existing media seam, not a new architecture.
 - Decisions 017–029 preserved. General/active-media playback, audio, timeline editing, duration metadata, creator-selection persistence, and GPU optimization remain future work.
+
+
+# Decision 031 — Objective 14 Scope: 360 Temporal Editing Operations
+
+**Status:** Accepted (2026-09-17, 360 Reframing Objective 14; human-selected scope)
+
+## Context
+
+The 360 pipeline resolves targets, plans a camera, renders deterministically, persists records, and (Objective 13) plays rendered results. It has no notion of *temporal* editing: a plan renders one contiguous source range. Objective 14 adds a deterministic temporal-editing foundation — retain / remove / target-duration — that composes with the existing reframing/target/speaker layers and reuses the existing execution, persistence, and playback paths.
+
+## Scope (human-selected)
+
+In scope:
+- A deterministic, JSON-serializable temporal representation, independent of natural-language parsing: `TemporalEditPlan` with Keep/Remove/TargetDuration operations, ordered multi-range support, validation, deterministic normalization, and rejection of invalid/ambiguous/contradictory input.
+- Command integration through the existing `ReframeIntentParser`/`ReframeIntent` (no parallel parser): parse 'cut from X to Y', 'remove X to Y', 'keep X and Y', 'make a N-second version', and compose with existing target/reframe clauses.
+- Composition with 360 reframing: a temporal selection is expressed as ordered retained source ranges on the existing `ReframePlan`; the camera path is still evaluated at absolute source time.
+- Deterministic execution: the existing `ReframeRenderer`/`ReframePipeline` render each retained range in order, concatenating frames; the source media stays read-only and a new persisted result is produced.
+- Persisted records and Objective 13 playback: the resulting flat output is a normal render record and plays back through the existing playback path.
+
+Out of scope (explicit): full timeline editor; drag-and-drop/scrubbing UI; captions; transitions; effects; color grading; audio editing/mixing; general media playback; QtMultimedia; GPU optimization; new ML/perception/detection/re-identification/speaker systems; changing the 360 projection/reframing architecture; replacing the playback architecture; creator-'me' persistence; any later objective.
+
+## Definition of Done
+
+1. `TemporalEditPlan` (app/reframe) is a validated, JSON-serializable representation independent of the parser: Keep/Remove/TargetDuration, ordered ranges, `isValid`, deterministic `normalize`, `resolve(durationMs, defaultStartMs)`, and rejection of reversed/zero-length/negative/out-of-bounds ranges and empty or contradictory results.
+2. `ReframeIntentParser` produces `ReframeIntent::temporalEdit` from the documented temporal phrases, reusing the existing intent architecture; invalid time ranges, out-of-bounds ranges, contradictory operations, unsupported operations, and ambiguous requests are explicit and honest.
+3. `ReframePlan` gains an additive, ordered `segments` list (empty = the existing single source range) that changes only frame timing; `frameCount()`/`frameTimeMs()` and `isValid()` honor it, and the `ReframeRenderer` needs no new architecture.
+4. `ReframeCommandRunner` composes a resolved temporal selection with the existing target/identity/speaker resolution and builds a plan whose segments are the retained ranges.
+5. `Application` resolves the temporal edit against the probed source duration (whole-clip probing already exists) and reports out-of-bounds/contradictory cases honestly before execution.
+6. `ReframeCommandOutcome` persists the retained segments so the record represents the resulting output.
+7. The produced render plays through the existing Objective 13 playback with no new playback system.
+8. Tests cover valid single/multiple ranges, keep, remove, overlapping, adjacent, reversed, zero-length, negative/out-of-bounds, deterministic normalization, contradictory operations, ambiguous commands, temporal+target, temporal+'me', temporal+speaker (where the architecture permits), rendering a temporally edited result, and playback of it.
+9. Full model-free regression is green; one real-media completion validation renders a temporally edited 360 result and plays it back.
+10. Documentation updated (DECISIONS, CURRENT_STATE, NEXT_TASK, CHANGELOG, DEVELOPMENT_LOG, PROJECT_HISTORY, AI_HANDOFF, KNOWN_ISSUES where applicable); dedicated checkpoint commit; clean tree; Decisions 017–030 preserved.
+
+## Decisions
+
+- The temporal representation is a first-class structured value (not parser state); the parser only produces it.
+- Temporal selection is expressed as ordered retained ranges on the existing `ReframePlan`; the deterministic renderer concatenates per-range frames and the camera path is evaluated at absolute source time. No new rendering architecture.
+- Remove and target-duration operations are resolved to retained ranges against the known source duration; without a duration they fail honestly.
+- The command layer distinguishes valid / invalid-range / out-of-bounds / contradictory / unsupported / ambiguous outcomes and never invents timestamps.

@@ -605,6 +605,9 @@ bool Application::runReframeCommandTo(const QString &instruction, qint64 startMs
     request.instruction = outcome.instruction;
     request.outputPath = outcome.outputPath;
     request.defaultRange = ReframePlan::TimeRange{ effectiveStartMs, effectiveEndMs };
+    // Objective 14: the effective end is the known source upper bound used to
+    // resolve a temporal edit (Remove/TargetDuration bounds checks).
+    request.sourceDurationMs = effectiveEndMs;
     request.defaultOutput = ReframePlan::OutputSpec{
         m_reframeOutputWidth, m_reframeOutputHeight, m_reframeOutputFps };
     request.speakerProvider = m_speakerProvider;
@@ -621,6 +624,22 @@ bool Application::runReframeCommandTo(const QString &instruction, qint64 startMs
     if (result.intent.hasTimeRange) {
         outcome.startMs = result.intent.startMs;
         outcome.endMs = result.intent.endMs;
+    }
+    // Objective 14: persist the ordered retained ranges when the command
+    // performed a temporal edit.
+    for (const ReframePlan::TimeRange &segment : result.plan.segments()) {
+        outcome.temporalSegments.append(
+            qMakePair(segment.startMs, segment.endMs));
+    }
+    if (!outcome.temporalSegments.isEmpty()) {
+        qint64 rangeStart = outcome.temporalSegments.first().first;
+        qint64 rangeEnd = outcome.temporalSegments.first().second;
+        for (const QPair<qint64, qint64> &segment : outcome.temporalSegments) {
+            rangeStart = qMin(rangeStart, segment.first);
+            rangeEnd = qMax(rangeEnd, segment.second);
+        }
+        outcome.startMs = rangeStart;
+        outcome.endMs = rangeEnd;
     }
     const ReframePlan::OutputSpec planOutput = result.plan.output();
     if (planOutput.isValid()) {

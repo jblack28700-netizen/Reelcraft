@@ -4,6 +4,8 @@
 #include <QString>
 #include <QStringList>
 
+#include "reframe/TemporalEditPlan.h"
+
 // ReframeTarget is a RESOLVED view direction for a named subject. Resolution
 // (person/object detection, tracking, calibration) is a separate, replaceable
 // capability; the intent layer never invents coordinates. A target that cannot
@@ -42,6 +44,16 @@ struct ReframeIntent
     QList<ReframeCameraMove> moves;
     QStringList unresolvedTargets;
     QStringList notes;
+
+    // Objective 14: structured temporal editing request (independent of any
+    // rendering). hasTemporalRequest is true when a temporal operation was
+    // recognized, even if it is invalid; temporalError then explains why.
+    bool hasTemporalRequest = false;
+    TemporalEditPlan temporalEdit;
+    QString temporalError;
+    // True when the command referred to "this section"/"the current part"
+    // without explicit timestamps; the runner substitutes the effective range.
+    bool temporalUsesDefaultRange = false;
 };
 
 // Deterministic, rule-based parser for a small, documented instruction

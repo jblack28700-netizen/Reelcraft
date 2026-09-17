@@ -1488,3 +1488,43 @@ Human-selected scope (Decision 030): turn the Objective 12 single-frame rendered
 ### Decisions
 
 - Decision 030 recorded. Decisions 017-029 preserved unchanged.
+
+---
+
+## 2026-09-17 — 360 Reframing Objective 14: 360 Temporal Editing Operations
+
+### Objective
+
+Human-selected scope (Decision 031): add deterministic temporal editing (retain / remove / target-duration) that composes with the existing reframing, persistence, and playback paths, without building a timeline editor or changing the renderer/projection/playback architecture.
+
+### Work completed
+
+- \`app/reframe/TemporalEditPlan.{h,cpp}\`: parser-independent, JSON-serializable Keep / Remove / TargetDuration with ordered multi-ranges, validation, deterministic normalization, and \`resolve(durationMs, defaultStartMs)\`. Reversed/zero-length/negative/out-of-bounds ranges, empty results, and non-positive durations are rejected.
+- \`ReframeIntentParser\` / \`ReframeIntent\` (extended, no parallel parser): \`temporalEdit\` from "cut from X to Y", "remove X to Y", "keep X and Y", "make a N-second version", and "this section", including word timestamps ("35 seconds", "1 minute 10"). Invalid, ambiguous, contradictory, and out-of-bounds requests are explicit; temporal clauses are not misread as camera windows and are skipped by the camera parser.
+- \`ReframeCommandRunner\`: resolves the structured edit against the known source duration and applies the retained ranges as an ordered \`ReframePlan::segments\` list (additive; empty = the existing single source range). The source range is expanded to keep keyframes and segments valid. Composes with target/identity/speaker resolution.
+- \`ReframePlan\`: \`frameCount()\`/\`frameTimeMs()\`/\`isValid()\` honor segments; JSON round-trips them; the existing \`ReframeRenderer\`/\`ReframePipeline\` execute them unchanged.
+- \`Application\`: supplies the probed whole-clip duration as \`sourceDurationMs\`, records the resolved segments in \`ReframeCommandOutcome\`, and sets the outcome range to the segments' bounding range.
+- \`ReframeCommandOutcome\`: additive \`temporalSegments\` (JSON round-trippable).
+- 11 new model-free tests plus an env-gated \`realTemporalEditIntegration\`.
+
+### Verification
+
+- Model-free suite: 379 passed, 0 failed, 6 skipped.
+- Focused Objective 14 tests: 11 passed.
+- Test build succeeds.
+- Real media (\`realTemporalEditIntegration\`, audio+video proxy; original untouched): "Keep 0:00 to 0:01 and 0:04 to 0:05." retained 0..1000 ms and 4000..5000 ms, rendered a 320x180 @ 10 fps result (20 frames), and played it back through Objective 13.
+- Change-impact: the renderer, projection, camera path, perception/identity/speaker layers, and the playback architecture are unchanged; the additions are the temporal representation, parser clauses, plan segments, runner resolution, and outcome persistence.
+
+### Failure recovery
+
+- The first parser version fed the temporal clause to the camera-subject parser, so "Keep 0:00 to 0:30, then follow me." produced a spurious unresolved subject "0:30" (pattern "to <subject>"). Fix: the camera parser now skips temporal clauses (\`isTemporalClause\`). A test instruction that used "1:00" intending one second was corrected to "0:01".
+
+### Boundary notes / not implemented
+
+- No timeline editor, drag/drop/scrubbing UI, captions, transitions, effects, color grading, or audio editing.
+- "this section" resolves to the command's effective range; there is still no persisted selection, and a temporal clause combined with a camera clause inside one clause without "then" (for example "keep 0:00 to 0:30 and follow me") loses the camera clause.
+- The creator "me" selection remains session state; GPU optimization remains future work.
+
+### Decisions
+
+- Decision 031 recorded. Decisions 017-030 preserved unchanged.

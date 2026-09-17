@@ -32,6 +32,7 @@ SOURCES += \
     ../app/reframe/ReframeIntent.cpp \
     ../app/reframe/ReframePlan.cpp \
     ../app/reframe/ReframePlanBuilder.cpp \
+    ../app/reframe/TemporalEditPlan.cpp \
     ../app/reframe/ReframePipeline.cpp \
     ../app/reframe/ReframeRenderer.cpp \
     ../app/target/EquirectProjection.cpp \
@@ -86,6 +87,7 @@ HEADERS += \
     ../app/reframe/ReframeMath.h \
     ../app/reframe/ReframePlan.h \
     ../app/reframe/ReframePlanBuilder.h \
+    ../app/reframe/TemporalEditPlan.h \
     ../app/reframe/ReframePipeline.h \
     ../app/reframe/ReframeRenderer.h \
     ../app/target/EquirectProjection.h \

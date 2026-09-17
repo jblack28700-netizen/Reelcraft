@@ -51,6 +51,13 @@ public:
     TimeRange sourceRange() const { return m_sourceRange; }
     void setSourceRange(const TimeRange &sourceRange) { m_sourceRange = sourceRange; }
 
+    // Objective 14: optional ordered retained source ranges. Empty means the
+    // plan renders the single sourceRange (existing behavior). When set, the
+    // output is the ordered concatenation of these ranges and the camera path
+    // is evaluated at the absolute source time of each frame.
+    QList<TimeRange> segments() const { return m_segments; }
+    void setSegments(const QList<TimeRange> &segments) { m_segments = segments; }
+
     OutputSpec output() const { return m_output; }
     void setOutput(const OutputSpec &output) { m_output = output; }
 
@@ -85,6 +92,7 @@ public:
 private:
     QString m_sourceMediaId;
     TimeRange m_sourceRange;
+    QList<TimeRange> m_segments;
     OutputSpec m_output;
     QList<CameraKeyframe> m_keyframes;
     int m_schemaVersion = CurrentSchemaVersion;

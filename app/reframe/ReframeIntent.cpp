@@ -2,6 +2,8 @@
 
 #include <QRegularExpression>
 
+#include <algorithm>
+
 namespace {
 
 QString normalized(const QString &text)
@@ -218,6 +220,328 @@ void applyAspect(ReframeIntent &intent, const QString &text)
     }
 }
 
+QList<TimeToken> findWordTimeTokens(const QString &text)
+{
+    QList<TimeToken> tokens;
+    static const QRegularExpression minutes(
+        QStringLiteral("(\\d+(?:\\.\\d+)?)[\\s-]*(?:minutes?|mins?|min)\\b"
+                       "(?:[\\s-]*(?:and[\\s-]*)?(\\d+(?:\\.\\d+)?)"
+                       "[\\s-]*(?:seconds?|secs?|sec|s)?)?"));
+    static const QRegularExpression seconds(
+        QStringLiteral("(\\d+(?:\\.\\d+)?)[\\s-]*(?:seconds?|secs?|sec|s)\\b"));
+
+    QRegularExpressionMatchIterator it = minutes.globalMatch(text);
+    while (it.hasNext()) {
+        const QRegularExpressionMatch match = it.next();
+        TimeToken token;
+        token.start = match.capturedStart();
+        token.end = match.capturedEnd();
+        token.ms = qRound64(match.captured(1).toDouble() * 60000.0);
+        if (!match.captured(2).isEmpty()) {
+            token.ms += qRound64(match.captured(2).toDouble() * 1000.0);
+        }
+        tokens.append(token);
+    }
+    it = seconds.globalMatch(text);
+    while (it.hasNext()) {
+        const QRegularExpressionMatch match = it.next();
+        bool overlaps = false;
+        for (const TimeToken &existing : tokens) {
+            if (match.capturedStart() < existing.end
+                && match.capturedEnd() > existing.start) {
+                overlaps = true;
+                break;
+            }
+        }
+        if (overlaps) {
+            continue;
+        }
+        TimeToken token;
+        token.start = match.capturedStart();
+        token.end = match.capturedEnd();
+        token.ms = qRound64(match.captured(1).toDouble() * 1000.0);
+        tokens.append(token);
+    }
+    return tokens;
+}
+
+QList<TimeToken> allTimeTokens(const QString &text)
+{
+    QList<TimeToken> tokens = findTimeTokens(text);
+    tokens.append(findWordTimeTokens(text));
+    std::stable_sort(tokens.begin(), tokens.end(),
+                     [](const TimeToken &a, const TimeToken &b) {
+                         return a.start < b.start;
+                     });
+    return tokens;
+}
+
+QList<TemporalRange> rangesFromText(const QString &text,
+                                    const QList<TimeToken> &tokens)
+{
+    QList<TemporalRange> ranges;
+    for (int i = 0; i + 1 < tokens.size(); ++i) {
+        const QString between =
+            text.mid(tokens[i].end, tokens[i + 1].start - tokens[i].end);
+        static const QRegularExpression separator(
+            QStringLiteral("(?:to|until|through|-|>)"));
+        if (separator.match(between).hasMatch()) {
+            TemporalRange range;
+            range.startMs = tokens[i].ms;
+            range.endMs = tokens[i + 1].ms;
+            ranges.append(range);
+            ++i;
+        }
+    }
+    return ranges;
+}
+
+bool hasWholeWord(const QString &text, const QString &word)
+{
+    const QRegularExpression expression(
+        QStringLiteral("\\b%1\\b").arg(QRegularExpression::escape(word)));
+    return expression.match(text).hasMatch();
+}
+
+bool isTemporalClause(const QString &clause)
+{
+    static const QRegularExpression targetDuration(
+        QStringLiteral("(?:make|create|produce|render|generate|build|give me)?"
+                       "\\s*(?:a\\s+)?(\\d+(?:\\.\\d+)?)[\\s-]*(?:second|sec)s?"
+                       "\\s+(?:version|cut|clip|edit|video)"));
+    if (targetDuration.match(clause).hasMatch()) {
+        return true;
+    }
+    const bool hasTokens = !allTimeTokens(clause).isEmpty();
+    const bool removeWord = clause.contains(QStringLiteral("cut out"))
+        || clause.contains(QStringLiteral("cut-out"))
+        || hasWholeWord(clause, QStringLiteral("remove"))
+        || hasWholeWord(clause, QStringLiteral("delete"))
+        || hasWholeWord(clause, QStringLiteral("drop"))
+        || hasWholeWord(clause, QStringLiteral("skip"));
+    const bool keepWord = clause.contains(QStringLiteral("cut from"))
+        || hasWholeWord(clause, QStringLiteral("keep"))
+        || hasWholeWord(clause, QStringLiteral("retain"))
+        || hasWholeWord(clause, QStringLiteral("only"));
+    const bool bareCut = hasWholeWord(clause, QStringLiteral("cut"))
+        && !removeWord && !keepWord;
+    if (bareCut) {
+        return true;
+    }
+    if (!removeWord && !keepWord) {
+        return false;
+    }
+    if (hasTokens) {
+        return true;
+    }
+    return hasWholeWord(clause, QStringLiteral("section"))
+        || hasWholeWord(clause, QStringLiteral("part"))
+        || hasWholeWord(clause, QStringLiteral("portion"))
+        || hasWholeWord(clause, QStringLiteral("segment"))
+        || hasWholeWord(clause, QStringLiteral("chunk"))
+        || hasWholeWord(clause, QStringLiteral("bit"))
+        || hasWholeWord(clause, QStringLiteral("clip"));
+}
+
+struct TemporalParseResult
+{
+    bool hasRequest = false;
+    bool usesDefaultRange = false;
+    TemporalEditPlan plan;
+    QString error;
+};
+
+TemporalParseResult parseTemporal(const QStringList &clauses)
+{
+    TemporalParseResult result;
+    QList<TemporalRange> keepRanges;
+    QList<TemporalRange> removeRanges;
+    bool hasKeep = false;
+    bool hasRemove = false;
+    bool hasTarget = false;
+    qint64 targetMs = 0;
+
+    static const QRegularExpression targetDuration(
+        QStringLiteral("(?:make|create|produce|render|generate|build|give me)?"
+                       "\\s*(?:a\\s+)?(\\d+(?:\\.\\d+)?)[\\s-]*(?:second|sec)s?"
+                       "\\s+(?:version|cut|clip|edit|video)"));
+    static const QRegularExpression targetStartMarker(
+        QStringLiteral("\\b(from|starting\\s+at|start\\s+at)\\b"));
+
+    for (const QString &rawClause : clauses) {
+        const QString clause = rawClause.trimmed();
+        if (clause.isEmpty()) {
+            continue;
+        }
+        const QList<TimeToken> tokens = allTimeTokens(clause);
+        const bool hasTokens = !tokens.isEmpty();
+
+        const QRegularExpressionMatch targetMatch = targetDuration.match(clause);
+        if (targetMatch.hasMatch()) {
+            if (hasKeep || hasRemove || hasTarget) {
+                result.hasRequest = true;
+                result.error = QStringLiteral(
+                    "The instruction mixes a target-duration request with "
+                    "another temporal operation; use one at a time.");
+                return result;
+            }
+            result.hasRequest = true;
+            hasTarget = true;
+            targetMs = qRound64(targetMatch.captured(1).toDouble() * 1000.0);
+            const int durationStart = targetMatch.capturedStart();
+            const int durationEnd = targetMatch.capturedEnd();
+            const bool startRequested = targetStartMarker.match(clause).hasMatch();
+            qint64 startMs = -1;
+            for (const TimeToken &token : tokens) {
+                if (token.start >= durationStart && token.end <= durationEnd) {
+                    continue;
+                }
+                if (startRequested) {
+                    startMs = token.ms;
+                }
+                break;
+            }
+            result.plan = TemporalEditPlan::targetDuration(targetMs, startMs);
+            continue;
+        }
+
+        const bool removeWord = clause.contains(QStringLiteral("cut out"))
+            || clause.contains(QStringLiteral("cut-out"))
+            || hasWholeWord(clause, QStringLiteral("remove"))
+            || hasWholeWord(clause, QStringLiteral("delete"))
+            || hasWholeWord(clause, QStringLiteral("drop"))
+            || hasWholeWord(clause, QStringLiteral("skip"));
+        const bool keepWord = clause.contains(QStringLiteral("cut from"))
+            || hasWholeWord(clause, QStringLiteral("keep"))
+            || hasWholeWord(clause, QStringLiteral("retain"))
+            || hasWholeWord(clause, QStringLiteral("only"));
+        const bool bareCut = hasWholeWord(clause, QStringLiteral("cut"))
+            && !removeWord && !keepWord;
+        const bool sectionReference =
+            hasWholeWord(clause, QStringLiteral("section"))
+            || hasWholeWord(clause, QStringLiteral("part"))
+            || hasWholeWord(clause, QStringLiteral("portion"))
+            || hasWholeWord(clause, QStringLiteral("segment"))
+            || hasWholeWord(clause, QStringLiteral("chunk"))
+            || hasWholeWord(clause, QStringLiteral("bit"))
+            || hasWholeWord(clause, QStringLiteral("clip"));
+
+        int kind = 0; // 0 none, 1 keep, 2 remove, 3 ambiguous cut
+        if (removeWord && keepWord && hasTokens) {
+            result.hasRequest = true;
+            result.error = QStringLiteral(
+                "The instruction asks to keep and remove footage at the same "
+                "time; choose one.");
+            return result;
+        }
+        if (removeWord) {
+            kind = 2;
+        } else if (keepWord) {
+            kind = 1;
+        } else if (bareCut) {
+            kind = 3;
+        } else {
+            continue;
+        }
+
+        if (kind == 3) {
+            result.hasRequest = true;
+            result.error = QStringLiteral(
+                "The word 'cut' is ambiguous here; use 'cut from X to Y' to "
+                "keep a section or 'cut out X to Y' to remove one.");
+            return result;
+        }
+        if (!hasTokens) {
+            if (sectionReference) {
+                // "this section"/"the boring part": the operation applies to the
+                // command's effective range, which the runner substitutes.
+                result.hasRequest = true;
+                result.usesDefaultRange = true;
+                if (kind == 1) {
+                    if (hasRemove || hasTarget) {
+                        result.error = QStringLiteral(
+                            "The instruction asks to keep and remove footage at "
+                            "the same time; choose one.");
+                        return result;
+                    }
+                    hasKeep = true;
+                } else {
+                    if (hasKeep || hasTarget) {
+                        result.error = QStringLiteral(
+                            "The instruction asks to keep and remove footage at "
+                            "the same time; choose one.");
+                        return result;
+                    }
+                    hasRemove = true;
+                }
+                continue;
+            }
+            if (kind == 1) {
+                // A non-temporal "keep" such as "keep the reframing behavior"
+                // or "keep me centered" — leave it to the camera parser.
+                continue;
+            }
+            result.hasRequest = true;
+            result.error = QStringLiteral(
+                "A remove request needs a time range, for example "
+                "'remove 2:10 to 2:45'.");
+            return result;
+        }
+
+        const QList<TemporalRange> ranges = rangesFromText(clause, tokens);
+        if (ranges.isEmpty()) {
+            result.hasRequest = true;
+            result.error = QStringLiteral(
+                "Could not read a time range from '%1'; write it as "
+                "'from 2:10 to 2:45' or '0:35-1:10'.").arg(clause);
+            return result;
+        }
+        if (kind == 1) {
+            if (hasRemove || hasTarget) {
+                result.hasRequest = true;
+                result.error = QStringLiteral(
+                    "The instruction asks to keep and remove footage at the "
+                    "same time; choose one.");
+                return result;
+            }
+            hasKeep = true;
+            keepRanges.append(ranges);
+        } else {
+            if (hasKeep || hasTarget) {
+                result.hasRequest = true;
+                result.error = QStringLiteral(
+                    "The instruction asks to keep and remove footage at the "
+                    "same time; choose one.");
+                return result;
+            }
+            hasRemove = true;
+            removeRanges.append(ranges);
+        }
+        result.hasRequest = true;
+    }
+
+    if (!result.hasRequest || hasTarget) {
+        return result;
+    }
+    if (result.usesDefaultRange) {
+        result.plan = hasKeep ? TemporalEditPlan::keep(QList<TemporalRange>{})
+                              : TemporalEditPlan::remove(QList<TemporalRange>{});
+        return result;
+    }
+    if (hasKeep && !hasRemove) {
+        result.plan = TemporalEditPlan::keep(keepRanges);
+    } else if (hasRemove && !hasKeep) {
+        result.plan = TemporalEditPlan::remove(removeRanges);
+    }
+    QString normalizeError;
+    if (!result.plan.normalize(&normalizeError)) {
+        result.error = normalizeError.isEmpty()
+            ? QStringLiteral("The requested time ranges are not usable.")
+            : normalizeError;
+    }
+    return result;
+}
+
 } // namespace
 
 ReframeIntent ReframeIntentParser::parse(const QString &text)
@@ -231,9 +555,27 @@ ReframeIntent ReframeIntentParser::parse(const QString &text)
 
     applyAspect(intent, lower);
 
+    // Objective 14: parse temporal editing into a structured value first, so
+    // the legacy single-range logic does not misread it as a camera window.
+    const QStringList clauses = splitClauses(lower);
+    const TemporalParseResult temporal = parseTemporal(clauses);
+    intent.hasTemporalRequest = temporal.hasRequest;
+    intent.temporalEdit = temporal.plan;
+    intent.temporalError = temporal.error;
+    intent.temporalUsesDefaultRange = temporal.usesDefaultRange;
+    if (intent.hasTemporalRequest) {
+        if (!intent.temporalError.isEmpty()) {
+            intent.notes.append(intent.temporalError);
+        } else {
+            intent.notes.append(QStringLiteral("Temporal edit: %1.")
+                .arg(TemporalEditPlan::operationToString(
+                    intent.temporalEdit.operation())));
+        }
+    }
+
     // Time range: "<start> to <end>" or the same with a dash.
     const QList<TimeToken> times = findTimeTokens(lower);
-    if (times.size() >= 2) {
+    if (!intent.hasTemporalRequest && times.size() >= 2) {
         const QString between =
             lower.mid(times[0].end, times[1].start - times[0].end);
         static const QRegularExpression separator(
@@ -244,7 +586,7 @@ ReframeIntent ReframeIntentParser::parse(const QString &text)
             intent.endMs = times[1].ms;
         }
     }
-    if (!intent.hasTimeRange && times.size() == 1) {
+    if (!intent.hasTemporalRequest && !intent.hasTimeRange && times.size() == 1) {
         static const QRegularExpression startMarker(
             QStringLiteral("\\b(from|start(?:ing)?\\s+(?:at|from)|use|take)\\b"));
         if (startMarker.match(lower).hasMatch()) {
@@ -264,10 +606,10 @@ ReframeIntent ReframeIntentParser::parse(const QString &text)
     }
 
     // Camera clauses.
-    const QStringList clauses = splitClauses(lower);
     for (const QString &rawClause : clauses) {
         const QString clause = rawClause.trimmed();
-        if (clause.isEmpty() || !clauseHasCameraKeyword(clause)) {
+        if (clause.isEmpty() || isTemporalClause(clause)
+            || !clauseHasCameraKeyword(clause)) {
             continue;
         }
         ReframeCameraMove move;
@@ -317,7 +659,7 @@ ReframeIntent ReframeIntentParser::parse(const QString &text)
     }
 
     intent.recognized = intent.hasOutput || intent.hasTimeRange
-        || !intent.moves.isEmpty();
+        || intent.hasTemporalRequest || !intent.moves.isEmpty();
     if (!intent.recognized) {
         intent.notes.append(QStringLiteral(
             "Instruction was not recognized by the current grammar."));

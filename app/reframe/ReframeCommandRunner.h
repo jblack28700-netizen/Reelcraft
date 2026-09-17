@@ -48,6 +48,9 @@ struct ReframeCommandRequest
     QString outputPath;
     ReframePlan::TimeRange defaultRange;
     ReframePlan::OutputSpec defaultOutput;
+    // Objective 14: whole-source duration used to resolve a temporal edit
+    // (Remove/TargetDuration and out-of-bounds checks). Zero means unknown.
+    qint64 sourceDurationMs = 0;
 
     // Optional creator seed. When set, the identity is bound (and refreshed)
     // before subject references are resolved, so "me" can resolve. A seed that
