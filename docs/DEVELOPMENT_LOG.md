@@ -1129,6 +1129,43 @@ Objective 2 established the replaceable `TargetDetector`/`ProcessTargetDetector`
 
 - Decision 020 recorded (real detector selection and preserved boundary). Decisions 018 and 019 preserved unchanged.
 
+---
+
+# 2026-09-17 — 360 Reframing Objective 4: Target Identity & Deterministic Selection
+
+### Context
+
+Real detection/tracking existed (Objective 3) but there was no structured creator identity and no deterministic multi-person selection. The objective was to represent "this person is me" as structured data, distinguish the selected target from other people deterministically, and keep identity across frames without adding appearance re-identification, speaker association, or GPU work.
+
+### Work completed
+
+- Added `app/target/TargetIdentity.{h,cpp}`: `CreatorTargetSelection` (identity, time, yaw/pitch, optional track id/label/evidence), `IdentityBinding`, and `TargetIdentityRegistry` (deterministic seed binding, explicit track binding, claim conflicts, active-state refresh, unique continuity re-binding, JSON round-trip). All structured and inspectable.
+- Added `app/target/TargetSelector.{h,cpp}`: deterministic reference resolution and a canonical track order (first observation time, numeric track id, id string). Ambiguity is reported with candidates; nothing is guessed.
+- Hardened `SphericalTargetTracker`: bounded constant-velocity prediction (yaw/pitch) for crossing trajectories, plus a bounded re-entry gate for temporary loss/occlusion/re-entry. No appearance model.
+- Registered the new files in `reelcraft.pro` and `tests/tests.pro`.
+- Added 21 model-free tests and extended the real-detector integration test with seed selection, identity binding, canonical selection, and ambiguity reporting.
+
+### Failure recovery
+
+- The selector initially set the returned `ReframeTarget.id` to the raw reference; the NL builder matches the parsed and normalized subject, so the id was changed to the normalized reference. Verified by the identity -> builder -> CameraPath test.
+
+### Verification (model-free)
+
+- Full suite: 240 passed, 0 failed, 1 skipped (~42 s). New tests cover crossing under prediction, re-entry within/beyond window, prediction determinism, seed binding, claim conflicts, active-state resolution, unique vs ambiguous continuity re-binding, identity JSON round-trip, creator aliases, other-person ambiguity, ordinal determinism regardless of input order, left/right, track-id/label, and identity -> `ReframePlanBuilder` -> `CameraPath`.
+
+### Verification (real footage)
+
+- Real integration test PASS (~128 s) on `360_TEST_4K.mp4` via the 1920x960 proxy (original untouched): 9 person tracks; identity "me" bound by seed to the strongest presenter (t1, 5 observations, mean confidence 0.923); `person 1` -> t1; `the other person` -> ambiguous with 8 candidates; the bound track produced a `ReframePlan` and a 640x360 H.264 output centered on the selected presenter.
+
+### Boundary notes / not implemented
+
+- "Me" is geometric, creator-selected identity, not biometric. It does not re-identify after long absence or among similar people; the registry reports unresolved/ambiguous rather than guessing.
+- Speaker/active-speaker association, appearance/embedding re-identification, open-vocabulary classes, and GPU inference remain future work.
+
+### Decisions
+
+- Decision 021 recorded. Decisions 017-020 preserved unchanged.
+
 
 
 

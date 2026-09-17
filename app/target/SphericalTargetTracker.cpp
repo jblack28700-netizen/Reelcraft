@@ -118,14 +118,47 @@ QList<TargetObservation> SphericalTargetTracker::update(
         if (!track.lastObservation(&last)) {
             continue;
         }
+        // Deterministic constant-velocity prediction (yaw/pitch only; no
+        // appearance). Keeps identity through crossing trajectories.
+        SphericalDirection reference = directionOf(last);
+        if (m_config.useVelocityPrediction && track.size() >= 2
+            && timeMs > last.timeMs) {
+            const TargetObservation &previous =
+                track.observations().at(track.size() - 2);
+            const qint64 dt = last.timeMs - previous.timeMs;
+            if (dt > 0) {
+                qint64 horizon = timeMs - last.timeMs;
+                if (horizon > m_config.maxPredictionMs) {
+                    horizon = m_config.maxPredictionMs;
+                }
+                const double velocityYaw =
+                    EquirectProjection::shortestYawDeltaDeg(previous.yawDeg,
+                                                            last.yawDeg)
+                    / static_cast<double>(dt);
+                const double velocityPitch =
+                    (last.pitchDeg - previous.pitchDeg) / static_cast<double>(dt);
+                reference.yawDeg = EquirectProjection::normalizeYawDeg(
+                    last.yawDeg + velocityYaw * static_cast<double>(horizon));
+                reference.pitchDeg = EquirectProjection::clampPitchDeg(
+                    last.pitchDeg + velocityPitch * static_cast<double>(horizon));
+            }
+        }
+
+        // A previously-missed track gets a wider (but bounded) re-entry gate.
+        double gate = m_config.maxAssociationDistanceDeg;
+        if (track.missCount() > 0
+            && timeMs - last.timeMs <= m_config.reentryWindowMs) {
+            gate = qMax(gate, m_config.reentryGateDeg);
+        }
+
         for (int di = 0; di < detections.size(); ++di) {
             const TargetObservation &detection = detections.at(di);
             if (!labelsCompatible(track.label(), detection.label)) {
                 continue;
             }
             const double distance = EquirectProjection::angularDistanceDeg(
-                directionOf(last), directionOf(detection));
-            if (distance > m_config.maxAssociationDistanceDeg) {
+                reference, directionOf(detection));
+            if (distance > gate) {
                 continue;
             }
             Candidate candidate;

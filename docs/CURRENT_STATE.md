@@ -2,7 +2,7 @@
 
 ## Current Version
 
-0.2.40
+0.2.41
 
 ## Current Branch
 
@@ -10,7 +10,7 @@ main
 
 ## Current Stage
 
-Phase 4 — 360 Reframing Engine (deterministic vertical slice), Target/Subject Resolution, and real detector integration implemented and verified. Phase 3 Media Engine remains open; its player-lifecycle objective is intentionally superseded for now by the human-approved 360 priority.
+Phase 4 — 360 Reframing Engine (deterministic vertical slice), Target/Subject Resolution, real detector integration, and structured target identity/selection implemented and verified. Phase 3 Media Engine remains open; its player-lifecycle objective is intentionally superseded for now by the human-approved 360 priority.
 
 ## Project Status
 
@@ -75,13 +75,13 @@ The conceptual AI-to-deterministic edit contract is now backed by a concrete str
 
 Status: Partially implemented — deterministic reframing vertical slice complete.
 
-360° video is a first-class requirement. The viewer supports equirectangular presentation and look-around; media records carry a declared projection; and a deterministic reframing engine now turns a 360 source plus a structured (or natural-language) request into a flat H.264 output through the `ReframePlan`/`CameraPath` contract. Target/subject resolution is implemented behind a replaceable detector seam (tangent-view detection reprojected to spherical directions, deterministic identity tracking, and a subprocess model adapter). A real detector (OpenCV Zoo YOLOX, Apache-2.0) now runs through that seam on real 360 footage and has produced a flat output centered on a detected person. "Me" identity and speaker localization are not solved, a real model is required for detection (given the clip/helper), and reframing is not yet wired into the UI.
+360° video is a first-class requirement. The viewer supports equirectangular presentation and look-around; media records carry a declared projection; and a deterministic reframing engine now turns a 360 source plus a structured (or natural-language) request into a flat H.264 output through the `ReframePlan`/`CameraPath` contract. Target/subject resolution is implemented behind a replaceable detector seam (tangent-view detection reprojected to spherical directions, deterministic identity tracking, and a subprocess model adapter). A real detector (OpenCV Zoo YOLOX, Apache-2.0) now runs through that seam on real 360 footage and has produced a flat output centered on a detected person. A structured creator identity (`app/target/TargetIdentity.*`, `TargetSelector.*`) now binds "me" to a selected person and resolves multi-person references deterministically; it is geometric identity, not biometric, and speaker localization is not solved. A real model is required for detection (given the clip/helper), and reframing is not yet wired into the UI.
 
 ## Testing
 
 Status: Implemented and continuously verified.
 
-A Qt Test suite covers project state, viewer/media, the media-source seam and frame pump, player/timing, the 360 reframing engine (plan validation/round-trip, camera interpolation, rendering determinism, intent parsing, plan building, and a real FFmpeg end-to-end render), and target resolution (equirect/view geometry, seam and pitch boundaries, view coverage, deterministic tracking, resolver behavior, the subprocess detector protocol, the track planner, and a model-free detection -> plan -> render path). Current result: 219 passed, 0 failed, 1 skipped (~40 s). The single skip is the real-detector integration test, which runs only when a detector helper, model, and clip are configured; the normal suite stays model-free.
+A Qt Test suite covers project state, viewer/media, the media-source seam and frame pump, player/timing, the 360 reframing engine (plan validation/round-trip, camera interpolation, rendering determinism, intent parsing, plan building, and a real FFmpeg end-to-end render), and target resolution (equirect/view geometry, seam and pitch boundaries, view coverage, deterministic tracking, resolver behavior, the subprocess detector protocol, the track planner, and a model-free detection -> plan -> render path). Current result: 240 passed, 0 failed, 1 skipped (~42 s). The single skip is the real-detector integration test, which runs only when a detector helper, model, and clip are configured; the normal suite stays model-free.
 
 ## Technology Direction
 
@@ -935,7 +935,29 @@ Verification (real footage, proxy used for speed; original untouched):
 
 Architecture decision: Decision 020 records the real-detector selection and the preserved boundary.
 
-Next: identity/evidence (`NEXT_TASK.md` Objective 4).
+## Phase 4 Objective 4 — Target Identity & Deterministic Selection — Complete
+
+Status: Complete (2026-09-17). Adds structured creator identity above detection/tracking; no speaker/audio association and no appearance re-identification.
+
+- Added `app/target/TargetIdentity.{h,cpp}`: `CreatorTargetSelection`, `IdentityBinding`, and `TargetIdentityRegistry`. Creator identity is a structured, JSON-serializable binding (canonical "me") to a tracker track id, established from a creator seed direction/time (or an explicit track id) and refreshed against live tracks.
+- Added `app/target/TargetSelector.{h,cpp}`: deterministic reference resolution for "me"/selected aliases, "the other person", "person N"/ordinals, left/right, exact track id, and a unique label. Canonical ordering is (first observation time, numeric track id, id string); ambiguity is reported with candidates instead of guessing.
+- Hardened `SphericalTargetTracker` with deterministic constant-velocity prediction (yaw/pitch, bounded horizon) for crossing trajectories and a bounded re-entry gate for temporary loss/occlusion/re-entry; still no appearance model.
+- Registered in `reelcraft.pro` and `tests/tests.pro`; identity and selection feed the existing `ReframePlanBuilder` and `TargetTrackPlanner` unchanged.
+
+Verification (model-free):
+- 21 new deterministic tests: crossing under prediction, re-entry within/beyond window, prediction determinism, seed binding, claim conflicts, active-state resolution, unique vs ambiguous continuity re-binding, identity JSON round-trip, creator aliases, other-person ambiguity, ordinal determinism regardless of input order, left/right, track-id/label, and identity -> `ReframePlanBuilder` -> `CameraPath`.
+- Full model-free suite: 240 passed, 0 failed, 1 skipped (the real-detector test when unconfigured).
+
+Verification (real footage, `360_TEST_4K.mp4`, proxy; original untouched):
+- 9 person tracks; identity "me" bound by seed to the strongest presenter (t1, 5 observations, mean confidence 0.923).
+- `person 1` -> t1 (canonical order); `the other person` -> ambiguous with 8 candidates (honest ambiguity in a crowded scene).
+- The bound identity's track produced the `ReframePlan` and a 640x360 H.264 output centered on the selected presenter.
+- Real integration test PASS.
+
+Architecture decision: Decision 021 records identity representation, selection semantics, and the future appearance/re-ID seam.
+
+Next: speaker/active-speaker association and appearance-based re-identification (`NEXT_TASK.md` Objective 5).
+
 
 
 

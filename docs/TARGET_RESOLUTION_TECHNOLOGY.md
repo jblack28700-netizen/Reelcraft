@@ -170,3 +170,28 @@ degrees apart) and stayed static, so the simple nearest-neighbour tracker did
 not have to disambiguate motion; small background people were detected at
 lower confidence and formed short extra tracks; one model load per helper
 invocation (process-per-view) is intentionally unoptimized.
+
+## 11. Identity and Deterministic Selection (2026-09-17, Objective 4)
+
+- **Identity representation:** `CreatorTargetSelection` and `IdentityBinding`
+  (`app/target/TargetIdentity.h`) bind a creator identity key (canonical "me")
+  to a tracker track id. Structured, JSON-serializable, inspectable.
+- **Selection:** a creator seed is a direction (yaw/pitch) at a time (or a track
+  id) plus an optional label/evidence. Binding is deterministic: nearest
+  in-window observation wins; ties by confidence desc, first observation time,
+  id.
+- **Persistence:** geometric only. The registry refreshes against live tracks
+  and re-binds a lost identity only when exactly one active, unclaimed,
+  label-compatible track continues its predicted trajectory; otherwise it
+  reports unresolved/ambiguous. The tracker adds bounded constant-velocity
+  prediction (crossing) and a bounded re-entry gate (temporary
+  loss/occlusion/re-entry).
+- **Deterministic selection vocabulary:** "me" and selected aliases, "the other
+  person", "person N"/ordinals, left/right, exact track id, and a unique label.
+  Canonical order is (first observation time, numeric track id, id string).
+- **What "me" does NOT mean:** it is not biometric identity and cannot
+  re-identify a person after a long absence or among similar people without a
+  future appearance/embedding seam.
+- **Future seam:** appearance/embedding re-identification and audio-visual
+  speaker association can extend `IdentityBinding` without changing the
+  detector, geometry, planner, or renderer.

@@ -48,7 +48,9 @@
 #include "target/ProcessTargetDetector.h"
 #include "target/SphericalTargetTracker.h"
 #include "target/TargetDetector.h"
+#include "target/TargetIdentity.h"
 #include "target/TargetResolver.h"
+#include "target/TargetSelector.h"
 #include "target/TargetTrackPlanner.h"
 #include "target/TargetTypes.h"
 #include "ui/MainWindow.h"
@@ -985,6 +987,27 @@ private slots:
     void targetTrackPlannerFiltersLowConfidence();
     void targetResolutionToRenderPipeline();
     void realDetectorIntegration();
+    void targetTrackerPredictionMaintainsIdentityThroughCrossing();
+    void targetTrackerReentryKeepsIdentityWithinWindow();
+    void targetTrackerReentryBeyondWindowCreatesNewTrack();
+    void targetTrackerPredictionIsDeterministic();
+    void targetIdentityBindsFromSeedDirection();
+    void targetIdentitySeedRejectsDistantOrInvalid();
+    void targetIdentityTrackIdBindingAndClaimConflicts();
+    void targetIdentityResolutionTracksActiveState();
+    void targetIdentityContinuityRebindIsUnique();
+    void targetIdentityContinuityRebindAmbiguousIsUnresolved();
+    void targetIdentityJsonRoundTrip();
+    void targetSelectorResolvesCreatorAliases();
+    void targetSelectorUnresolvedCreatorWhenUnbound();
+    void targetSelectorResolvesOtherPerson();
+    void targetSelectorOtherPersonAmbiguous();
+    void targetSelectorOrdinalIsDeterministicRegardlessOfInputOrder();
+    void targetSelectorOrdinalOutOfRange();
+    void targetSelectorLeftRightByYaw();
+    void targetSelectorTrackIdAndUniqueLabel();
+    void targetSelectorIsDeterministic();
+    void targetSelectorResolvedTargetsFeedsReframePlanBuilder();
 };
 
 void ProjectTest::initTestCase()
@@ -6726,16 +6749,84 @@ void ProjectTest::realDetectorIntegration()
     qInfo("real detector: %d track(s)", static_cast<int>(tracks.size()));
     QVERIFY2(!tracks.isEmpty(), "no real person was detected in the 360 clip");
 
+    // Canonical, deterministic person ordering (never detector output order).
+    const QList<TargetTrack> ordered =
+        TargetSelector::canonicalOrder(tracks, QStringLiteral("person"));
+    QVERIFY2(ordered.size() >= 2, "expected at least two people in the clip");
+    for (int i = 0; i < ordered.size(); ++i) {
+        qInfo("canonical person %d: id=%s obs=%d firstMs=%lld meanConf=%.3f",
+              i + 1, qPrintable(ordered.at(i).id()),
+              static_cast<int>(ordered.at(i).size()),
+              static_cast<long long>(ordered.at(i).firstTimeMs()),
+              ordered.at(i).meanConfidence());
+    }
+
+    // Pick the strongest presenter as the one the creator selects.
     int best = 0;
-    for (int i = 1; i < tracks.size(); ++i) {
-        if (tracks.at(i).size() > tracks.at(best).size()
-            || (tracks.at(i).size() == tracks.at(best).size()
-                && tracks.at(i).meanConfidence() > tracks.at(best).meanConfidence())) {
+    for (int i = 1; i < ordered.size(); ++i) {
+        if (ordered.at(i).size() > ordered.at(best).size()
+            || (ordered.at(i).size() == ordered.at(best).size()
+                && ordered.at(i).meanConfidence()
+                       > ordered.at(best).meanConfidence())) {
             best = i;
         }
     }
-    const TargetTrack &track = tracks.at(best);
-    qInfo("chosen track: id=%s label=%s observations=%d meanConf=%.3f",
+    const TargetTrack &selectedTrack = ordered.at(best);
+
+    // Simulate the creator selecting that person: a structured seed observation
+    // at the selected person's direction/time.
+    TargetObservation seedObservation;
+    QVERIFY(selectedTrack.representative(&seedObservation));
+    CreatorTargetSelection selection;
+    selection.identity = QStringLiteral("me");
+    selection.timeMs = seedObservation.timeMs;
+    selection.yawDeg = seedObservation.yawDeg;
+    selection.pitchDeg = seedObservation.pitchDeg;
+    selection.label = QStringLiteral("person");
+    selection.evidence =
+        QStringLiteral("creator selected presenter %1").arg(selectedTrack.id());
+
+    TargetIdentityRegistry registry;
+    QVERIFY2(registry.bindFromSelection(selection, tracks, &error), qPrintable(error));
+    registry.update(tracks, timestamps.last());
+    QVERIFY2(registry.isResolved(TargetIdentityRegistry::creatorIdentity()),
+             qPrintable(registry.notes().join(QStringLiteral("; "))));
+    const QString meId =
+        registry.targetId(TargetIdentityRegistry::creatorIdentity());
+    qInfo("identity 'me' bound to track %s (method=%s)", qPrintable(meId),
+          qPrintable(registry.binding(TargetIdentityRegistry::creatorIdentity())
+                         ->method));
+
+    const TargetSelectionResult me =
+        TargetSelector::select(QStringLiteral("me"), tracks, registry);
+    QVERIFY2(me.resolved, qPrintable(me.error));
+    QCOMPARE(me.targetId, meId);
+
+    const TargetSelectionResult firstPerson =
+        TargetSelector::select(QStringLiteral("person 1"), tracks, registry);
+    qInfo("selection 'person 1' -> %s",
+          firstPerson.resolved ? qPrintable(firstPerson.targetId)
+                               : qPrintable(firstPerson.error));
+    const TargetSelectionResult other =
+        TargetSelector::select(QStringLiteral("the other person"), tracks, registry);
+    if (other.resolved) {
+        qInfo("selection 'the other person' -> %s", qPrintable(other.targetId));
+        QVERIFY(other.targetId != meId);
+    } else {
+        qInfo("selection 'the other person' -> %s (%s); candidates=%d",
+              other.ambiguous ? "ambiguous" : "unresolved",
+              qPrintable(other.error), static_cast<int>(other.candidates.size()));
+    }
+
+    const TargetTrack *resolvedTrack = nullptr;
+    for (const TargetTrack &candidate : tracks) {
+        if (candidate.id() == meId) {
+            resolvedTrack = &candidate;
+        }
+    }
+    QVERIFY(resolvedTrack != nullptr);
+    const TargetTrack &track = *resolvedTrack;
+    qInfo("selected track: id=%s label=%s observations=%d meanConf=%.3f",
           qPrintable(track.id()), qPrintable(track.label()),
           static_cast<int>(track.size()), track.meanConfidence());
     for (const TargetObservation &observation : track.observations()) {
@@ -6797,6 +6888,476 @@ void ProjectTest::realDetectorIntegration()
                  &renderError),
              qPrintable(renderError));
     QCOMPARE(decoded.size(), QSize(640, 360));
+}
+
+// ================= 360 target identity & selection (Phase 4, Obj 4) =================
+// Deterministic, model-free tests for tracker motion hardening, the structured
+// identity registry, and the deterministic target selector. These never load a
+// model or download weights.
+
+namespace {
+
+TargetTrack makeIdTrack(const QString &id, const QString &label,
+                        const QList<TargetObservation> &observations)
+{
+    TargetTrack track(id, label);
+    for (const TargetObservation &observation : observations) {
+        TargetObservation copy = observation;
+        copy.targetId = id;
+        track.append(copy);
+    }
+    return track;
+}
+
+QList<TargetTrack> twoPresenterTracks()
+{
+    QList<TargetTrack> tracks;
+    tracks.append(makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                              { makeTargetObservation(0, -28.0, 0.0),
+                                makeTargetObservation(1000, -28.0, 0.0) }));
+    tracks.append(makeIdTrack(QStringLiteral("t2"), QStringLiteral("person"),
+                              { makeTargetObservation(0, 27.0, 0.0),
+                                makeTargetObservation(1000, 27.0, 0.0) }));
+    return tracks;
+}
+
+} // namespace
+
+void ProjectTest::targetTrackerPredictionMaintainsIdentityThroughCrossing()
+{
+    SphericalTargetTracker::Config config;
+    config.useVelocityPrediction = true;
+    config.maxAssociationDistanceDeg = 25.0;
+    SphericalTargetTracker tracker(config);
+    tracker.update({ makeTargetObservation(0, -15.0, 0.0),
+                     makeTargetObservation(0, 15.0, 0.0) }, 0);
+    tracker.update({ makeTargetObservation(500, -5.0, 0.0),
+                     makeTargetObservation(500, 5.0, 0.0) }, 500);
+    tracker.update({ makeTargetObservation(1000, 5.0, 0.0),
+                     makeTargetObservation(1000, -5.0, 0.0) }, 1000);
+    tracker.update({ makeTargetObservation(1500, 15.0, 0.0),
+                     makeTargetObservation(1500, -15.0, 0.0) }, 1500);
+
+    QCOMPARE(tracker.tracks().size(), 2);
+    const TargetTrack *first = tracker.trackById(QStringLiteral("t1"));
+    const TargetTrack *second = tracker.trackById(QStringLiteral("t2"));
+    QVERIFY(first != nullptr);
+    QVERIFY(second != nullptr);
+    QCOMPARE(first->size(), 4);
+    QCOMPARE(second->size(), 4);
+    // t1 tracked the target moving left->right; t2 the one moving right->left.
+    QVERIFY(first->observations().at(0).yawDeg < first->observations().at(3).yawDeg);
+    QVERIFY(second->observations().at(0).yawDeg > second->observations().at(3).yawDeg);
+    QVERIFY(qAbs(first->observations().at(3).yawDeg - 15.0) < 1e-9);
+    QVERIFY(qAbs(second->observations().at(3).yawDeg + 15.0) < 1e-9);
+}
+
+void ProjectTest::targetTrackerReentryKeepsIdentityWithinWindow()
+{
+    SphericalTargetTracker::Config config;
+    config.useVelocityPrediction = false;
+    config.maxAssociationDistanceDeg = 15.0;
+    config.reentryGateDeg = 60.0;
+    config.reentryWindowMs = 2000;
+    config.maxMisses = 1;
+    SphericalTargetTracker tracker(config);
+    tracker.update({ makeTargetObservation(0, 0.0, 0.0) }, 0);
+    tracker.update({}, 500);
+    tracker.update({}, 1000);
+    QVERIFY(!tracker.trackById(QStringLiteral("t1"))->active());
+    tracker.update({ makeTargetObservation(1500, 40.0, 0.0) }, 1500);
+    QCOMPARE(tracker.tracks().size(), 1);
+    const TargetTrack *track = tracker.trackById(QStringLiteral("t1"));
+    QVERIFY(track->active());
+    QCOMPARE(track->size(), 2);
+}
+
+void ProjectTest::targetTrackerReentryBeyondWindowCreatesNewTrack()
+{
+    SphericalTargetTracker::Config config;
+    config.useVelocityPrediction = false;
+    config.maxAssociationDistanceDeg = 15.0;
+    config.reentryGateDeg = 60.0;
+    config.reentryWindowMs = 1000;
+    config.maxMisses = 1;
+    SphericalTargetTracker tracker(config);
+    tracker.update({ makeTargetObservation(0, 0.0, 0.0) }, 0);
+    tracker.update({}, 500);
+    tracker.update({}, 1000);
+    tracker.update({ makeTargetObservation(1500, 40.0, 0.0) }, 1500);
+    QCOMPARE(tracker.tracks().size(), 2);
+}
+
+void ProjectTest::targetTrackerPredictionIsDeterministic()
+{
+    const auto run = []() {
+        SphericalTargetTracker::Config config;
+        config.useVelocityPrediction = true;
+        SphericalTargetTracker tracker(config);
+        tracker.update({ makeTargetObservation(0, -15.0, 0.0),
+                         makeTargetObservation(0, 15.0, 0.0) }, 0);
+        tracker.update({ makeTargetObservation(500, -5.0, 0.0),
+                         makeTargetObservation(500, 5.0, 0.0) }, 500);
+        tracker.update({ makeTargetObservation(1000, 5.0, 0.0),
+                         makeTargetObservation(1000, -5.0, 0.0) }, 1000);
+        return tracker;
+    };
+    const SphericalTargetTracker a = run();
+    const SphericalTargetTracker b = run();
+    QCOMPARE(a.tracks().size(), b.tracks().size());
+    for (int i = 0; i < a.tracks().size(); ++i) {
+        QCOMPARE(a.tracks().at(i).id(), b.tracks().at(i).id());
+        QCOMPARE(a.tracks().at(i).size(), b.tracks().at(i).size());
+        for (int j = 0; j < a.tracks().at(i).size(); ++j) {
+            QVERIFY(qAbs(a.tracks().at(i).observations().at(j).yawDeg
+                         - b.tracks().at(i).observations().at(j).yawDeg) < 1e-12);
+        }
+    }
+}
+
+void ProjectTest::targetIdentityBindsFromSeedDirection()
+{
+    const QList<TargetTrack> tracks = twoPresenterTracks();
+    TargetIdentityRegistry registry;
+    CreatorTargetSelection seed;
+    seed.identity = QStringLiteral("me");
+    seed.timeMs = 0;
+    seed.yawDeg = -28.0;
+    seed.pitchDeg = 0.0;
+    seed.label = QStringLiteral("person");
+    seed.evidence = QStringLiteral("creator selected the left presenter");
+    QString error;
+    QVERIFY2(registry.bindFromSelection(seed, tracks, &error), qPrintable(error));
+    QVERIFY(registry.isResolved(QStringLiteral("me")));
+    QCOMPARE(registry.targetId(QStringLiteral("me")), QStringLiteral("t1"));
+    const IdentityBinding *binding = registry.binding(QStringLiteral("me"));
+    QVERIFY(binding != nullptr);
+    QCOMPARE(binding->method, QStringLiteral("seed-direction"));
+    QVERIFY(binding->distanceDeg < 1.0);
+}
+
+void ProjectTest::targetIdentitySeedRejectsDistantOrInvalid()
+{
+    const QList<TargetTrack> tracks = twoPresenterTracks();
+    TargetIdentityRegistry registry;
+    CreatorTargetSelection far;
+    far.identity = QStringLiteral("me");
+    far.timeMs = 0;
+    far.yawDeg = 150.0;
+    far.pitchDeg = 0.0;
+    QString error;
+    QVERIFY(!registry.bindFromSelection(far, tracks, &error));
+    QVERIFY(!error.isEmpty());
+    QVERIFY(!registry.isBound(QStringLiteral("me")));
+
+    CreatorTargetSelection emptyIdentity;
+    emptyIdentity.yawDeg = 0.0;
+    emptyIdentity.pitchDeg = 0.0;
+    QVERIFY(!emptyIdentity.isValid());
+
+    CreatorTargetSelection badPitch;
+    badPitch.identity = QStringLiteral("me");
+    badPitch.pitchDeg = 200.0;
+    QVERIFY(!badPitch.isValid());
+}
+
+void ProjectTest::targetIdentityTrackIdBindingAndClaimConflicts()
+{
+    const QList<TargetTrack> tracks = twoPresenterTracks();
+    TargetIdentityRegistry registry;
+    QString error;
+    QVERIFY2(registry.bindToTrack(QStringLiteral("me"), QStringLiteral("t1"), 0,
+                                  tracks, &error), qPrintable(error));
+    QVERIFY(registry.isResolved(QStringLiteral("me")));
+    QVERIFY(!registry.bindToTrack(QStringLiteral("other"), QStringLiteral("t1"), 0,
+                                  tracks, &error));
+    QVERIFY(!registry.bindToTrack(QStringLiteral("me"), QStringLiteral("t9"), 0,
+                                  tracks, &error));
+}
+
+void ProjectTest::targetIdentityResolutionTracksActiveState()
+{
+    TargetIdentityRegistry registry;
+    QString error;
+    const QList<TargetTrack> tracks = twoPresenterTracks();
+    QVERIFY(registry.bindToTrack(QStringLiteral("me"), QStringLiteral("t1"), 0,
+                                 tracks, &error));
+    registry.update(tracks, 500);
+    QVERIFY(registry.isResolved(QStringLiteral("me")));
+
+    TargetTrack inactive = makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                                       { makeTargetObservation(0, -28.0, 0.0) });
+    inactive.setActive(false);
+    registry.update({ inactive }, 100000);
+    QVERIFY(!registry.isResolved(QStringLiteral("me")));
+    QVERIFY(!registry.notes().isEmpty());
+}
+
+void ProjectTest::targetIdentityContinuityRebindIsUnique()
+{
+    TargetIdentityRegistry::Config config;
+    config.rebindGateDeg = 60.0;
+    config.rebindWindowMs = 3000;
+    TargetIdentityRegistry registry(config);
+    QString error;
+    const QList<TargetTrack> original = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, -20.0, 0.0),
+                      makeTargetObservation(500, 0.0, 0.0) })
+    };
+    QVERIFY(registry.bindToTrack(QStringLiteral("me"), QStringLiteral("t1"), 0,
+                                 original, &error));
+
+    TargetTrack inactive = makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                                       { makeTargetObservation(0, -20.0, 0.0),
+                                         makeTargetObservation(500, 0.0, 0.0) });
+    inactive.setActive(false);
+    const TargetTrack continuation = makeIdTrack(
+        QStringLiteral("t2"), QStringLiteral("person"),
+        { makeTargetObservation(1000, 20.0, 0.0) });
+    registry.update({ inactive, continuation }, 1000);
+    QVERIFY(registry.isResolved(QStringLiteral("me")));
+    QCOMPARE(registry.targetId(QStringLiteral("me")), QStringLiteral("t2"));
+    QCOMPARE(registry.binding(QStringLiteral("me"))->method,
+             QStringLiteral("continuity-rebind"));
+}
+
+void ProjectTest::targetIdentityContinuityRebindAmbiguousIsUnresolved()
+{
+    TargetIdentityRegistry registry;
+    QString error;
+    const QList<TargetTrack> original = {
+        makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                    { makeTargetObservation(0, 0.0, 0.0) })
+    };
+    QVERIFY(registry.bindToTrack(QStringLiteral("me"), QStringLiteral("t1"), 0,
+                                 original, &error));
+
+    TargetTrack inactive = makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                                       { makeTargetObservation(0, 0.0, 0.0) });
+    inactive.setActive(false);
+    const TargetTrack left = makeIdTrack(QStringLiteral("t2"), QStringLiteral("person"),
+                                         { makeTargetObservation(1000, 10.0, 0.0) });
+    const TargetTrack right = makeIdTrack(QStringLiteral("t3"), QStringLiteral("person"),
+                                          { makeTargetObservation(1000, -10.0, 0.0) });
+    registry.update({ inactive, left, right }, 1000);
+    QVERIFY(!registry.isResolved(QStringLiteral("me")));
+    QVERIFY(registry.notes().join(QStringLiteral("\n"))
+                .contains(QStringLiteral("ambiguous")));
+}
+
+void ProjectTest::targetIdentityJsonRoundTrip()
+{
+    const QList<TargetTrack> tracks = twoPresenterTracks();
+    TargetIdentityRegistry registry;
+    QString error;
+    QVERIFY(registry.bindToTrack(QStringLiteral("me"), QStringLiteral("t1"), 123,
+                                 tracks, &error));
+
+    const QJsonObject object = registry.toJsonObject();
+    TargetIdentityRegistry restored;
+    QVERIFY2(restored.readFromJsonObject(object, &error), qPrintable(error));
+    QCOMPARE(restored.targetId(QStringLiteral("me")), QStringLiteral("t1"));
+    // Resolution is refreshed against live tracks, not trusted from disk.
+    QVERIFY(!restored.isResolved(QStringLiteral("me")));
+    restored.update(tracks, 0);
+    QVERIFY(restored.isResolved(QStringLiteral("me")));
+
+    CreatorTargetSelection seed;
+    seed.identity = QStringLiteral("me");
+    seed.timeMs = 10;
+    seed.yawDeg = 1.0;
+    seed.pitchDeg = 2.0;
+    seed.label = QStringLiteral("person");
+    CreatorTargetSelection seedBack;
+    QVERIFY(CreatorTargetSelection::readFromJsonObject(seed.toJsonObject(),
+                                                       &seedBack, &error));
+    QCOMPARE(seedBack.identity, seed.identity);
+    QCOMPARE(seedBack.timeMs, seed.timeMs);
+    QVERIFY(qAbs(seedBack.yawDeg - seed.yawDeg) < 1e-9);
+    QVERIFY(qAbs(seedBack.pitchDeg - seed.pitchDeg) < 1e-9);
+}
+
+void ProjectTest::targetSelectorResolvesCreatorAliases()
+{
+    const QList<TargetTrack> tracks = twoPresenterTracks();
+    TargetIdentityRegistry registry;
+    QString error;
+    QVERIFY(registry.bindToTrack(QStringLiteral("me"), QStringLiteral("t1"), 0,
+                                 tracks, &error));
+    const QStringList references = {
+        QStringLiteral("me"),
+        QStringLiteral("myself"),
+        QStringLiteral("the person I selected"),
+        QStringLiteral("my selection"),
+        QStringLiteral("the selected person"),
+    };
+    for (const QString &reference : references) {
+        const TargetSelectionResult result =
+            TargetSelector::select(reference, tracks, registry);
+        QVERIFY2(result.resolved, qPrintable(result.error));
+        QCOMPARE(result.targetId, QStringLiteral("t1"));
+        QCOMPARE(result.method, QStringLiteral("identity"));
+        QCOMPARE(result.target.id, TargetSelector::normalizeReference(reference));
+    }
+}
+
+void ProjectTest::targetSelectorUnresolvedCreatorWhenUnbound()
+{
+    const QList<TargetTrack> tracks = twoPresenterTracks();
+    const TargetIdentityRegistry registry;
+    const TargetSelectionResult result =
+        TargetSelector::select(QStringLiteral("me"), tracks, registry);
+    QVERIFY(!result.resolved);
+    QVERIFY(!result.ambiguous);
+    QVERIFY(result.error.contains(QStringLiteral("not resolved")));
+    QVERIFY(TargetSelector::resolvedTargets(QStringLiteral("me"), tracks, registry)
+                .isEmpty());
+}
+
+void ProjectTest::targetSelectorResolvesOtherPerson()
+{
+    const QList<TargetTrack> tracks = twoPresenterTracks();
+    TargetIdentityRegistry registry;
+    QString error;
+    QVERIFY(registry.bindToTrack(QStringLiteral("me"), QStringLiteral("t1"), 0,
+                                 tracks, &error));
+    const TargetSelectionResult result =
+        TargetSelector::select(QStringLiteral("the other person"), tracks, registry);
+    QVERIFY2(result.resolved, qPrintable(result.error));
+    QCOMPARE(result.targetId, QStringLiteral("t2"));
+    QCOMPARE(result.method, QStringLiteral("other-person"));
+}
+
+void ProjectTest::targetSelectorOtherPersonAmbiguous()
+{
+    QList<TargetTrack> tracks = twoPresenterTracks();
+    tracks.append(makeIdTrack(QStringLiteral("t3"), QStringLiteral("person"),
+                              { makeTargetObservation(0, 80.0, 0.0) }));
+    TargetIdentityRegistry registry;
+    QString error;
+    QVERIFY(registry.bindToTrack(QStringLiteral("me"), QStringLiteral("t1"), 0,
+                                 tracks, &error));
+    const TargetSelectionResult result =
+        TargetSelector::select(QStringLiteral("the other person"), tracks, registry);
+    QVERIFY(!result.resolved);
+    QVERIFY(result.ambiguous);
+    QCOMPARE(result.candidates.size(), 2);
+}
+
+void ProjectTest::targetSelectorOrdinalIsDeterministicRegardlessOfInputOrder()
+{
+    const QList<TargetTrack> tracks = twoPresenterTracks();
+    const QList<TargetTrack> reversed = { tracks.at(1), tracks.at(0) };
+    const TargetIdentityRegistry registry;
+    const TargetSelectionResult firstA =
+        TargetSelector::select(QStringLiteral("person 1"), tracks, registry);
+    const TargetSelectionResult firstB =
+        TargetSelector::select(QStringLiteral("person 1"), reversed, registry);
+    const TargetSelectionResult secondA =
+        TargetSelector::select(QStringLiteral("person 2"), tracks, registry);
+    const TargetSelectionResult secondB =
+        TargetSelector::select(QStringLiteral("person 2"), reversed, registry);
+    QVERIFY(firstA.resolved && firstB.resolved);
+    QCOMPARE(firstA.targetId, firstB.targetId);
+    QVERIFY(secondA.resolved && secondB.resolved);
+    QCOMPARE(secondA.targetId, secondB.targetId);
+    QVERIFY(firstA.targetId != secondA.targetId);
+}
+
+void ProjectTest::targetSelectorOrdinalOutOfRange()
+{
+    const QList<TargetTrack> tracks = twoPresenterTracks();
+    const TargetIdentityRegistry registry;
+    const TargetSelectionResult result =
+        TargetSelector::select(QStringLiteral("person 9"), tracks, registry);
+    QVERIFY(!result.resolved);
+    QVERIFY(result.error.contains(QStringLiteral("not visible")));
+}
+
+void ProjectTest::targetSelectorLeftRightByYaw()
+{
+    QList<TargetTrack> tracks;
+    tracks.append(makeIdTrack(QStringLiteral("t1"), QStringLiteral("person"),
+                              { makeTargetObservation(0, -30.0, 0.0) }));
+    tracks.append(makeIdTrack(QStringLiteral("t2"), QStringLiteral("person"),
+                              { makeTargetObservation(0, 40.0, 0.0) }));
+    const TargetIdentityRegistry registry;
+    const TargetSelectionResult left =
+        TargetSelector::select(QStringLiteral("the person on the left"), tracks, registry);
+    const TargetSelectionResult right =
+        TargetSelector::select(QStringLiteral("the person on my right"), tracks, registry);
+    QVERIFY(left.resolved);
+    QCOMPARE(left.targetId, QStringLiteral("t1"));
+    QCOMPARE(left.method, QStringLiteral("left"));
+    QVERIFY(right.resolved);
+    QCOMPARE(right.targetId, QStringLiteral("t2"));
+    QCOMPARE(right.method, QStringLiteral("right"));
+}
+
+void ProjectTest::targetSelectorTrackIdAndUniqueLabel()
+{
+    const QList<TargetTrack> tracks = twoPresenterTracks();
+    const TargetIdentityRegistry registry;
+    const TargetSelectionResult byId =
+        TargetSelector::select(QStringLiteral("t2"), tracks, registry);
+    QVERIFY(byId.resolved);
+    QCOMPARE(byId.targetId, QStringLiteral("t2"));
+
+    const TargetSelectionResult labelAmbiguous =
+        TargetSelector::select(QStringLiteral("person"), tracks, registry);
+    QVERIFY(!labelAmbiguous.resolved);
+    QVERIFY(labelAmbiguous.ambiguous);
+
+    const QList<TargetTrack> single = { tracks.at(0) };
+    const TargetSelectionResult labelUnique =
+        TargetSelector::select(QStringLiteral("person"), single, registry);
+    QVERIFY(labelUnique.resolved);
+    QCOMPARE(labelUnique.targetId, QStringLiteral("t1"));
+}
+
+void ProjectTest::targetSelectorIsDeterministic()
+{
+    const QList<TargetTrack> tracks = twoPresenterTracks();
+    TargetIdentityRegistry registry;
+    QString error;
+    QVERIFY(registry.bindToTrack(QStringLiteral("me"), QStringLiteral("t1"), 0,
+                                 tracks, &error));
+    for (const QString &reference : { QStringLiteral("me"),
+                                      QStringLiteral("the other person"),
+                                      QStringLiteral("person 2") }) {
+        const TargetSelectionResult a =
+            TargetSelector::select(reference, tracks, registry);
+        const TargetSelectionResult b =
+            TargetSelector::select(reference, tracks, registry);
+        QCOMPARE(a.resolved, b.resolved);
+        QCOMPARE(a.targetId, b.targetId);
+        QCOMPARE(a.method, b.method);
+    }
+}
+
+void ProjectTest::targetSelectorResolvedTargetsFeedsReframePlanBuilder()
+{
+    const QList<TargetTrack> tracks = twoPresenterTracks();
+    TargetIdentityRegistry registry;
+    QString error;
+    QVERIFY(registry.bindToTrack(QStringLiteral("me"), QStringLiteral("t1"), 0,
+                                 tracks, &error));
+
+    const QList<ReframeTarget> targets =
+        TargetSelector::resolvedTargets(QStringLiteral("me"), tracks, registry);
+    QCOMPARE(targets.size(), 1);
+    QCOMPARE(targets.at(0).id, QStringLiteral("me"));
+
+    const ReframeIntent intent =
+        ReframeIntentParser::parse(QStringLiteral("follow me"));
+    QVERIFY(intent.recognized);
+    const ReframeBuildResult built = ReframePlanBuilder::build(
+        intent, targets, ReframePlan::TimeRange{ 0, 2000 },
+        ReframePlan::OutputSpec{ 160, 90, 2.0 });
+    QVERIFY2(built.ok, qPrintable(built.error));
+    const CameraState state = CameraPath::stateAt(built.plan, 0);
+    QVERIFY(qAbs(state.yawDeg + 28.0) < 1e-9);
 }
 
 QTEST_MAIN(ProjectTest)

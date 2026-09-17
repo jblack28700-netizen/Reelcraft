@@ -268,6 +268,28 @@ Implemented for the first slice (Decision 020): an optional permissively license
 
 ---
 
+# Issue — "me" identity is geometric, not biometric (360 target identity) (2026-09-17)
+
+### Status
+
+Open — intentional first-slice boundary; not a defect.
+
+### Description
+
+Creator identity is a deterministic binding between the canonical key "me" and a tracker track id, established from a structured creator seed (direction/time or track id) and maintained through geometric trajectory continuity (bounded velocity prediction and re-entry). It is not appearance-based or biometric.
+
+Consequently, identity survives normal movement, crossing trajectories, temporary detection loss/occlusion, and short re-entry with a unique continuation, but it cannot reliably re-identify a person after a long absence, among visually similar people, or when a unique continuation cannot be established. In those cases the registry reports the identity unresolved or ambiguous rather than guessing. On crowded real footage, "the other person" is reported ambiguous when more than one other person is visible.
+
+### Impact
+
+References to "me" require an explicit creator selection first. Multi-person references that are genuinely ambiguous return no target and a candidate list; callers must disambiguate (for example with "person 1"/"person 2").
+
+### Planned Resolution
+
+Add an optional, replaceable appearance/embedding re-identification seam behind `IdentityBinding`, plus audio-visual speaker association, as a future objective. Keep any model optional so the unit suite stays model-free.
+
+---
+
 # Issue Management Rules
 
 For each future issue:

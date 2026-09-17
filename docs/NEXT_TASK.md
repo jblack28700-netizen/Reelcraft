@@ -189,8 +189,30 @@ Make the first real computer-vision detector work with actual 360 footage throug
 ### Explicitly not implemented
 - "Me" identity / re-identification; speaker localization; semantic/open-vocabulary classification; production tracking quality; GPU/RunPod inference (no credentials available).
 
-## Next Objective (360 Reframing Objective 4) — NOT STARTED
+## 360 Reframing Objective 4 — Target Identity & Deterministic Selection — Complete
 
-Identity and evidence: resolve "me"/the creator and the active speaker into a target identity (creator-selected seed, re-identification, or audio-visual speaker association) and make target selection deterministic for multi-person scenes. Requires its own scoped objective before implementation; keep any real model optional so the unit suite stays model-free.
+Status: **Complete — implemented and verified (2026-09-17).**
+
+### Objective
+Represent a creator-selected target ("me") as structured data, distinguish it deterministically from other detected people, and keep that identity across frames, feeding the existing TargetTrack/ReframePlan/renderer path.
+
+### Scope (implemented)
+- `app/target/TargetIdentity.{h,cpp}`: `CreatorTargetSelection`, `IdentityBinding`, `TargetIdentityRegistry` (seed binding, explicit track binding, claim conflicts, active-state refresh, unique continuity re-binding, JSON round-trip).
+- `app/target/TargetSelector.{h,cpp}`: documented deterministic references and a canonical track order.
+- `SphericalTargetTracker` hardening: bounded constant-velocity prediction and a bounded re-entry gate (no appearance model).
+- 21 model-free tests; the real-detector integration test extended with identity selection and selection ambiguity.
+
+### Supported references
+"me"/"myself"/"my"/"the person I selected"/"my selection"/"the selected person"/"the person I picked"; "the other person"/"the other one"/"the other"; "person N"/"the first person"/"the second person"/...; "the person on the left"/"on the right"; exact track id ("t2"); a label when it is unique.
+
+### Documented meaning of "me"
+"Me" = the track the creator explicitly selected (seed direction/time or track id), or its unique geometric continuation. It is NOT biometric identity and does NOT re-identify a person after a long absence or among similar people; that requires a future appearance/re-ID seam. If identity is unresolved or ambiguous it is reported, never guessed.
+
+### Not implemented
+Speaker/active-speaker association; appearance/embedding re-identification; open-vocabulary classes; GPU/RunPod inference.
+
+## Next Objective (360 Reframing Objective 5) — NOT STARTED
+
+Evidence and appearance-based identity: add optional active-speaker/audio-visual association and a replaceable appearance/embedding re-identification seam behind the existing `IdentityBinding`, so "me" can be re-acquired after long absence and among similar people. Requires its own scoped objective; keep any model optional and the unit suite model-free.
 
 

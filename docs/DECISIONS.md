@@ -667,3 +667,27 @@ Decision 019 established the replaceable `TargetDetector`/`ProcessTargetDetector
 - GPU inference (CUDA) and heavier models remain possible on RunPod; this objective used lightweight CPU inference because no RunPod credentials were available in the environment.
 - "Me" identity, speaker localization, and production tracking quality remain future objectives.
 
+
+# Decision 021 — Target Identity and Deterministic Selection
+
+**Status:** Accepted (2026-09-17, 360 Reframing Objective 4)
+
+## Context
+
+Objective 3 proved real detection and tracking, but there was no structured creator identity: "me" and multi-person references were resolved only by matching a track id or label, and selection could depend on detector/track ordering. The objective was to distinguish a creator-selected target from other detected people deterministically, without adding appearance/biometric re-identification, speaker association, or GPU work.
+
+## Decisions
+
+- **Identity is a structured binding** between a creator-meaningful identity key (canonical "me") and a tracker track id: `CreatorTargetSelection` and `IdentityBinding` in `app/target/TargetIdentity.h`. It is JSON-serializable and inspectable, and is explicitly **not** biometric identity.
+- **Creator selection is structured data**, not renderer/UI state: a direction (yaw/pitch) at a time, or an explicit track id, plus optional label/evidence. `TargetIdentityRegistry::bindFromSelection` binds deterministically to the nearest in-window track (ties: confidence desc, first observation time, id) and refuses when nothing is within the gate.
+- **Identity persistence is geometric, not appearance-based:** the registry refreshes against live tracks and re-binds a lost identity only when exactly one active, unclaimed, label-compatible track continues its predicted trajectory; otherwise it reports the identity unresolved or ambiguous. The tracker adds bounded constant-velocity prediction (crossing trajectories) and a bounded re-entry gate (temporary loss/occlusion/re-entry).
+- **Deterministic selection** (`app/target/TargetSelector.{h,cpp}`) resolves a documented vocabulary ("me"/selected aliases, "the other person", "person N"/ordinals, left/right, exact track id, unique label) using the canonical order (first observation time, numeric track id, id string) — never detector output order. Genuinely ambiguous references return an ambiguous result with candidates rather than a guess.
+- **Future seam:** appearance/embedding re-identification and audio-visual speaker association can extend the same binding structure later, without changing the detector, geometry, planner, or renderer.
+
+## Consequences
+
+- 21 new model-free tests cover crossing, re-entry, prediction determinism, seed binding, claim conflicts, active-state resolution, unique vs ambiguous continuity re-binding, JSON round-trip, creator aliases, other-person ambiguity, ordinal determinism regardless of input order, left/right, track-id/label, and identity -> `ReframePlanBuilder` -> `CameraPath`. Full model-free suite: 240 passed / 0 failed / 1 skipped.
+- Real-footage integration selects a presenter by a structured seed, binds "me", keeps the identity across the sampled frames, and renders a flat output centered on the selected presenter.
+- "Me" currently means "the track the creator selected (or its unique geometric continuation)". It is not biometric identity and cannot re-identify a person after a long absence or among similar people without a future appearance model.
+- No detector, model/runtime, renderer, or geometry changes; Decisions 017-020 preserved.
+

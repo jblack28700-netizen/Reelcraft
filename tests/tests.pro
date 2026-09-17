@@ -36,7 +36,9 @@ SOURCES += \
     ../app/target/EquirectViewPlan.cpp \
     ../app/target/ProcessTargetDetector.cpp \
     ../app/target/SphericalTargetTracker.cpp \
+    ../app/target/TargetIdentity.cpp \
     ../app/target/TargetResolver.cpp \
+    ../app/target/TargetSelector.cpp \
     ../app/target/TargetTrackPlanner.cpp \
     ../app/target/TargetTypes.cpp
 
@@ -75,6 +77,8 @@ HEADERS += \
     ../app/target/ProcessTargetDetector.h \
     ../app/target/SphericalTargetTracker.h \
     ../app/target/TargetDetector.h \
+    ../app/target/TargetIdentity.h \
     ../app/target/TargetResolver.h \
+    ../app/target/TargetSelector.h \
     ../app/target/TargetTrackPlanner.h \
     ../app/target/TargetTypes.h

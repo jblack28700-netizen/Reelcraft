@@ -31,6 +31,19 @@ public:
         int maxMisses = 8;
         // Detections below this confidence are ignored.
         double minConfidence = 0.3;
+        // Motion hardening (deterministic; still no appearance model). When
+        // enabled, association uses a constant-velocity prediction from the
+        // track's last two observations, which keeps identity through crossing
+        // trajectories. Prediction is never extrapolated beyond
+        // maxPredictionMs.
+        bool useVelocityPrediction = true;
+        qint64 maxPredictionMs = 1500;
+        // A track that missed at least one frame may still associate within
+        // this wider gate, for up to reentryWindowMs after its last
+        // observation. This supports temporary loss/occlusion/re-entry without
+        // an appearance model.
+        double reentryGateDeg = 60.0;
+        qint64 reentryWindowMs = 3000;
     };
 
     SphericalTargetTracker() = default;

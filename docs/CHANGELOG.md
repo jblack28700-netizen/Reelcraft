@@ -561,4 +561,15 @@ Date: 2026-09-17
 - Documented the exact model, weights, runtime, licenses, install, GPU options, protocol, results, and failure cases in `docs/TARGET_RESOLUTION_TECHNOLOGY.md` and `tools/detector_helper/README.md`; Decision 020 records the selection.
 - Not implemented yet: "me" identity, speaker localization, open-vocabulary classes, production tracking quality, GPU/RunPod inference, reframe-plan persistence, and UI integration.
 
+## v0.2.41 — Target Identity & Deterministic Selection
+
+Date: 2026-09-17
+
+- Added structured creator identity (`app/target/TargetIdentity.*`): a creator-selected target ("me") is represented as a JSON-serializable binding between an identity key and a tracker track id, established from a structured seed (direction/time or track id) and refreshed against live tracks.
+- Added deterministic target selection (`app/target/TargetSelector.*`) for a documented vocabulary: "me"/selected aliases, "the other person", "person N"/ordinals, left/right, exact track id, and a unique label. Canonical ordering never depends on detector output order; ambiguous references are reported with candidates instead of guessed.
+- Hardened the tracker with bounded constant-velocity prediction (crossing trajectories) and a bounded re-entry gate (temporary loss/occlusion/re-entry); still no appearance model.
+- Real-footage validation: 9 people detected; "me" bound to the strongest presenter (t1, 5 frames, mean confidence 0.923); identity fed the existing `ReframePlan`/`ReframeRenderer` and produced a 640x360 output centered on the selected person.
+- "Me" is geometric identity, not biometric; it does not re-identify after long absence or among similar people. Speaker association and appearance re-identification remain future work.
+- 21 new model-free tests; full suite 240 passed, 0 failed, 1 skipped. Decision 021 recorded; Decisions 017-020 preserved.
+
 
