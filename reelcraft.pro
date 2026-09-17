@@ -22,7 +22,15 @@ SOURCES += \
     app/viewer/ViewerScene.cpp \
     app/viewer/ViewportState.cpp \
     app/ui/MainWindow.cpp \
-    app/ui/ViewerWidget.cpp
+    app/ui/ViewerWidget.cpp \
+    app/reframe/CameraKeyframe.cpp \
+    app/reframe/CameraPath.cpp \
+    app/reframe/FfmpegSeekFrameProvider.cpp \
+    app/reframe/ReframeIntent.cpp \
+    app/reframe/ReframePlan.cpp \
+    app/reframe/ReframePlanBuilder.cpp \
+    app/reframe/ReframePipeline.cpp \
+    app/reframe/ReframeRenderer.cpp
 
 HEADERS += \
     app/application/Application.h \
@@ -43,4 +51,14 @@ HEADERS += \
     app/viewer/ViewerScene.h \
     app/viewer/ViewportState.h \
     app/ui/MainWindow.h \
-    app/ui/ViewerWidget.h
+    app/ui/ViewerWidget.h \
+    app/reframe/CameraKeyframe.h \
+    app/reframe/CameraPath.h \
+    app/reframe/FfmpegSeekFrameProvider.h \
+    app/reframe/ReframeFrameProvider.h \
+    app/reframe/ReframeIntent.h \
+    app/reframe/ReframeMath.h \
+    app/reframe/ReframePlan.h \
+    app/reframe/ReframePlanBuilder.h \
+    app/reframe/ReframePipeline.h \
+    app/reframe/ReframeRenderer.h

@@ -2,7 +2,7 @@
 
 ## Current Version
 
-0.1.0
+0.2.38
 
 ## Current Branch
 
@@ -10,7 +10,7 @@ main
 
 ## Current Stage
 
-Phase 1 Desktop Application Foundation — Complete
+Phase 4 — 360 Reframing Engine (deterministic vertical slice) implemented and verified. Phase 3 Media Engine remains open; its player-lifecycle objective is intentionally superseded for now by the human-approved 360 priority.
 
 ## Project Status
 
@@ -61,27 +61,27 @@ A minimal Qt 6 desktop application shell exists with UI/application-core separat
 
 ## Media Processing
 
-Status: Not implemented.
+Status: Partially implemented.
 
-The deterministic media-processing architecture is defined conceptually, but no production media engine has been implemented.
+A replaceable decode/media-source seam, a persistent FFmpeg-subprocess frame source, a deterministic frame pump, and a player/timing foundation exist (Phase 3 Objectives 2-4). A deterministic 360 reframing engine (structured plan, camera path, provider seam, renderer, pipeline) now renders flat video from 360 sources. No continuous playback UX, duration/ffprobe metadata, audio, timeline, or Application-level player lifecycle wiring exists yet.
 
 ## AI Editing
 
-Status: Not implemented.
+Status: Partially implemented.
 
-The conceptual AI-to-deterministic edit contract has been established, but no production AI editing system or provider integration has been implemented.
+The conceptual AI-to-deterministic edit contract is now backed by a concrete structured boundary for 360 reframing: a deterministic natural-language `ReframeIntent` parser produces structured decisions, a validated `ReframePlan` carries them, and a deterministic renderer executes them. No AI provider/model, scene understanding, target detection/tracking, speaker analysis, or content-based cut selection is integrated yet; unresolved subject references are reported rather than guessed.
 
 ## 360° Video
 
-Status: Architectural and contractual requirement only.
+Status: Partially implemented — deterministic reframing vertical slice complete.
 
-360° video is a first-class requirement. The project has documented conceptual requirements for 360° media, but 360° viewing, processing, reframing, and export systems have not yet been implemented.
+360° video is a first-class requirement. The viewer supports equirectangular presentation and look-around; media records carry a declared projection; and a deterministic reframing engine now turns a 360 source plus a structured (or natural-language) request into a flat H.264 output through the `ReframePlan`/`CameraPath` contract. Automatic scene/target understanding, detection/tracking, speaker localization, and UI integration of reframing are not yet implemented.
 
 ## Testing
 
-Status: Application testing infrastructure not yet implemented.
+Status: Implemented and continuously verified.
 
-Documentation and repository verification are being performed during the foundation stage. Production application testing infrastructure will be established as part of the implementation architecture.
+A Qt Test suite covers project state, viewer/media, the media-source seam and frame pump, player/timing, and the 360 reframing engine (plan validation/round-trip, camera interpolation, rendering determinism, intent parsing, plan building, and a real FFmpeg end-to-end render). Current result: 180 passed, 0 failed, 0 skipped (~41.5 s).
 
 ## Technology Direction
 
@@ -868,4 +868,30 @@ Verification:
 - Automated tests: 154 passed, 0 failed, 0 skipped (144 prior + 10 player/timing tests).
 - Offscreen launch smoke: event loop alive until timeout (SMOKE_EXIT=124).
 - Official `scripts/build_and_test.sh` workflow re-run green.
+
+## Phase 4 — 360 Reframing Engine (Deterministic Vertical Slice) — Complete
+
+Status: Complete (2026-09-17). Human-approved priority: make the core 360 editing/reframing capability functional before continuing the Phase 3 player-lifecycle objective.
+
+- Added `app/reframe/`:
+  - `ReframePlan` + `CameraKeyframe` — structured, versioned, JSON-serializable, validated reframing decisions (source media id, source time range, output spec, ordered camera keyframes).
+  - `CameraPath` — pure deterministic camera evaluation: shortest-path yaw interpolation, bounded pitch/roll/FOV, hold/linear segments, deterministic hold outside the keyframe range.
+  - `ReframeFrameProvider` (replaceable seam) + `FfmpegSeekFrameProvider` (existing FFmpeg-CLI single-frame seam).
+  - `ReframeRenderer` — deterministic per-frame reframing through the existing `EquirectView`, PNG-sequence output, and H.264 encode.
+  - `ReframeIntent` + `ReframeIntentParser` — deterministic natural-language boundary (aspect/platform, time ranges, named/explicit directions, subject references). Unresolved subjects are reported, never fabricated.
+  - `ReframePlanBuilder` — intent + resolved target directions -> validated plan.
+  - `ReframePipeline` — end-to-end orchestration: 360 source -> intent -> plan -> deterministic reframing -> flat video. Source media is read-only.
+- Registered in `reelcraft.pro` and `tests/tests.pro`.
+- Not implemented: AI provider/model, person/object detection/tracking, speaker analysis, content-based cut selection, reframe-plan persistence in the project schema, and Application/UI integration.
+
+Verification:
+- Application build succeeded (clean rebuild).
+- Test build succeeded (clean rebuild).
+- Automated tests: 180 passed, 0 failed, 0 skipped (154 prior + 26 reframing tests), ~41.5 s.
+- End-to-end test renders a real FFmpeg-generated equirect clip through intent -> plan -> reframing -> H.264 output and decodes the result to the expected dimensions.
+- Offscreen launch smoke: SMOKE_EXIT=124.
+
+Architecture decision: Decision 018 records the structured plan boundary, replaceable frame provider, deterministic renderer, and deterministic intent boundary.
+
+Next: target/subject resolution (detection/tracking) behind the resolved-target boundary — see `NEXT_TASK.md`.
 

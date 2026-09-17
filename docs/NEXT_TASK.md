@@ -1,5 +1,19 @@
 # Reelcraft — Next Task
 
+## CURRENT PRIORITY (human-approved) — 360 Reframing / Editing Capability
+
+The current highest-priority product objective is a **working 360 video editing/reframing capability**, not the mechanical continuation of the numbered task queue.
+
+Priority pipeline: 360 source -> scene/subject understanding -> natural-language or structured request -> structured edit/reframe plan -> virtual-camera decisions -> deterministic execution -> flat video output.
+
+**360 Reframing Objective 1 — Deterministic Reframing Vertical Slice — is complete and verified** (2026-09-17; 180 passed / 0 failed / 0 skipped). See the detail section at the end of this file and `CURRENT_STATE.md`.
+
+The Phase 3 Objective 5 entry below remains valid project history but must NOT be started mechanically while the 360 priority is active. It should resume only when it directly serves the 360 capability (for example, previewing/playing reframed results).
+
+**Next 360 objective:** Reframing Objective 2 — target/subject resolution (detection/tracking) and speaker localization behind the existing resolved-target boundary.
+
+---
+
 ## Phase 2 Status
 
 - Phase 1 Desktop Application Foundation — complete and verified.
@@ -105,8 +119,34 @@ Introduce the deterministic player/timing foundation above the `FramePump`, defi
 - Full regression 154 passed / 0 failed / 0 skipped; official `scripts/build_and_test.sh` re-run green.
 - Offscreen smoke SMOKE_EXIT=124.
 
-## Next Objective (Phase 3, Objective 5) — NOT STARTED
+## Next Objective (Phase 3, Objective 5) — NOT STARTED (deferred behind the 360 priority)
 
-Application-level player lifecycle orchestration: have `Application` own/create/replace/dispose the media source, frame pump, and player in step with the active-media contract, and define how an event-loop driver (not the `Player`) invokes `tick()`. Preserve the Objective 10 preview-time contract and keep the viewer presentation-only. UI playback controls, duration/ffprobe, audio, and timeline remain deferred. Requires its own scoped objective before implementation. Do not begin automatically.
+Application-level player lifecycle orchestration: have `Application` own/create/replace/dispose the media source, frame pump, and player in step with the active-media contract, and define how an event-loop driver (not the `Player`) invokes `tick()`. Preserve the Objective 10 preview-time contract and keep the viewer presentation-only. UI playback controls, duration/ffprobe, audio, and timeline remain deferred. Requires its own scoped objective before implementation. Do not begin automatically while the 360 reframing priority is active.
+
+## 360 Reframing Objective 1 — Deterministic Reframing Vertical Slice — Complete
+
+Status: **Complete — implemented and verified (2026-09-17; automated suite 180 passed, 0 failed, 0 skipped).**
+
+### Objective
+Prove and implement a deterministic path from 360 source media and a reframing request to a usable flat video output, keeping decisions (AI or creator) separate from deterministic execution.
+
+### Scope (implemented)
+- `ReframePlan` + `CameraKeyframe` (`app/reframe/`): structured, versioned, JSON-serializable, validated reframing decisions (source media id, source range, output spec, ordered camera keyframes with linear/hold interpolation).
+- `CameraPath`: pure deterministic camera evaluation (shortest-path yaw, bounded pitch/roll/FOV, hold outside the keyframe range).
+- `ReframeFrameProvider` replaceable seam + `FfmpegSeekFrameProvider` (existing FFmpeg-CLI single-frame seam).
+- `ReframeRenderer`: deterministic per-frame reframing via `EquirectView`, PNG-sequence output, and FFmpeg H.264 encode.
+- `ReframeIntent` + `ReframeIntentParser`: deterministic natural-language boundary (aspect/platform, time ranges, named/explicit directions, subject references); unresolved subjects are reported, not fabricated.
+- `ReframePlanBuilder`: intent + resolved target directions -> validated plan.
+- `ReframePipeline`: end-to-end orchestration (360 source -> intent -> plan -> deterministic reframing -> flat video); source media is read-only.
+- 26 new tests in `tests/test_project.cpp` (plan/keyframe round-trip and rejection, frame timing, camera interpolation incl. shortest-yaw/hold/bounds, rendering determinism, intent parsing, plan building, and a real FFmpeg end-to-end render).
+
+### Explicitly not implemented
+- Target/subject detection or tracking; speaker/dialogue analysis; content-based cut/segment selection.
+- AI provider/model integration (the deterministic parser is the first implementation of the intent boundary).
+- Reframe-plan persistence in the project schema; Application/UI integration of reframing; playback of reframed output.
+
+## Next Objective (360 Reframing Objective 2) — NOT STARTED
+
+Target/subject resolution behind the existing resolved-target boundary: derive `ReframeTarget` view directions from the source using existing/open-source detection and tracking (person/object detection, tracking, speaker localization), feed them into `ReframePlanBuilder`, and record evidence/explanation. Must reuse the `ReframeFrameProvider` seam and keep the AI/decision layer separate from deterministic execution. Requires its own scoped objective before implementation.
 
 

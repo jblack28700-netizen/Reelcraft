@@ -222,6 +222,30 @@ Make technology decisions incrementally based on documented requirements, testin
 
 ---
 
+# Issue — Current aarch64 proot development environment: GCC driver prefix and unavailable bash sandbox (2026-09-17)
+
+### Status
+
+Open — environment limitation, not a product defect.
+
+### Description
+
+On the current aarch64 proot/Termux development device:
+
+- The Debian GCC 15 driver could not locate `cc1`/`cc1plus` (installed under `/usr/libexec/gcc/...`) or `ld` when invoked as bare `g++`, because it computed an empty/relative install prefix from `argv[0]`. It was repaired non-destructively by symlinking `cc1`, `cc1plus`, and `ld` into `/usr/lib/gcc/aarch64-linux-gnu/15/` and invoking `/usr/bin/g++` (absolute path). Builds must pass `QMAKE_CC=/usr/bin/gcc QMAKE_CXX=/usr/bin/g++`.
+- FFmpeg is not on the Debian PATH; the Termux build is used via `REELCRAFT_FFMPEG=/data/data/com.termux/files/usr/bin/ffmpeg`.
+- The `bash` tool is unavailable: the workspace-write sandbox backend (bwrap) cannot start on this host, and escalation to `danger-full-access` was declined. Inspection, builds, and tests were performed through the in-process code runtime and detached background processes only.
+
+### Impact
+
+Build/test commands must set the compiler and FFmpeg environment explicitly. Shell-based workflows are not directly available. This does not affect product architecture or source.
+
+### Planned Resolution
+
+Re-verify the standard `scripts/build_and_test.sh` workflow on a host with a working sandbox and a correctly installed GCC; record the result in `DEVELOPMENT_ENVIRONMENT.md`. The GCC symlinks are reversible.
+
+---
+
 # Issue Management Rules
 
 For each future issue:

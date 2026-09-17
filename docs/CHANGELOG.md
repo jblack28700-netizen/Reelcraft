@@ -529,4 +529,14 @@ Date: 2026-09-16
 - `FramePump` remains a passive, caller-driven decoder; no timer, thread, UI wiring, audio, duration/ffprobe, or timeline exists yet, and the Objective 10 preview-time contract is unchanged.
 - Full test suite: 154 passed, 0 failed, 0 skipped.
 
+## v0.2.38 — 360 Reframing Engine (Deterministic Vertical Slice)
+
+Date: 2026-09-17
+
+- Added a deterministic 360-to-flat reframing engine (`app/reframe/`): a structured, versioned, validated `ReframePlan`/`CameraKeyframe` boundary; a pure `CameraPath` evaluator; a replaceable frame-provider seam with an FFmpeg-CLI implementation; a deterministic renderer; and an end-to-end `ReframePipeline`.
+- Added a deterministic natural-language intent boundary: aspect/platform ("16:9", "TikTok", square), time ranges ("from 00:30 to 01:00"), and camera directions/moves. Subject references are resolved only when a target direction is supplied; unresolved references are reported, never guessed.
+- The source media is read-only; reframing writes only derived outputs. The same plan and source produce the same frames.
+- 26 new tests (plan/keyframe round-trip and validation, frame timing, camera interpolation, rendering determinism, intent parsing, plan building, and a real FFmpeg end-to-end render). Full test suite: 180 passed, 0 failed, 0 skipped.
+- No AI provider/model, target detection/tracking, speaker analysis, reframe-plan persistence, or Application/UI integration yet.
+
 

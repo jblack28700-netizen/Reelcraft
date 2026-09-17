@@ -994,6 +994,49 @@ Introduce the deterministic player/timing foundation above the Objective 3 `Fram
 - The playhead is frame-interval-based (a playback pacing parameter) rather than duration/timestamp-based; ffprobe duration metadata remains a future decision gate (Decision 017).
 - Build/verification again ran in the DSH x86_64 Ubuntu 24.04 agent container against Ubuntu `qt6-base-dev` 6.4.2; no dependency or environment change for this objective.
 
+---
+
+# 2026-09-17 — 360 Reframing Engine (Deterministic Vertical Slice)
+
+### Context
+
+The human-approved product priority moved to making the core 360 editing/reframing capability functional rather than mechanically continuing the Phase 3 queue. Inspection of the repository, documentation, and Git history confirmed reusable Phase 2/3 primitives (the ViewportState/ViewerProjection/EquirectView camera conventions, `FrameExtractor`, the `FrameSource`/`FramePump` seam, and the `Player`/`Playhead` foundation) but no structured reframing representation and no deterministic execution path from decisions to rendered output. Phase 3 Objective 5 (Application-level player lifecycle) was therefore intentionally not started.
+
+### Work completed
+
+- Added `app/reframe/ReframePlan.{h,cpp}` and `CameraKeyframe.{h,cpp}`: a structured, versioned, JSON-serializable, validated reframing plan (source media id, source time range, output width/height/fps, ordered keyframes with yaw/pitch/roll/FOV and linear/hold interpolation). Validation rejects empty plans, out-of-range or non-increasing keyframe times, non-finite/out-of-bounds camera values, invalid output, and ranges shorter than one frame.
+- Added `app/reframe/CameraPath.{h,cpp}`: a pure, clock-free deterministic camera evaluator (shortest-path yaw interpolation, bounded pitch/roll/FOV, hold/linear segments, deterministic hold outside the keyframe range).
+- Added the replaceable `ReframeFrameProvider` seam and the first production implementation `FfmpegSeekFrameProvider`, reusing the existing FFmpeg-CLI single-frame seam and never modifying the source media.
+- Added `ReframeRenderer`: deterministic per-frame reframing through `EquirectView`, PNG-sequence output, and an FFmpeg H.264 encode step.
+- Added `ReframeIntent` + `ReframeIntentParser`: a deterministic natural-language boundary recognizing aspect/platform, time ranges, named/explicit camera directions, and subject references. Unresolved subjects are recorded, never fabricated.
+- Added `ReframePlanBuilder`: converts an intent plus resolved `ReframeTarget` directions into a validated plan; unresolved references produce a deterministic error.
+- Added `ReframePipeline`: end-to-end orchestration (360 source -> intent -> plan -> deterministic reframing -> encoded flat video).
+- Registered all new files in `reelcraft.pro` and `tests/tests.pro`.
+- Added 26 tests to `tests/test_project.cpp` (keyframe/plan JSON round-trip and rejection, frame timing, camera interpolation incl. shortest-yaw, hold, and bound normalization, rendering determinism and provider-failure handling, PNG/encode, intent parsing, plan building, and a real FFmpeg end-to-end render).
+
+### Verification
+
+- Clean application and test builds succeed (Qt 6.10.2, Debian GCC 15) with zero compilation errors.
+- Full automated suite: 180 passed, 0 failed, 0 skipped, ~41.5 s (154 prior + 26 reframing tests).
+- End-to-end pipeline test generates a real equirect clip with FFmpeg, runs intent -> plan -> reframing -> H.264, and decodes the output to the expected dimensions.
+- Offscreen application launch smoke: event loop alive until timeout (SMOKE_EXIT=124).
+
+### Environment notes (this session)
+
+- This session ran on the aarch64 proot/Termux development device. The Debian GCC 15 driver could not locate `cc1`/`cc1plus` (libexec layout) or `ld` when invoked as bare `g++`; this was repaired non-destructively by symlinking them into `/usr/lib/gcc/aarch64-linux-gnu/15/` and invoking `/usr/bin/g++` so the driver computes its prefix. Builds pass `QMAKE_CC=/usr/bin/gcc QMAKE_CXX=/usr/bin/g++`.
+- FFmpeg is not on the Debian PATH; the Termux build works from this environment and is supplied via `REELCRAFT_FFMPEG=/data/data/com.termux/files/usr/bin/ffmpeg`.
+- The `bash` tool remains unavailable (the workspace-write bwrap sandbox backend cannot start on this host; escalation was declined). All inspection, builds, and tests were performed through the in-process code runtime and detached background processes, without requesting wider sandbox permissions. See `KNOWN_ISSUES.md`.
+
+### Boundary notes / not implemented
+
+- No target/subject detection or tracking, speaker/dialogue analysis, content-based cut selection, or AI-provider/model integration.
+- Reframe plans are validated and serializable but are not yet persisted in the project schema, and reframing is not wired into `Application`/`MainWindow`.
+- Requests that reference an unresolved subject fail deterministically rather than guessing a direction.
+
+### Decisions
+
+- Decision 018 recorded: structured reframing plan boundary; replaceable frame-provider seam; deterministic renderer; deterministic intent boundary; unresolved targets reported.
+
 
 
 

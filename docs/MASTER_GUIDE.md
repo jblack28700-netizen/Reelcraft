@@ -90,7 +90,7 @@ A development task is considered **done** only when:
 - **Phase 5 – AI Analysis:** Scene, speaker, object, and content analysis.
 - **Phase 6 – AI Editing:** Automated cutting and edit decisions.
 - **Phase 7 – B‑roll and Dialogue Intelligence:** Semantic B‑roll and speaker‑aware editing.
-- **Phase 8 – AI 360° Reframing:** Automatic virtual‑camera control.
+- **Phase 8 – AI 360° Reframing:** Automatic virtual‑camera control. *(A deterministic 360 reframing engine — structured plan, camera path, renderer, and natural-language intent boundary — was implemented and verified 2026-09-17; automatic scene/target understanding is the next step.)*
 - **Phase 9 – AI Finishing:** Audio, color, captions, graphics, animations.
 - **Phase 10 – Conversational AI Editor:** Natural‑language editing and personalization.
 

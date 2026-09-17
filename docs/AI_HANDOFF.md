@@ -45,13 +45,15 @@ The long-term goal is to allow creators to provide footage and describe what the
 
 # 3. Current Development Stage
 
-The project is currently in the architecture and documentation foundation stage.
+The project has moved well past the documentation-foundation stage. A working Qt 6 desktop shell, project/media model, deterministic single-frame review path, and a Phase 3 media-engine foundation (replaceable media-source seam, frame pump, player/timing subsystem) exist and are verified.
 
-The application itself has not yet been implemented.
+The **current human-approved priority is the 360 editing/reframing capability**: 360 source -> scene/target understanding -> request interpretation -> structured reframe plan -> virtual-camera decisions -> deterministic execution -> flat video output.
 
-Current work should therefore prioritize establishing a sound foundation before beginning large feature development.
+A deterministic 360 reframing vertical slice is implemented and verified under `app/reframe/` (Decision 018): structured `ReframePlan`/`CameraKeyframe`, pure `CameraPath`, replaceable `ReframeFrameProvider`, deterministic `ReframeRenderer`, a deterministic natural-language `ReframeIntent` boundary, and an end-to-end `ReframePipeline`. The automated suite is 180 passed / 0 failed / 0 skipped.
 
-Do not assume that planned architecture has already been implemented.
+The Phase 3 Objective 5 (Application-level player lifecycle) entry in `NEXT_TASK.md` remains valid history but must not be started mechanically while the 360 priority is active.
+
+Do not assume that planned architecture has already been implemented; read `CURRENT_STATE.md` and `NEXT_TASK.md` for exact status.
 
 ---
 

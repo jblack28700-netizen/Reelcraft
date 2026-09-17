@@ -8,6 +8,7 @@
 #include <QJsonDocument>
 #include <QCryptographicHash>
 #include <QColor>
+#include <QDir>
 #include <QLabel>
 #include <QListWidget>
 #include <QMouseEvent>
@@ -33,6 +34,15 @@
 #include "playback/PacingPolicy.h"
 #include "playback/Playhead.h"
 #include "playback/Player.h"
+#include "reframe/CameraKeyframe.h"
+#include "reframe/CameraPath.h"
+#include "reframe/FfmpegSeekFrameProvider.h"
+#include "reframe/ReframeFrameProvider.h"
+#include "reframe/ReframeIntent.h"
+#include "reframe/ReframePlan.h"
+#include "reframe/ReframePlanBuilder.h"
+#include "reframe/ReframePipeline.h"
+#include "reframe/ReframeRenderer.h"
 #include "ui/MainWindow.h"
 #include "ui/ViewerWidget.h"
 #include "viewer/EquirectView.h"
@@ -484,6 +494,81 @@ QImage playerTestFrame(int index)
     return image;
 }
 
+// --- 360 reframing engine test helpers -------------------------------------
+// A deterministic in-memory ReframeFrameProvider. It proves the reframing
+// engine is genuinely decoder-independent and lets the camera path, rendering,
+// and failure paths be verified without any FFmpeg subprocess.
+class SyntheticEquirectProvider : public ReframeFrameProvider
+{
+public:
+    SyntheticEquirectProvider(int width = 720, int height = 360)
+        : m_width(width), m_height(height) {}
+
+    void setStaticPattern(bool staticPattern) { m_staticPattern = staticPattern; }
+    void setFailAfterCalls(int calls) { m_failAfterCalls = calls; }
+    int calls() const { return m_calls; }
+
+    bool frameAt(qint64 timeMs, QImage *outFrame, QString *error) override
+    {
+        ++m_calls;
+        if (m_failAfterCalls >= 0 && m_calls > m_failAfterCalls) {
+            if (error) {
+                *error = QStringLiteral("synthetic provider failure");
+            }
+            return false;
+        }
+        if (!outFrame) {
+            return false;
+        }
+        if (m_staticPattern) {
+            *outFrame = buildTestPattern(m_width, m_height);
+        } else {
+            const int bucket = static_cast<int>((timeMs / 1000) % 3);
+            *outFrame = buildReviewFrame(m_width, m_height, bucket);
+        }
+        return true;
+    }
+
+private:
+    int m_width = 720;
+    int m_height = 360;
+    bool m_staticPattern = true;
+    int m_failAfterCalls = -1;
+    int m_calls = 0;
+};
+
+CameraKeyframe makeKeyframe(qint64 timeMs, double yawDeg, double pitchDeg = 0.0,
+                            double rollDeg = 0.0, double fovDeg = 90.0,
+                            CameraKeyframe::Interpolation interpolation =
+                                CameraKeyframe::Interpolation::Linear)
+{
+    CameraKeyframe frame;
+    frame.timeMs = timeMs;
+    frame.yawDeg = yawDeg;
+    frame.pitchDeg = pitchDeg;
+    frame.rollDeg = rollDeg;
+    frame.fieldOfViewDeg = fovDeg;
+    frame.interpolation = interpolation;
+    return frame;
+}
+
+ReframePlan makeReframePlan(qint64 startMs, qint64 endMs, int width, int height,
+                            double fps, const QList<CameraKeyframe> &keyframes)
+{
+    ReframePlan plan;
+    ReframePlan::TimeRange range;
+    range.startMs = startMs;
+    range.endMs = endMs;
+    plan.setSourceRange(range);
+    ReframePlan::OutputSpec output;
+    output.width = width;
+    output.height = height;
+    output.fps = fps;
+    plan.setOutput(output);
+    plan.setKeyframes(keyframes);
+    return plan;
+}
+
 } // namespace
 
 class TestMainWindow : public MainWindow
@@ -655,6 +740,32 @@ private slots:
     void playerReportsFramePumpErrors();
     void playerHandlesInvalidConfigurationAndBoundaries();
     void playerTickIsRepeatableWithoutWallClockDelays();
+    void reframeCameraKeyframeJsonRoundTrip();
+    void reframeCameraKeyframeRejectsInvalid();
+    void reframePlanJsonRoundTrip();
+    void reframePlanRejectsInvalid();
+    void reframePlanFrameTimingIsDeterministic();
+    void cameraPathHoldsOutsideKeyframes();
+    void cameraPathInterpolatesLinearly();
+    void cameraPathUsesShortestYawPath();
+    void cameraPathHonorsHoldInterpolation();
+    void cameraPathNormalizesAndClamps();
+    void reframeRendererRendersDeterministicFrames();
+    void reframeRendererFollowsCameraPath();
+    void reframeRendererRejectsInvalidInputs();
+    void reframeRendererReportsProviderFailure();
+    void reframeRendererPngSequenceAndEncode();
+    void reframeIntentParsesAspectAndPlatform();
+    void reframeIntentParsesTimeRanges();
+    void reframeIntentParsesNamedDirections();
+    void reframeIntentParsesSubjectReferencesAsUnresolved();
+    void reframeIntentHandlesGarbage();
+    void reframeBuilderBuildsStaticPlan();
+    void reframeBuilderBuildsTwoStopPath();
+    void reframeBuilderResolvesTargetsCaseInsensitively();
+    void reframeBuilderRejectsUnresolvedTargets();
+    void reframeBuilderHonorsIntentTimeRangeAndOutput();
+    void reframePipelineRendersRealVideoEndToEnd();
 };
 
 void ProjectTest::initTestCase()
@@ -5087,6 +5198,541 @@ void ProjectTest::playerTickIsRepeatableWithoutWallClockDelays()
     // 17 ms ticks at a 30 ms interval present exactly two frames over five ticks.
     QCOMPARE(framesA, 2);
     QCOMPARE(signalsA, 2);
+}
+
+// ======================= 360 reframing engine (Phase 4) =======================
+// The reframing engine separates AI/creator decisions (ReframeIntent ->
+// ReframePlan) from deterministic execution (CameraPath + ReframeRenderer), so
+// the camera path, projection, and rendering can be verified without any
+// network, model, or nondeterministic input.
+
+void ProjectTest::reframeCameraKeyframeJsonRoundTrip()
+{
+    CameraKeyframe frame;
+    frame.timeMs = 1500;
+    frame.yawDeg = 45.5;
+    frame.pitchDeg = -12.25;
+    frame.rollDeg = 3.0;
+    frame.fieldOfViewDeg = 72.0;
+    frame.interpolation = CameraKeyframe::Interpolation::Hold;
+
+    const QJsonObject object = frame.toJsonObject();
+    CameraKeyframe restored;
+    QString error;
+    QVERIFY(CameraKeyframe::readFromJsonObject(object, &restored, &error));
+    QCOMPARE(restored.timeMs, frame.timeMs);
+    QVERIFY(qAbs(restored.yawDeg - frame.yawDeg) < 1e-9);
+    QVERIFY(qAbs(restored.pitchDeg - frame.pitchDeg) < 1e-9);
+    QVERIFY(qAbs(restored.rollDeg - frame.rollDeg) < 1e-9);
+    QVERIFY(qAbs(restored.fieldOfViewDeg - frame.fieldOfViewDeg) < 1e-9);
+    QVERIFY(restored.interpolation == CameraKeyframe::Interpolation::Hold);
+}
+
+void ProjectTest::reframeCameraKeyframeRejectsInvalid()
+{
+    CameraKeyframe out;
+    QString error;
+    QVERIFY(!CameraKeyframe::readFromJsonObject(QJsonObject(), &out, &error));
+    QVERIFY(!error.isEmpty());
+
+    QJsonObject missing = CameraKeyframe().toJsonObject();
+    missing.remove(QStringLiteral("yawDeg"));
+    QVERIFY(!CameraKeyframe::readFromJsonObject(missing, &out, &error));
+
+    QJsonObject badPitch = CameraKeyframe().toJsonObject();
+    badPitch.insert(QStringLiteral("pitchDeg"), 120.0);
+    QVERIFY(!CameraKeyframe::readFromJsonObject(badPitch, &out, &error));
+
+    QJsonObject badFov = CameraKeyframe().toJsonObject();
+    badFov.insert(QStringLiteral("fieldOfViewDeg"), 5.0);
+    QVERIFY(!CameraKeyframe::readFromJsonObject(badFov, &out, &error));
+
+    QJsonObject badInterp = CameraKeyframe().toJsonObject();
+    badInterp.insert(QStringLiteral("interpolation"), QStringLiteral("bounce"));
+    QVERIFY(!CameraKeyframe::readFromJsonObject(badInterp, &out, &error));
+}
+
+void ProjectTest::reframePlanJsonRoundTrip()
+{
+    const ReframePlan plan = makeReframePlan(
+        1000, 4000, 640, 360, 2.0,
+        { makeKeyframe(1000, 0.0),
+          makeKeyframe(4000, 90.0, 0.0, 0.0, 90.0,
+                       CameraKeyframe::Interpolation::Hold) });
+    ReframePlan withId = plan;
+    withId.setSourceMediaId(QStringLiteral("media-1"));
+
+    const QJsonObject object = withId.toJsonObject();
+    ReframePlan restored;
+    QString error;
+    QVERIFY(ReframePlan::readFromJsonObject(object, &restored, &error));
+    QCOMPARE(restored.sourceMediaId(), QStringLiteral("media-1"));
+    QCOMPARE(restored.sourceRange().startMs, qint64(1000));
+    QCOMPARE(restored.sourceRange().endMs, qint64(4000));
+    QCOMPARE(restored.output().width, 640);
+    QCOMPARE(restored.output().height, 360);
+    QVERIFY(qAbs(restored.output().fps - 2.0) < 1e-9);
+    QCOMPARE(restored.keyframes().size(), 2);
+    QVERIFY(restored.keyframes().at(1).interpolation
+            == CameraKeyframe::Interpolation::Hold);
+    QVERIFY(restored.toJsonObject() == object);
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("plan.json"));
+    QVERIFY(withId.save(path, &error));
+    bool ok = false;
+    const ReframePlan loaded = ReframePlan::load(path, &ok, &error);
+    QVERIFY(ok);
+    QVERIFY(loaded.toJsonObject() == object);
+}
+
+void ProjectTest::reframePlanRejectsInvalid()
+{
+    QString error;
+
+    ReframePlan empty;
+    QVERIFY(!empty.isValid(&error));
+    QVERIFY(!error.isEmpty());
+
+    ReframePlan outOfRange = makeReframePlan(
+        0, 1000, 320, 180, 1.0, { makeKeyframe(2000, 0.0) });
+    QVERIFY(!outOfRange.isValid(&error));
+
+    ReframePlan unsorted = makeReframePlan(
+        0, 1000, 320, 180, 1.0,
+        { makeKeyframe(800, 0.0), makeKeyframe(200, 0.0) });
+    QVERIFY(!unsorted.isValid(&error));
+
+    ReframePlan duplicate = makeReframePlan(
+        0, 1000, 320, 180, 1.0,
+        { makeKeyframe(500, 0.0), makeKeyframe(500, 10.0) });
+    QVERIFY(!duplicate.isValid(&error));
+
+    ReframePlan badOutput = makeReframePlan(
+        0, 1000, 0, 180, 1.0, { makeKeyframe(0, 0.0) });
+    QVERIFY(!badOutput.isValid(&error));
+
+    ReframePlan tooShort = makeReframePlan(
+        0, 10, 320, 180, 1.0, { makeKeyframe(0, 0.0) });
+    QVERIFY(!tooShort.isValid(&error));
+}
+
+void ProjectTest::reframePlanFrameTimingIsDeterministic()
+{
+    const ReframePlan plan = makeReframePlan(
+        1000, 3500, 320, 180, 2.0, { makeKeyframe(1000, 0.0) });
+    QCOMPARE(plan.frameCount(), 5);
+    QCOMPARE(plan.frameTimeMs(0), qint64(1000));
+    QCOMPARE(plan.frameTimeMs(1), qint64(1500));
+    QCOMPARE(plan.frameTimeMs(4), qint64(3000));
+
+    const ReframePlan thirty = makeReframePlan(
+        0, 1000, 320, 180, 30.0, { makeKeyframe(0, 0.0) });
+    QCOMPARE(thirty.frameCount(), 30);
+    QCOMPARE(thirty.frameTimeMs(1), qint64(33));
+}
+
+void ProjectTest::cameraPathHoldsOutsideKeyframes()
+{
+    const ReframePlan plan = makeReframePlan(
+        0, 4000, 320, 180, 1.0,
+        { makeKeyframe(1000, 30.0, 10.0), makeKeyframe(3000, 90.0, 20.0) });
+
+    const CameraState before = CameraPath::stateAt(plan, 0);
+    QVERIFY(qAbs(before.yawDeg - 30.0) < 1e-9);
+    QVERIFY(qAbs(before.pitchDeg - 10.0) < 1e-9);
+
+    const CameraState after = CameraPath::stateAt(plan, 5000);
+    QVERIFY(qAbs(after.yawDeg - 90.0) < 1e-9);
+    QVERIFY(qAbs(after.pitchDeg - 20.0) < 1e-9);
+}
+
+void ProjectTest::cameraPathInterpolatesLinearly()
+{
+    const ReframePlan plan = makeReframePlan(
+        0, 2000, 320, 180, 1.0,
+        { makeKeyframe(0, 0.0, 0.0, 0.0, 90.0),
+          makeKeyframe(2000, 40.0, 20.0, 0.0, 50.0) });
+
+    const CameraState mid = CameraPath::stateAt(plan, 1000);
+    QVERIFY(qAbs(mid.yawDeg - 20.0) < 1e-9);
+    QVERIFY(qAbs(mid.pitchDeg - 10.0) < 1e-9);
+    QVERIFY(qAbs(mid.fieldOfViewDeg - 70.0) < 1e-9);
+}
+
+void ProjectTest::cameraPathUsesShortestYawPath()
+{
+    // 170 -> -170 is a +20 shortest path, not a -340 long way round.
+    const ReframePlan plan = makeReframePlan(
+        0, 2000, 320, 180, 1.0,
+        { makeKeyframe(0, 170.0), makeKeyframe(2000, -170.0) });
+    const CameraState mid = CameraPath::stateAt(plan, 1000);
+    QVERIFY(qAbs(qAbs(mid.yawDeg) - 180.0) < 1e-6);
+
+    QVERIFY(qAbs(CameraPath::shortestYawDelta(170.0, -170.0) - 20.0) < 1e-9);
+    QVERIFY(qAbs(CameraPath::shortestYawDelta(-170.0, 170.0) + 20.0) < 1e-9);
+}
+
+void ProjectTest::cameraPathHonorsHoldInterpolation()
+{
+    const ReframePlan plan = makeReframePlan(
+        0, 2000, 320, 180, 1.0,
+        { makeKeyframe(0, 10.0, 0.0, 0.0, 90.0,
+                       CameraKeyframe::Interpolation::Hold),
+          makeKeyframe(2000, 90.0) });
+
+    const CameraState mid = CameraPath::stateAt(plan, 1000);
+    QVERIFY(qAbs(mid.yawDeg - 10.0) < 1e-9);
+    const CameraState atEnd = CameraPath::stateAt(plan, 2000);
+    QVERIFY(qAbs(atEnd.yawDeg - 90.0) < 1e-9);
+}
+
+void ProjectTest::cameraPathNormalizesAndClamps()
+{
+    const ReframePlan plan = makeReframePlan(
+        0, 1000, 320, 180, 1.0,
+        { makeKeyframe(0, 400.0, 200.0, 400.0, 500.0) });
+    const CameraState state = CameraPath::stateAt(plan, 0);
+    QVERIFY(qAbs(state.yawDeg - 40.0) < 1e-9);
+    QVERIFY(qAbs(state.pitchDeg - 90.0) < 1e-9);
+    QVERIFY(qAbs(state.rollDeg - 40.0) < 1e-9);
+    QVERIFY(qAbs(state.fieldOfViewDeg - 140.0) < 1e-9);
+}
+
+void ProjectTest::reframeRendererRendersDeterministicFrames()
+{
+    const ReframePlan plan = makeReframePlan(
+        0, 1000, 160, 90, 2.0, { makeKeyframe(0, 0.0) });
+    SyntheticEquirectProvider provider;
+
+    QList<QImage> frames;
+    int count = 0;
+    QString error;
+    QVERIFY(ReframeRenderer::render(
+        plan, &provider,
+        [&frames](int, qint64, const QImage &frame) {
+            frames.append(frame);
+            return true;
+        },
+        &count, &error));
+    QCOMPARE(count, 2);
+    QCOMPARE(frames.size(), 2);
+    QCOMPARE(frames.at(0).size(), QSize(160, 90));
+    QVERIFY(frames.at(0).pixelColor(80, 45) == kFrontColor);
+
+    QList<QImage> again;
+    QVERIFY(ReframeRenderer::render(
+        plan, &provider,
+        [&again](int, qint64, const QImage &frame) {
+            again.append(frame);
+            return true;
+        },
+        nullptr, &error));
+    QVERIFY(imagesIdentical(frames.at(0), again.at(0)));
+    QVERIFY(imagesIdentical(frames.at(1), again.at(1)));
+}
+
+void ProjectTest::reframeRendererFollowsCameraPath()
+{
+    // Pan from front (yaw 0) to the right (yaw 90); the last output frame
+    // lands exactly on the second keyframe.
+    const ReframePlan plan = makeReframePlan(
+        0, 1500, 160, 90, 2.0,
+        { makeKeyframe(0, 0.0), makeKeyframe(1000, 90.0) });
+    SyntheticEquirectProvider provider;
+
+    QList<QImage> frames;
+    QVERIFY(ReframeRenderer::render(
+        plan, &provider,
+        [&frames](int, qint64, const QImage &frame) {
+            frames.append(frame);
+            return true;
+        },
+        nullptr, nullptr));
+    QCOMPARE(frames.size(), 3);
+    QVERIFY(frames.at(0).pixelColor(80, 45) == kFrontColor);
+    QVERIFY(frames.at(2).pixelColor(80, 45) == kRightColor);
+}
+
+void ProjectTest::reframeRendererRejectsInvalidInputs()
+{
+    ReframePlan invalid;
+    SyntheticEquirectProvider provider;
+    QString error;
+    int count = -1;
+    QVERIFY(!ReframeRenderer::render(
+        invalid, &provider,
+        [](int, qint64, const QImage &) { return true; }, &count, &error));
+    QVERIFY(!error.isEmpty());
+
+    const ReframePlan plan = makeReframePlan(
+        0, 1000, 64, 64, 1.0, { makeKeyframe(0, 0.0) });
+    QVERIFY(!ReframeRenderer::render(
+        plan, nullptr,
+        [](int, qint64, const QImage &) { return true; }, nullptr, &error));
+    QVERIFY(!ReframeRenderer::render(
+        plan, &provider, ReframeRenderer::FrameSink(), nullptr, &error));
+}
+
+void ProjectTest::reframeRendererReportsProviderFailure()
+{
+    const ReframePlan plan = makeReframePlan(
+        0, 1500, 64, 64, 2.0, { makeKeyframe(0, 0.0) });
+    SyntheticEquirectProvider provider;
+    provider.setFailAfterCalls(1);
+
+    int count = -1;
+    QString error;
+    QVERIFY(!ReframeRenderer::render(
+        plan, &provider,
+        [](int, qint64, const QImage &) { return true; }, &count, &error));
+    QVERIFY(error.contains(QStringLiteral("synthetic provider failure")));
+    QCOMPARE(provider.calls(), 2);
+}
+
+void ProjectTest::reframeRendererPngSequenceAndEncode()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable in this environment");
+    }
+    const ReframePlan plan = makeReframePlan(
+        0, 1500, 160, 90, 2.0,
+        { makeKeyframe(0, 0.0), makeKeyframe(1000, 90.0) });
+    SyntheticEquirectProvider provider;
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString framesDir = dir.filePath(QStringLiteral("frames"));
+    QStringList paths;
+    QString error;
+    QVERIFY(ReframeRenderer::renderToPngSequence(plan, &provider, framesDir,
+                                                 &paths, &error));
+    QCOMPARE(paths.size(), 3);
+    QVERIFY(QFileInfo::exists(paths.at(0)));
+
+    const QString pattern =
+        QDir(framesDir).filePath(ReframeRenderer::frameFileNamePattern());
+    const QString output = dir.filePath(QStringLiteral("out.mp4"));
+    QVERIFY(ReframeRenderer::encodeVideo(
+        FrameExtractor::defaultExecutablePath(), pattern, 2.0, output, &error));
+    QVERIFY(QFileInfo::exists(output));
+    QVERIFY(QFileInfo(output).size() > 0);
+
+    QImage decoded;
+    QVERIFY(FrameExtractor::extractFirstFrame(
+        output, FrameExtractor::defaultExecutablePath(), &decoded, &error));
+    QCOMPARE(decoded.size(), QSize(160, 90));
+}
+
+void ProjectTest::reframeIntentParsesAspectAndPlatform()
+{
+    const ReframeIntent wide = ReframeIntentParser::parse(
+        QStringLiteral("Make a normal 16:9 video from this 360 footage."));
+    QVERIFY(wide.hasOutput);
+    QCOMPARE(wide.outputWidth, 1920);
+    QCOMPARE(wide.outputHeight, 1080);
+
+    const ReframeIntent tiktok = ReframeIntentParser::parse(
+        QStringLiteral("Make a TikTok version"));
+    QVERIFY(tiktok.hasOutput);
+    QCOMPARE(tiktok.outputWidth, 1080);
+    QCOMPARE(tiktok.outputHeight, 1920);
+
+    const ReframeIntent square = ReframeIntentParser::parse(
+        QStringLiteral("give me a square cut"));
+    QVERIFY(square.hasOutput);
+    QCOMPARE(square.outputWidth, square.outputHeight);
+}
+
+void ProjectTest::reframeIntentParsesTimeRanges()
+{
+    const ReframeIntent a = ReframeIntentParser::parse(
+        QStringLiteral("Use this section from 00:30 to 01:00."));
+    QVERIFY(a.hasTimeRange);
+    QCOMPARE(a.startMs, qint64(30000));
+    QCOMPARE(a.endMs, qint64(60000));
+
+    const ReframeIntent b = ReframeIntentParser::parse(
+        QStringLiteral("From 00:35 to 01:10, follow the speaker."));
+    QVERIFY(b.hasTimeRange);
+    QCOMPARE(b.startMs, qint64(35000));
+    QCOMPARE(b.endMs, qint64(70000));
+
+    const ReframeIntent c = ReframeIntentParser::parse(
+        QStringLiteral("start at 00:10 for 5 seconds"));
+    QVERIFY(c.hasTimeRange);
+    QCOMPARE(c.startMs, qint64(10000));
+    QCOMPARE(c.endMs, qint64(15000));
+
+    const ReframeIntent d = ReframeIntentParser::parse(
+        QStringLiteral("use 1:02:03 to 1:02:05"));
+    QVERIFY(d.hasTimeRange);
+    QCOMPARE(d.startMs, qint64(3723000));
+    QCOMPARE(d.endMs, qint64(3725000));
+}
+
+void ProjectTest::reframeIntentParsesNamedDirections()
+{
+    const ReframeIntent a = ReframeIntentParser::parse(
+        QStringLiteral("Start facing forward, then pan toward the person on my right."));
+    QCOMPARE(a.moves.size(), 2);
+    QVERIFY(a.moves.at(0).hasDirection);
+    QVERIFY(qAbs(a.moves.at(0).yawDeg - 0.0) < 1e-9);
+    QVERIFY(a.moves.at(1).hasDirection);
+    QVERIFY(qAbs(a.moves.at(1).yawDeg - 90.0) < 1e-9);
+    QVERIFY(a.unresolvedTargets.isEmpty());
+
+    const ReframeIntent b = ReframeIntentParser::parse(
+        QStringLiteral("look left then look behind"));
+    QCOMPARE(b.moves.size(), 2);
+    QVERIFY(qAbs(b.moves.at(0).yawDeg + 90.0) < 1e-9);
+    QVERIFY(qAbs(b.moves.at(1).yawDeg - 180.0) < 1e-9);
+
+    const ReframeIntent c = ReframeIntentParser::parse(
+        QStringLiteral("look up"));
+    QCOMPARE(c.moves.size(), 1);
+    QVERIFY(c.moves.at(0).hasDirection);
+    QVERIFY(qAbs(c.moves.at(0).pitchDeg - 30.0) < 1e-9);
+}
+
+void ProjectTest::reframeIntentParsesSubjectReferencesAsUnresolved()
+{
+    const ReframeIntent a = ReframeIntentParser::parse(
+        QStringLiteral("Start looking at the car, then move to me."));
+    QCOMPARE(a.moves.size(), 2);
+    QVERIFY(!a.moves.at(0).hasDirection);
+    QCOMPARE(a.moves.at(0).targetRef, QStringLiteral("car"));
+    QCOMPARE(a.moves.at(1).targetRef, QStringLiteral("me"));
+    QCOMPARE(a.unresolvedTargets.size(), 2);
+    QVERIFY(a.notes.join(QStringLiteral("\n"))
+                .contains(QStringLiteral("Unresolved")));
+}
+
+void ProjectTest::reframeIntentHandlesGarbage()
+{
+    const ReframeIntent empty = ReframeIntentParser::parse(QString());
+    QVERIFY(!empty.recognized);
+    QVERIFY(!empty.notes.isEmpty());
+
+    const ReframeIntent garbage = ReframeIntentParser::parse(
+        QStringLiteral("qqqq zzzz"));
+    QVERIFY(!garbage.recognized);
+
+    const ReframeIntent centered = ReframeIntentParser::parse(
+        QStringLiteral("keep me centered"));
+    QVERIFY(centered.recognized);
+    QCOMPARE(centered.moves.size(), 1);
+    QCOMPARE(centered.moves.at(0).targetRef, QStringLiteral("me"));
+}
+
+void ProjectTest::reframeBuilderBuildsStaticPlan()
+{
+    const ReframeIntent intent = ReframeIntentParser::parse(
+        QStringLiteral("Make a normal 16:9 video"));
+    const ReframeBuildResult result = ReframePlanBuilder::build(
+        intent, {}, ReframePlan::TimeRange{ 0, 3000 },
+        ReframePlan::OutputSpec{ 1920, 1080, 30.0 });
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QCOMPARE(result.plan.keyframes().size(), 1);
+    QCOMPARE(result.plan.output().width, 1920);
+    QVERIFY(qAbs(result.plan.keyframes().at(0).yawDeg) < 1e-9);
+}
+
+void ProjectTest::reframeBuilderBuildsTwoStopPath()
+{
+    const ReframeIntent intent = ReframeIntentParser::parse(
+        QStringLiteral("Start facing forward, then pan toward the person on my right."));
+    const ReframeBuildResult result = ReframePlanBuilder::build(
+        intent, {}, ReframePlan::TimeRange{ 0, 2000 },
+        ReframePlan::OutputSpec{ 640, 360, 2.0 });
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QCOMPARE(result.plan.keyframes().size(), 2);
+    QCOMPARE(result.plan.keyframes().at(0).timeMs, qint64(0));
+    QCOMPARE(result.plan.keyframes().at(1).timeMs, qint64(2000));
+    QVERIFY(qAbs(result.plan.keyframes().at(1).yawDeg - 90.0) < 1e-9);
+}
+
+void ProjectTest::reframeBuilderResolvesTargetsCaseInsensitively()
+{
+    const ReframeIntent intent = ReframeIntentParser::parse(
+        QStringLiteral("Start looking at the car, then move to me."));
+    QList<ReframeTarget> targets;
+    targets.append(ReframeTarget{ QStringLiteral("CAR"), -45.0, 5.0 });
+    targets.append(ReframeTarget{ QStringLiteral("Me"), 30.0, -2.0 });
+
+    const ReframeBuildResult result = ReframePlanBuilder::build(
+        intent, targets, ReframePlan::TimeRange{ 0, 1000 },
+        ReframePlan::OutputSpec{ 320, 180, 1.0 });
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QCOMPARE(result.plan.keyframes().size(), 2);
+    QVERIFY(qAbs(result.plan.keyframes().at(0).yawDeg + 45.0) < 1e-9);
+    QVERIFY(qAbs(result.plan.keyframes().at(1).yawDeg - 30.0) < 1e-9);
+    QVERIFY(qAbs(result.plan.keyframes().at(1).pitchDeg + 2.0) < 1e-9);
+}
+
+void ProjectTest::reframeBuilderRejectsUnresolvedTargets()
+{
+    const ReframeIntent intent = ReframeIntentParser::parse(
+        QStringLiteral("Follow the speaker."));
+    const ReframeBuildResult result = ReframePlanBuilder::build(
+        intent, {}, ReframePlan::TimeRange{ 0, 1000 },
+        ReframePlan::OutputSpec{ 320, 180, 1.0 });
+    QVERIFY(!result.ok);
+    QVERIFY(result.error.contains(QStringLiteral("Unresolved target")));
+}
+
+void ProjectTest::reframeBuilderHonorsIntentTimeRangeAndOutput()
+{
+    const ReframeIntent intent = ReframeIntentParser::parse(
+        QStringLiteral("From 00:35 to 01:10, make a TikTok version."));
+    QVERIFY(intent.hasTimeRange);
+    QVERIFY(intent.hasOutput);
+
+    const ReframeBuildResult result = ReframePlanBuilder::build(
+        intent, {}, ReframePlan::TimeRange{ 0, 1000 },
+        ReframePlan::OutputSpec{ 320, 180, 1.0 });
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QCOMPARE(result.plan.sourceRange().startMs, qint64(35000));
+    QCOMPARE(result.plan.sourceRange().endMs, qint64(70000));
+    QCOMPARE(result.plan.output().width, 1080);
+    QCOMPARE(result.plan.output().height, 1920);
+}
+
+void ProjectTest::reframePipelineRendersRealVideoEndToEnd()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable in this environment");
+    }
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    QString sourcePath;
+    QVERIFY(createEquirectReviewVideo(
+        dir.path(), FrameExtractor::defaultExecutablePath(), 4, &sourcePath));
+
+    ReframePipeline::Request request;
+    request.sourcePath = sourcePath;
+    request.sourceMediaId = QStringLiteral("review-media");
+    request.instruction = QStringLiteral(
+        "Start facing forward, then pan toward the person on my right.");
+    request.outputPath = dir.filePath(QStringLiteral("reframed.mp4"));
+    request.defaultRange = ReframePlan::TimeRange{ 0, 3000 };
+    request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+
+    const ReframePipeline::Result result = ReframePipeline::run(request);
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QCOMPARE(result.frameCount, 6);
+    QCOMPARE(result.plan.sourceMediaId(), QStringLiteral("review-media"));
+    QVERIFY(QFileInfo::exists(result.outputPath));
+    QVERIFY(QFileInfo(result.outputPath).size() > 0);
+
+    QImage decoded;
+    QString error;
+    QVERIFY(FrameExtractor::extractFirstFrame(
+        result.outputPath, FrameExtractor::defaultExecutablePath(), &decoded,
+        &error));
+    QCOMPARE(decoded.size(), QSize(160, 90));
 }
 
 QTEST_MAIN(ProjectTest)

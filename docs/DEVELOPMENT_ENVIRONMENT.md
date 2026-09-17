@@ -208,3 +208,20 @@ The current verified build/test workflow is Linux-only. Apple platform classific
 - Verified result in that container: application and test builds succeed; full suite 144 passed / 0 failed / 0 skipped; offscreen smoke SMOKE_EXIT=124.
 - This is a verification environment, not a change to the primary development environment or to product dependencies; linked FFmpeg libraries and QtMultimedia remain deferred (Decision 017).
 
+## aarch64 proot/Termux Device — Verified Build Workaround (2026-09-17)
+
+The primary development device is an aarch64 proot-distro Ubuntu environment. Its Debian GCC 15 driver does not locate `cc1`/`cc1plus` (installed under `/usr/libexec/gcc/...`) or `ld` when invoked as bare `g++`, because it computes an empty/relative install prefix from `argv[0]`. The following was verified for the 2026-09-17 360 reframing objective:
+
+1. Symlink the compiler executables into the driver's expected directory (non-destructive, reversible):
+   - `/usr/lib/gcc/aarch64-linux-gnu/15/cc1` -> `/usr/libexec/gcc/aarch64-linux-gnu/15/cc1`
+   - `/usr/lib/gcc/aarch64-linux-gnu/15/cc1plus` -> `/usr/libexec/gcc/aarch64-linux-gnu/15/cc1plus`
+   - `/usr/lib/gcc/aarch64-linux-gnu/15/ld` -> `/usr/bin/ld`
+2. Invoke qmake with absolute compilers so the driver computes its prefix:
+   `/usr/lib/qt6/bin/qmake QMAKE_CC=/usr/bin/gcc QMAKE_CXX=/usr/bin/g++`
+3. Provide FFmpeg explicitly (Termux build; not on the Debian PATH):
+   `export REELCRAFT_FFMPEG=/data/data/com.termux/files/usr/bin/ffmpeg`
+
+Verified result on this device: application and test builds succeed; full suite 180 passed / 0 failed / 0 skipped; offscreen smoke SMOKE_EXIT=124.
+
+The `bash` tool is unavailable in this environment (the workspace-write bwrap sandbox backend cannot start). Builds/tests were run through the in-process code runtime with detached background processes. See KNOWN_ISSUES.md.
+

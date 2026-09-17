@@ -593,3 +593,28 @@ Exact FFmpeg command line; rawvideo vs image2pipe transport; frame-pump implemen
 - Phase 3 is marked OPEN with the approved opening architecture; no media-engine/playback/duration/audio implementation exists and none is authorized by this decision.
 - No source, test, build, schema, dependency, or Objective 10 behavior changes result from this decision; it is a scope/boundary and dependency-stance record.
 
+
+# Decision 018 — 360 Reframing Engine: Structured Plan Boundary, Replaceable Frame Provider, Deterministic Renderer
+
+**Status:** Accepted (2026-09-17, 360 Reframing Objective 1)
+
+## Context
+
+The human-approved product priority is a working AI-native 360 editing pipeline: 360 source -> scene/target understanding -> request interpretation -> virtual-camera decision -> deterministic reframing -> flat video output. The project already had (Phase 2/3) the established camera conventions (`ViewportState`/`ViewerProjection`/`EquirectView`), a single-frame FFmpeg decode seam (`FrameExtractor`), a streaming frame seam (`FrameSource`/`FfmpegFrameSource`), and a player/timing foundation, but no structured reframing representation and no deterministic execution from decisions to rendered output. `AI_EDIT_CONTRACT.md` and `ARCHITECTURE.md` mandate a structured AI-to-media boundary, but no concrete reframing schema or engine existed.
+
+## Decisions
+
+- A **structured, JSON-serializable, validated `ReframePlan`** (with ordered `CameraKeyframe` values) is the boundary between reframing decisions and media execution. It is versioned, inspectable, modifiable, and always validated before execution.
+- The **camera path is a pure deterministic function** (`CameraPath::stateAt`): shortest-path yaw interpolation, bounded pitch/roll/FOV, hold/linear interpolation, and deterministic hold outside the keyframe range. It reads no clock, media, or model.
+- Media decoding is behind a **replaceable `ReframeFrameProvider` seam**. The first production implementation uses the existing FFmpeg-CLI single-frame seam (`FfmpegSeekFrameProvider`); a future streaming/linked-FFmpeg provider can replace it without changing the engine.
+- Rendering is a **deterministic executor** (`ReframeRenderer`) composing the provider, `CameraPath`, and the existing `EquirectView`; the encoder is a thin FFmpeg image-sequence step. The same plan and source produce the same frames.
+- Natural-language requests are interpreted by a **replaceable, deterministic `ReframeIntent` boundary** (`ReframeIntentParser`). It recognizes aspect/platform, time ranges, camera directions, and subject references. **Unresolved subject references are reported, never fabricated**; subject resolution (detection/tracking) is a separate future capability. An AI provider can later produce the same structured intent.
+- Source media remains read-only; rendering writes only derived outputs.
+
+## Consequences
+
+- The decision layer and deterministic executor are separable and independently testable: 26 reframing tests plus a real FFmpeg end-to-end pipeline test; full suite 180 passed / 0 failed / 0 skipped.
+- `EquirectView::MaxOutputWidth` remains a viewer-presentation cap only; the renderer supports arbitrary output dimensions.
+- Target detection/tracking, speaker/dialogue analysis, content-based cut selection, reframe-plan persistence in the project schema, UI integration, and AI-provider integration remain future objectives; the reframe engine is deliberately not yet wired into `Application`/`MainWindow`.
+- This decision does not change Phase 3's media-engine boundary (Decision 017); it adds the editing/reframing layer above the existing media seams.
+
