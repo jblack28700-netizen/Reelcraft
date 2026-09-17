@@ -2,7 +2,7 @@
 
 ## Current Version
 
-0.2.44
+0.2.45
 
 ## Current Branch
 
@@ -10,7 +10,7 @@ main
 
 ## Current Stage
 
-Phase 4 — 360 Reframing Engine (deterministic vertical slice), Target/Subject Resolution, real detector integration, structured target identity/selection, optional appearance-based re-identification, optional audio/speaker evidence, and an audio-visual provider-attribution seam implemented and verified. Phase 3 Media Engine remains open; its player-lifecycle objective is intentionally superseded for now by the human-approved 360 priority.
+Phase 4 — 360 Reframing Engine (deterministic vertical slice), Target/Subject Resolution, real detector integration, structured target identity/selection, optional appearance-based re-identification, optional audio/speaker evidence, an audio-visual provider-attribution seam, and end-to-end user-command execution implemented and verified. Phase 3 Media Engine remains open; its player-lifecycle objective is intentionally superseded for now by the human-approved 360 priority.
 
 ## Project Status
 
@@ -1005,7 +1005,16 @@ Verification:
 
 Architecture decision: Decision 024.
 
-Next per the human-approved priority: end-to-end 360 user-command testing (natural-language/structured command -> plan -> deterministic render on real footage), rather than further perception subsystems. A real audio-visual/diarization provider and GPU optimization remain future work behind the same seam.
+## Phase 4 Objective 8 — End-to-End 360 User-Command Execution — Complete
+
+Status: Complete (2026-09-17). Provides a single composition entry point for the full 360 command path, per the human-approved priority (end-to-end command testing rather than more perception subsystems).
+
+- `app/reframe/ReframeCommandRunner.{h,cpp}`: `prepare()` parses the instruction, resolves subject references through `TargetResolver` (replaceable detector + tracker), binds the optional creator identity and resolves references via `TargetIdentityRegistry`/`TargetSelector`, and builds the validated plan (`ReframePlanBuilder`); `run()` adds deterministic execution through the unchanged `ReframePipeline`. The runner adds no perception of its own and never fabricates a direction: unresolved or ambiguous references produce an explicit error, and a direction-only command needs no detector.
+- 8 new model-free tests; full model-free suite 308 passed, 0 failed, 2 skipped.
+- Real footage (`realUserCommandIntegration`, audio+video proxy; original untouched): the command "follow person 1" resolved to track t1 (ordinal) at yaw -27.80 and rendered a held-camera flat 640x360 clip (24 frames).
+- Architecture decision: Decision 025.
+
+Next: Application-level 360 command orchestration (make the command path usable from the product). Speaker-aware commands and GPU optimization remain further candidates. A real audio-visual/diarization provider also remains future work behind the Objective 7 seam.
 
 
 

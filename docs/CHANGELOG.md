@@ -602,4 +602,14 @@ Date: 2026-09-17
 - 5 new model-free tests; full model-free suite 300 passed, 0 failed, 1 skipped. Decision 024 recorded; Decisions 017-023 preserved.
 - Next per the human-approved priority: end-to-end 360 user-command testing rather than further perception subsystems.
 
+## v0.2.45 — End-to-End 360 User-Command Execution
+
+Date: 2026-09-17
+
+- Added `app/reframe/ReframeCommandRunner`: a single composition entry point that turns a user instruction plus a 360 source into a validated `ReframePlan` and, optionally, a rendered flat video. It parses the command, resolves subject references through the existing replaceable detector/tracker, applies identity/selection ("me", ordinals, left/right, unique label), builds the validated plan, and executes it through the unchanged `ReframePipeline`.
+- `prepare()` is a deterministic, model-free-testable decision stage (parse + resolve + plan) when an in-memory detector/provider is injected; `run()` adds deterministic execution. The runner adds no perception of its own and never fabricates a subject direction: unresolved or ambiguous references produce an explicit error, and a direction-only command needs no detector.
+- 8 new model-free tests (subject resolution + plan, direction-only without a detector, unresolved/ambiguous honesty, creator-identity "follow me", missing detector, invalid range, determinism). Full model-free suite 308 passed / 0 failed / 2 skipped.
+- New env-gated `realUserCommandIntegration` test exercises the full command path on real 360 footage with the Apache-2.0 YOLOX detector; the normal suite stays model-free.
+- Decision 025 records the composition boundary; Decisions 017-024 preserved.
+
 

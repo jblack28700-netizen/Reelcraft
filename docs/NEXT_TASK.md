@@ -10,7 +10,7 @@ Priority pipeline: 360 source -> scene/subject understanding -> natural-language
 
 The Phase 3 Objective 5 entry below remains valid project history but must NOT be started mechanically while the 360 priority is active. It should resume only when it directly serves the 360 capability (for example, previewing/playing reframed results).
 
-**Next 360 objective:** Reframing Objective 2 — target/subject resolution (detection/tracking) and speaker localization behind the existing resolved-target boundary.
+**Current 360 status:** Reframing Objectives 1–8 are complete and verified (deterministic vertical slice; target/subject resolution; real detector integration; target identity/selection; appearance re-identification; audio/speaker evidence; audio-visual provider-attribution seam; end-to-end user-command execution). The next objective is Application-level 360 command orchestration (see the end of this file); it requires its own scoped objective.
 
 ---
 
@@ -275,8 +275,23 @@ Provide automatic audio-visual speaker attribution without a creator binding —
 - No permissively licensed, clearly commercial audio-visual active-speaker model identified (TalkNet/LoCoNet/AV-HuBERT research-grade/unclear weights; pyannote gated; SpeechBrain/torchreid heavy with VoxCeleb provenance).
 - The seam and tests are complete, so a licensed provider can be dropped in later without core changes. Architecture decision: Decision 024.
 
-## Next Objective — End-to-End 360 User-Command Testing — NOT STARTED
+## 360 Reframing Objective 8 — End-to-End 360 User-Command Execution — Complete
 
-Per the human-approved priority, the next objective is end-to-end 360 user-command testing rather than adding further perception subsystems: exercise the full path (real 360 source -> intent/structured command -> target resolution/identity -> `ReframePlan` -> deterministic render) on real footage end to end, identify integration gaps and failure modes, and only then resume perception or GPU work. Requires its own scoped objective.
+Status: **Complete — implemented and verified (2026-09-17).**
+
+### Objective
+
+Exercise the full 360 command path end to end on real footage — user instruction -> parsed intent -> target resolution/identity -> validated `ReframePlan` -> deterministic render — behind a single composition entry point, and identify integration gaps and failure modes rather than adding perception subsystems.
+
+### Scope (implemented)
+
+- `app/reframe/ReframeCommandRunner.{h,cpp}`: the composition entry point. `prepare()` parses the command, resolves subject references through the replaceable detector/tracker, binds the optional creator identity, and builds the validated plan (deterministic and model-free with an injected provider/detector). `run()` adds deterministic execution through the unchanged `ReframePipeline`.
+- Reuses `TargetResolver`, `TargetIdentityRegistry` + `TargetSelector`, `ReframePlanBuilder`, and `ReframePipeline`/`ReframeRenderer`; adds no perception of its own and never fabricates a direction (unresolved/ambiguous references are reported, a direction-only command needs no detector).
+- 8 new model-free tests; full model-free suite 308 passed / 0 failed / 2 skipped. New env-gated `realUserCommandIntegration` exercises the command path on real footage.
+- Architecture decision: Decision 025.
+
+## Next Objective — Application-Level 360 Command Orchestration — NOT STARTED
+
+Make the 360 command path usable from the product: have `Application` own the command runner, source media, and output, preserve the Objective 10 preview-time contract, and expose a deterministic run/preview boundary (an event-loop driver invokes execution; the viewer stays presentation-only). Speaker-aware commands and GPU optimization remain further candidates. Requires its own scoped objective; do not begin automatically.
 
 

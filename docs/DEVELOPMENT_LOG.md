@@ -1288,7 +1288,31 @@ Provide automatic audio-visual speaker attribution behind the existing replaceab
 ### Decisions
 
 - Decision 024 recorded. Decisions 017-023 preserved unchanged.
+---
 
+## 2026-09-17 — 360 Reframing Objective 8: End-to-End User-Command Execution
 
+### Objective
 
+Provide a single end-to-end 360 command path — user instruction -> parsed intent -> target resolution/identity -> validated `ReframePlan` -> deterministic render — and validate it on real footage, per the human-approved priority (end-to-end command testing rather than more perception subsystems).
 
+### Work completed
+
+- `app/reframe/ReframeCommandRunner.{h,cpp}`: the composition entry point. `prepare()` parses the instruction, resolves subject references through `TargetResolver` (replaceable detector + tracker), binds the optional creator identity (`TargetIdentityRegistry`) and resolves references (`TargetSelector`), and builds the validated plan (`ReframePlanBuilder`). `run()` adds deterministic execution through the unchanged `ReframePipeline`.
+- The runner adds no perception of its own and never fabricates a direction: an unresolved or ambiguous reference produces an explicit error naming the reference; a direction-only instruction needs no detector; a creator seed that fails to bind is recorded in notes.
+- Registered in `reelcraft.pro` and `tests/tests.pro`; 8 new model-free tests; new env-gated `realUserCommandIntegration`.
+
+### Verification
+
+- Model-free suite: 308 passed, 0 failed, 2 skipped (~47 s). New tests: subject resolution + plan, direction-only without a detector, unresolved honesty, ambiguous honesty, creator-identity "follow me", missing detector, invalid range, determinism.
+- Real footage (audio+video proxy; original untouched): `realUserCommandIntegration` ran the command "follow person 1" through the full path with the real YOLOX detector. See `CURRENT_STATE.md` for the recorded result.
+- Change-impact: the runner composes existing layers; no detector, geometry, identity, appearance, speaker, planner, or renderer internals changed.
+
+### Boundary notes / not implemented
+
+- The command path is library-level: not yet wired into the Application/UI, plans are not persisted in the project schema, and speaker-aware commands are not parsed. These remain future objectives.
+- Inference is CPU-only.
+
+### Decisions
+
+- Decision 025 recorded. Decisions 017-024 preserved unchanged.

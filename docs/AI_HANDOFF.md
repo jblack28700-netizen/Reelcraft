@@ -60,6 +60,8 @@ Target/subject resolution is also implemented under `app/target/` (Decision 019)
 
 Do not assume that planned architecture has already been implemented; read `CURRENT_STATE.md` and `NEXT_TASK.md` for exact status.
 
+An end-to-end 360 **user-command execution** path is implemented (Decision 025): `app/reframe/ReframeCommandRunner` composes the parsed instruction, the replaceable detector/tracker, identity/selection, the validated `ReframePlan`, and the deterministic renderer behind a single entry point (`prepare()` = decision stage; `run()` = decision + execution). Unresolved or ambiguous subject references are reported, never fabricated; a direction-only command needs no detector. The normal suite stays model-free; an env-gated `realUserCommandIntegration` test exercises the path on real footage.
+
 ---
 
 # 4. Current Development Camera

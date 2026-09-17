@@ -37,6 +37,7 @@
 #include "reframe/CameraKeyframe.h"
 #include "reframe/CameraPath.h"
 #include "reframe/FfmpegSeekFrameProvider.h"
+#include "reframe/ReframeCommandRunner.h"
 #include "reframe/ReframeFrameProvider.h"
 #include "reframe/ReframeIntent.h"
 #include "reframe/ReframePlan.h"
@@ -959,6 +960,14 @@ private slots:
     void reframeBuilderRejectsUnresolvedTargets();
     void reframeBuilderHonorsIntentTimeRangeAndOutput();
     void reframePipelineRendersRealVideoEndToEnd();
+    void reframeCommandRunnerResolvesSubjectAndBuildsPlan();
+    void reframeCommandRunnerDirectionalCommandNeedsNoDetector();
+    void reframeCommandRunnerUnresolvedSubjectIsHonest();
+    void reframeCommandRunnerAmbiguousReferenceIsHonest();
+    void reframeCommandRunnerCreatorIdentityResolvesMe();
+    void reframeCommandRunnerMissingDetectorIsHonest();
+    void reframeCommandRunnerRejectsInvalidRange();
+    void reframeCommandRunnerIsDeterministic();
     void equirectDirectionFromCenterAndSides();
     void equirectPixelRoundTrip();
     void equirectAngularDistanceHandlesSeam();
@@ -999,6 +1008,7 @@ private slots:
     void targetTrackPlannerFiltersLowConfidence();
     void targetResolutionToRenderPipeline();
     void realDetectorIntegration();
+    void realUserCommandIntegration();
     void targetTrackerPredictionMaintainsIdentityThroughCrossing();
     void targetTrackerReentryKeepsIdentityWithinWindow();
     void targetTrackerReentryBeyondWindowCreatesNewTrack();
@@ -6766,6 +6776,195 @@ void ProjectTest::targetResolutionToRenderPipeline()
     QCOMPARE(centeredFrames, 1);
 }
 
+// ================= 360 user-command execution (Phase 4, Obj 8) =================
+// Deterministic, model-free tests for the command entry point: parse -> resolve
+// subject references -> identity/selection -> validated plan. No model or media.
+
+void ProjectTest::reframeCommandRunnerResolvesSubjectAndBuildsPlan()
+{
+    const QImage frame = buildTargetEquirect(
+        360, 180, { EquirectDisk{ 45.0, 5.0, 10.0, QColor(255, 0, 0) } });
+    StaticEquirectProvider provider(frame);
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+
+    ReframeCommandRequest request;
+    request.instruction = QStringLiteral("look at the person");
+    request.defaultRange = ReframePlan::TimeRange{ 0, 1000 };
+    request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+    request.resolveConfig = smallResolverConfig();
+
+    const ReframeCommandResult result =
+        ReframeCommandRunner::prepare(request, &detector, &provider);
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QCOMPARE(result.resolvedTargets.size(), 1);
+    QCOMPARE(result.resolvedTargets.at(0).id, QStringLiteral("person"));
+    QVERIFY(qAbs(result.resolvedTargets.at(0).yawDeg - 45.0) < 6.0);
+    QCOMPARE(result.plan.keyframes().size(), 1);
+    QVERIFY(qAbs(CameraPath::stateAt(result.plan, 0).yawDeg - 45.0) < 6.0);
+    // The intent now reflects the resolved command state, and the parser's
+    // stale "unresolved" note must not survive a successful resolution.
+    QVERIFY(result.intent.unresolvedTargets.isEmpty());
+    QVERIFY(!result.notes.join(QStringLiteral("\n"))
+                 .contains(QStringLiteral("Unresolved subject reference")));
+}
+
+void ProjectTest::reframeCommandRunnerDirectionalCommandNeedsNoDetector()
+{
+    ReframeCommandRequest request;
+    request.instruction = QStringLiteral("pan right");
+    request.defaultRange = ReframePlan::TimeRange{ 0, 1000 };
+    request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+
+    const ReframeCommandResult result =
+        ReframeCommandRunner::prepare(request, nullptr, nullptr);
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QVERIFY(result.resolvedTargets.isEmpty());
+    QCOMPARE(result.plan.keyframes().size(), 1);
+    QVERIFY(qAbs(CameraPath::stateAt(result.plan, 0).yawDeg - 90.0) < 1e-9);
+}
+
+void ProjectTest::reframeCommandRunnerUnresolvedSubjectIsHonest()
+{
+    QImage frame(360, 180, QImage::Format_ARGB32);
+    frame.fill(QColor(0, 0, 0));
+    StaticEquirectProvider provider(frame);
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+
+    ReframeCommandRequest request;
+    request.instruction = QStringLiteral("look at the person");
+    request.defaultRange = ReframePlan::TimeRange{ 0, 1000 };
+    request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+    request.resolveConfig = smallResolverConfig();
+
+    const ReframeCommandResult result =
+        ReframeCommandRunner::prepare(request, &detector, &provider);
+    QVERIFY(!result.ok);
+    QVERIFY(result.resolvedTargets.isEmpty());
+    QCOMPARE(result.unresolvedReferences, QStringList{ QStringLiteral("person") });
+    QVERIFY(result.error.contains(QStringLiteral("Unresolved")));
+    QCOMPARE(result.plan.keyframes().size(), 0);
+}
+
+void ProjectTest::reframeCommandRunnerAmbiguousReferenceIsHonest()
+{
+    const QImage frame = buildTargetEquirect(
+        360, 180, { EquirectDisk{ 40.0, 0.0, 10.0, QColor(255, 0, 0) },
+                    EquirectDisk{ -40.0, 0.0, 10.0, QColor(0, 0, 255) } });
+    StaticEquirectProvider provider(frame);
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+    detector.addSpec(QColor(0, 0, 255), QStringLiteral("person"));
+
+    ReframeCommandRequest request;
+    request.instruction = QStringLiteral("look at the person");
+    request.defaultRange = ReframePlan::TimeRange{ 0, 1000 };
+    request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+    request.resolveConfig = smallResolverConfig();
+
+    const ReframeCommandResult result =
+        ReframeCommandRunner::prepare(request, &detector, &provider);
+    QVERIFY(!result.ok);
+    QVERIFY(result.resolvedTargets.isEmpty());
+    QVERIFY(result.unresolvedReferences.contains(QStringLiteral("person")));
+    QVERIFY(result.error.contains(QStringLiteral("Unresolved")));
+    // Ambiguity must be reported, not silently resolved.
+    QVERIFY(result.notes.join(QStringLiteral("\n"))
+                .contains(QStringLiteral("ambiguous")));
+}
+
+void ProjectTest::reframeCommandRunnerCreatorIdentityResolvesMe()
+{
+    const QImage frame = buildTargetEquirect(
+        360, 180, { EquirectDisk{ 40.0, 0.0, 10.0, QColor(255, 0, 0) },
+                    EquirectDisk{ -40.0, 0.0, 10.0, QColor(0, 0, 255) } });
+    StaticEquirectProvider provider(frame);
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+    detector.addSpec(QColor(0, 0, 255), QStringLiteral("person"));
+
+    ReframeCommandRequest request;
+    request.instruction = QStringLiteral("follow me");
+    request.defaultRange = ReframePlan::TimeRange{ 0, 1000 };
+    request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+    request.resolveConfig = smallResolverConfig();
+    request.hasCreatorSelection = true;
+    request.creatorSelection.identity = QStringLiteral("me");
+    request.creatorSelection.timeMs = 0;
+    request.creatorSelection.yawDeg = 40.0;
+    request.creatorSelection.pitchDeg = 0.0;
+    request.creatorSelection.label = QStringLiteral("person");
+
+    const ReframeCommandResult result =
+        ReframeCommandRunner::prepare(request, &detector, &provider);
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QCOMPARE(result.resolvedTargets.size(), 1);
+    QVERIFY(qAbs(result.resolvedTargets.at(0).yawDeg - 40.0) < 8.0);
+    // A single creator seed must not be confused with the other visible person.
+    QVERIFY(result.resolvedTargets.at(0).yawDeg > 0.0);
+}
+
+void ProjectTest::reframeCommandRunnerMissingDetectorIsHonest()
+{
+    ReframeCommandRequest request;
+    request.instruction = QStringLiteral("look at the person");
+    request.defaultRange = ReframePlan::TimeRange{ 0, 1000 };
+    request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+
+    const ReframeCommandResult result =
+        ReframeCommandRunner::prepare(request, nullptr, nullptr);
+    QVERIFY(!result.ok);
+    QVERIFY(result.error.contains(QStringLiteral("no target detector")));
+    QVERIFY(result.resolvedTargets.isEmpty());
+}
+
+void ProjectTest::reframeCommandRunnerRejectsInvalidRange()
+{
+    ReframeCommandRequest request;
+    request.instruction = QStringLiteral("pan right");
+    request.defaultRange = ReframePlan::TimeRange{ 1000, 0 };
+    request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+
+    const ReframeCommandResult result =
+        ReframeCommandRunner::prepare(request, nullptr, nullptr);
+    QVERIFY(!result.ok);
+    QVERIFY(result.error.contains(QStringLiteral("range")));
+}
+
+void ProjectTest::reframeCommandRunnerIsDeterministic()
+{
+    const QImage frame = buildTargetEquirect(
+        360, 180, { EquirectDisk{ 30.0, 5.0, 10.0, QColor(255, 0, 0) } });
+    StaticEquirectProvider provider(frame);
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+
+    const auto run = [&detector, &provider]() {
+        ReframeCommandRequest request;
+        request.instruction = QStringLiteral("look at the person");
+        request.defaultRange = ReframePlan::TimeRange{ 0, 1000 };
+        request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+        request.resolveConfig = smallResolverConfig();
+        return ReframeCommandRunner::prepare(request, &detector, &provider);
+    };
+    const ReframeCommandResult a = run();
+    const ReframeCommandResult b = run();
+    QVERIFY(a.ok);
+    QVERIFY(b.ok);
+    QCOMPARE(a.resolvedTargets.size(), b.resolvedTargets.size());
+    QVERIFY(qAbs(a.resolvedTargets.at(0).yawDeg - b.resolvedTargets.at(0).yawDeg)
+            < 1e-12);
+    QCOMPARE(a.plan.keyframes().size(), b.plan.keyframes().size());
+    for (int i = 0; i < a.plan.keyframes().size(); ++i) {
+        QCOMPARE(a.plan.keyframes().at(i).timeMs,
+                 b.plan.keyframes().at(i).timeMs);
+        QVERIFY(qAbs(a.plan.keyframes().at(i).yawDeg
+                     - b.plan.keyframes().at(i).yawDeg)
+                < 1e-12);
+    }
+}
+
 
 // Real-detector integration (skipped unless configured). This is the only test
 // that runs an actual computer-vision model; the normal suite stays model-free.
@@ -7161,6 +7360,76 @@ void ProjectTest::realDetectorIntegration()
               static_cast<int>(speakerPaths.size()),
               qPrintable(speakerOutputPath));
     }
+}
+
+// End-to-end user-command integration (Objective 8; skipped unless configured).
+// Exercises the command entry point on real 360 footage:
+// instruction -> resolve -> identity/selection -> plan -> deterministic render.
+// Reuses the detector env vars; optionally set REELCRAFT_COMMAND_OUTPUT for an
+// inspectable artifact. The normal suite stays model-free.
+void ProjectTest::realUserCommandIntegration()
+{
+    const QString python = qEnvironmentVariable("REELCRAFT_TARGET_DETECTOR_PY");
+    const QString script = qEnvironmentVariable("REELCRAFT_TARGET_DETECTOR_SCRIPT");
+    const QString model = qEnvironmentVariable("REELCRAFT_TARGET_YOLOX_MODEL");
+    const QString clip = qEnvironmentVariable("REELCRAFT_TARGET_CLIP");
+    if (python.isEmpty() || script.isEmpty() || model.isEmpty() || clip.isEmpty()) {
+        QSKIP("real user-command integration not configured "
+              "(set REELCRAFT_TARGET_DETECTOR_PY/_SCRIPT, "
+              "REELCRAFT_TARGET_YOLOX_MODEL, REELCRAFT_TARGET_CLIP)");
+    }
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable");
+    }
+
+    ProcessTargetDetector detector(python,
+                                   { script, QStringLiteral("--model"), model });
+
+    QTemporaryDir outputDirectory;
+    QString outputPath = qEnvironmentVariable("REELCRAFT_COMMAND_OUTPUT");
+    if (outputPath.isEmpty()) {
+        QVERIFY(outputDirectory.isValid());
+        outputPath = outputDirectory.filePath(QStringLiteral("user_command.mp4"));
+    }
+
+    ReframeCommandRequest request;
+    request.sourcePath = clip;
+    request.sourceMediaId = QStringLiteral("real-360");
+    request.instruction = QStringLiteral("follow person 1");
+    request.defaultRange = ReframePlan::TimeRange{ 0, 12000 };
+    request.defaultOutput = ReframePlan::OutputSpec{ 640, 360, 2.0 };
+    request.resolveConfig.viewPlan.fieldOfViewDeg = 110.0;
+    request.resolveConfig.viewPlan.yawCount = 4;
+    request.resolveConfig.viewPlan.pitchCount = 1;
+    request.resolveConfig.viewPlan.viewWidth = 512;
+    request.resolveConfig.viewPlan.viewHeight = 512;
+    request.resolveConfig.minConfidence = 0.35;
+    request.resolveConfig.tracker.maxAssociationDistanceDeg = 40.0;
+    request.resolveConfig.tracker.maxMisses = 3;
+    request.targetQuery.label = QStringLiteral("person");
+    request.targetQuery.minConfidence = 0.35;
+    request.resolveTimestamps = { 5500, 6500, 7500 };
+    request.outputPath = outputPath;
+
+    const ReframeCommandResult result =
+        ReframeCommandRunner::run(request, &detector, nullptr);
+    qInfo("user command: ok=%d tracks=%d resolved=%d", result.ok ? 1 : 0,
+          static_cast<int>(result.tracks.size()),
+          static_cast<int>(result.resolvedTargets.size()));
+    for (const QString &note : result.notes) {
+        qInfo("  command note: %s", qPrintable(note));
+    }
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QVERIFY(!result.tracks.isEmpty());
+    QCOMPARE(result.resolvedTargets.size(), 1);
+    QVERIFY(!result.plan.keyframes().isEmpty());
+    const double yaw = CameraPath::stateAt(result.plan, 0).yawDeg;
+    qInfo("user command resolved target yaw=%.2f", yaw);
+    QVERIFY(qAbs(yaw) > 5.0); // resolved to a real off-axis presenter
+    QVERIFY(QFileInfo::exists(result.outputPath));
+    QVERIFY(QFileInfo(result.outputPath).size() > 0);
+    qInfo("user command rendered %d frame(s) -> %s", result.frameCount,
+          qPrintable(result.outputPath));
 }
 
 // ================= 360 target identity & selection (Phase 4, Obj 4) =================

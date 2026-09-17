@@ -27,6 +27,7 @@ SOURCES += \
     ../app/reframe/CameraKeyframe.cpp \
     ../app/reframe/CameraPath.cpp \
     ../app/reframe/FfmpegSeekFrameProvider.cpp \
+    ../app/reframe/ReframeCommandRunner.cpp \
     ../app/reframe/ReframeIntent.cpp \
     ../app/reframe/ReframePlan.cpp \
     ../app/reframe/ReframePlanBuilder.cpp \
@@ -75,6 +76,7 @@ HEADERS += \
     ../app/reframe/CameraKeyframe.h \
     ../app/reframe/CameraPath.h \
     ../app/reframe/FfmpegSeekFrameProvider.h \
+    ../app/reframe/ReframeCommandRunner.h \
     ../app/reframe/ReframeFrameProvider.h \
     ../app/reframe/ReframeIntent.h \
     ../app/reframe/ReframeMath.h \

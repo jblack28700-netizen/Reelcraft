@@ -780,3 +780,28 @@ Feasibility was investigated on the project's real 360 footage before building a
 - No detector, geometry, identity-resolution, or renderer changes; audio remains evidence-only and below appearance in the precedence hierarchy; Decisions 017–023 preserved.
 - Per the human-approved priority, the next work is end-to-end 360 user-command testing rather than further perception subsystems. A real audio-visual/diarization provider and GPU optimization are recorded as future work behind the same seam.
 
+
+# Decision 025 — End-to-End 360 User-Command Execution Boundary
+
+**Status:** Accepted (2026-09-17, 360 Reframing Objective 8)
+
+## Context
+
+Objectives 1–7 built the 360 pipeline as separate layers: a structured `ReframePlan` + deterministic renderer (Decision 018), a replaceable target-resolution layer (019), a real detector helper (020), structured target identity/selection (021), optional appearance re-identification (022), optional audio/speaker evidence (023), and an audio-visual provider-attribution seam (024). `ReframePipeline` could parse an instruction and render, but it accepted `resolvedTargets` as a caller input: there was no single entry point that turned a user command containing a subject reference into resolved directions. End-to-end command testing therefore required composing the decision layers with the deterministic engine.
+
+## Decisions
+
+- **One composition entry point:** `app/reframe/ReframeCommandRunner.{h,cpp}` turns a user instruction plus a 360 source into a validated plan and, optionally, a rendered flat video. It is the top of the 360 command path:
+  `instruction -> parsed intent -> subject references -> target resolution (replaceable detector + tracker) -> identity/selection -> resolved directions -> validated ReframePlan -> deterministic render`.
+- **Two explicit stages:** `prepare()` is the decision stage (parse + resolve + plan); it is deterministic and model-free when an in-memory detector/provider is injected. `run()` adds the deterministic execution stage through the existing `ReframePipeline`. The AI/decision side and the deterministic executor stay separate; `ReframePipeline` itself is unchanged.
+- **The runner adds no perception of its own.** It reuses `TargetResolver` (detector + tracker), `TargetIdentityRegistry` + `TargetSelector` (identity/selection), `ReframePlanBuilder` (validated plan), and `ReframePipeline`/`ReframeRenderer` (execution). Detectors remain replaceable and optional.
+- **No fabricated direction:** an unresolved or ambiguous subject reference produces an error naming the reference and no plan; a direction-only instruction needs no detector; a creator seed that fails to bind is recorded in notes and does not invent a target.
+- **Identity precedence is unchanged:** explicit creator selection > tracker continuity > geometry > appearance > audio > unresolved. Because the runner uses `TargetSelector`, it inherits the documented reference vocabulary ("me", "the other person", "person N", left/right, exact track id, unique label) and reports ambiguity rather than guessing.
+- **Source media is read-only:** the runner and the pipeline only read the source.
+
+## Consequences
+
+- 8 new model-free tests cover subject resolution + plan, direction-only commands without a detector, unresolved/ambiguous honesty, creator-identity resolution ("follow me"), missing-detector and invalid-range errors, and determinism. Full model-free suite: 308 passed / 0 failed / 2 skipped.
+- A new env-gated `realUserCommandIntegration` test exercises the full command path on real 360 footage with the Apache-2.0 YOLOX detector (command -> resolve -> plan -> render); the normal suite stays model-free. Real-run evidence is recorded in `CURRENT_STATE.md` and `DEVELOPMENT_LOG.md`.
+- This is the composition layer future work builds on (speaker-aware commands, Application/UI wiring); it does not change the detector, geometry, identity, appearance, speaker, planner, or renderer internals. Decisions 017–024 preserved.
+
