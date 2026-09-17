@@ -132,6 +132,41 @@ the same class.
 
 - Detection strategy: **decided** (tangent views + spherical reprojection).
 - Dependency stance: **decided** (no linked CV dependency; subprocess seam).
-- Real model integration: **not implemented** in this environment (no CV
-  runtime installed); the seam and protocol are implemented and tested with a
-  deterministic synthetic detector and a subprocess helper.
+- Real model integration: **implemented and verified** (2026-09-17) with an
+  optional external helper using OpenCV Zoo YOLOX + OpenCV DNN on CPU; see
+  Section 10.
+
+## 10. Real Integration Result (2026-09-17, Objective 3)
+
+**Selected:** OpenCV Zoo `object_detection_yolox_2022nov.onnx` (Apache-2.0,
+code and weights), COCO 80 classes. **Runtime:** Python 3 + OpenCV DNN 4.10
+(`python3-opencv`), CPU. The helper (`tools/detector_helper/yolox_detector.py`)
+implements the Section 6 protocol; Reelcraft links no CV library.
+
+**Install:** `apt-get install -y --no-install-recommends python3-opencv
+python3-numpy`, then download the ONNX weights (~35.8 MB) to
+`~/.cache/reelcraft/models/`. **GPU:** OpenCV DNN can use CUDA/TIM-VX/CANN
+backends; this run used CPU because no RunPod credentials were available.
+
+**Verified on real footage:** the project's real `360_TEST_4K.mp4`
+(3840x1920 VP9, 2:1 equirect). A 1920x960 x264 proxy of the 114-126 s segment
+was used for speed; the original was never modified.
+
+- Full equirect sanity check (t=120 s): 4 `person` detections, top-2 at
+  confidence 0.89 (two presenters).
+- Tangent-view pipeline (`EquirectView` front view, fov 110): detections
+  mapped to spherical directions (presenter A: yaw -27.9, pitch -28.6;
+  presenter B: yaw +26.9, pitch -27.8). A diagnostic reproduction of the same
+  projection produced identical coordinates, confirming the C++ mapping.
+- Tracker: 9 raw tracks across 5 sampled frames (5.5-7.5 s proxy time); the
+  strongest `person` track held a stable id `t1` across all five frames
+  (mean confidence 0.923, angular extent ~14x38 degrees).
+- Reframe: the track produced a validated `ReframePlan` (5 keyframes) and
+  `ReframeRenderer` produced a 640x360 H.264 clip whose frames visibly center
+  the detected presenter.
+
+**Limitations observed:** the two presenters were close in yaw (about 55
+degrees apart) and stayed static, so the simple nearest-neighbour tracker did
+not have to disambiguate motion; small background people were detected at
+lower confidence and formed short extra tracks; one model load per helper
+invocation (process-per-view) is intentionally unoptimized.

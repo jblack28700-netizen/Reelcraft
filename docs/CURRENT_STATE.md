@@ -2,7 +2,7 @@
 
 ## Current Version
 
-0.2.39
+0.2.40
 
 ## Current Branch
 
@@ -10,7 +10,7 @@ main
 
 ## Current Stage
 
-Phase 4 — 360 Reframing Engine (deterministic vertical slice) and Target/Subject Resolution implemented and verified. Phase 3 Media Engine remains open; its player-lifecycle objective is intentionally superseded for now by the human-approved 360 priority.
+Phase 4 — 360 Reframing Engine (deterministic vertical slice), Target/Subject Resolution, and real detector integration implemented and verified. Phase 3 Media Engine remains open; its player-lifecycle objective is intentionally superseded for now by the human-approved 360 priority.
 
 ## Project Status
 
@@ -75,13 +75,13 @@ The conceptual AI-to-deterministic edit contract is now backed by a concrete str
 
 Status: Partially implemented — deterministic reframing vertical slice complete.
 
-360° video is a first-class requirement. The viewer supports equirectangular presentation and look-around; media records carry a declared projection; and a deterministic reframing engine now turns a 360 source plus a structured (or natural-language) request into a flat H.264 output through the `ReframePlan`/`CameraPath` contract. Target/subject resolution is now implemented behind a replaceable detector seam (tangent-view detection reprojected to spherical directions, deterministic identity tracking, and a subprocess model adapter); an actual detection model is not yet bundled, "me" identity and speaker localization are not solved, and reframing is not yet wired into the UI.
+360° video is a first-class requirement. The viewer supports equirectangular presentation and look-around; media records carry a declared projection; and a deterministic reframing engine now turns a 360 source plus a structured (or natural-language) request into a flat H.264 output through the `ReframePlan`/`CameraPath` contract. Target/subject resolution is implemented behind a replaceable detector seam (tangent-view detection reprojected to spherical directions, deterministic identity tracking, and a subprocess model adapter). A real detector (OpenCV Zoo YOLOX, Apache-2.0) now runs through that seam on real 360 footage and has produced a flat output centered on a detected person. "Me" identity and speaker localization are not solved, a real model is required for detection (given the clip/helper), and reframing is not yet wired into the UI.
 
 ## Testing
 
 Status: Implemented and continuously verified.
 
-A Qt Test suite covers project state, viewer/media, the media-source seam and frame pump, player/timing, the 360 reframing engine (plan validation/round-trip, camera interpolation, rendering determinism, intent parsing, plan building, and a real FFmpeg end-to-end render), and target resolution (equirect/view geometry, seam and pitch boundaries, view coverage, deterministic tracking, resolver behavior, the subprocess detector protocol, the track planner, and a model-free detection -> plan -> render path). Current result: 219 passed, 0 failed, 0 skipped (~40 s).
+A Qt Test suite covers project state, viewer/media, the media-source seam and frame pump, player/timing, the 360 reframing engine (plan validation/round-trip, camera interpolation, rendering determinism, intent parsing, plan building, and a real FFmpeg end-to-end render), and target resolution (equirect/view geometry, seam and pitch boundaries, view coverage, deterministic tracking, resolver behavior, the subprocess detector protocol, the track planner, and a model-free detection -> plan -> render path). Current result: 219 passed, 0 failed, 1 skipped (~40 s). The single skip is the real-detector integration test, which runs only when a detector helper, model, and clip are configured; the normal suite stays model-free.
 
 ## Technology Direction
 
@@ -916,6 +916,27 @@ Verification:
 - Automated tests: 219 passed, 0 failed, 0 skipped (180 prior + 39 target-resolution tests), ~40 s.
 - Model-free end-to-end test: synthetic equirect frame -> color detector -> spherical direction -> ReframeTarget -> `ReframePlanBuilder` -> `CameraPath`, and a separate detection -> track -> plan -> `ReframeRenderer` render.
 
-Not implemented: a bundled/real detection model (no CV runtime in this environment), "me" identity, speaker localization, semantic classification, production tracking quality, reframe-plan persistence, and UI integration.
+Not implemented: "me" identity, speaker localization, semantic classification, production tracking quality, reframe-plan persistence, and UI integration.
+
+## Phase 4 Objective 3 — Real Detector Integration — Complete
+
+Status: Complete (2026-09-17). Follows the target-resolution boundary (Decision 019) and proves real detection on real 360 footage.
+
+- Added an optional external helper `tools/detector_helper/yolox_detector.py` (plus `README.md`), implementing the existing `ProcessTargetDetector` file/JSON protocol. Selected model: **OpenCV Zoo YOLOX (2022nov)**, Apache-2.0 (code and weights), COCO 80 classes; runtime Python 3 + OpenCV DNN 4.10 (CPU). Reelcraft links no computer-vision library.
+- Added the `realDetectorIntegration` test, skipped unless configured; the normal suite remains model-free.
+- No changes to the `TargetDetector`/`ProcessTargetDetector` boundary or the 360 geometry.
+
+Verification (real footage, proxy used for speed; original untouched):
+- Real 3840x1920 equirect clip (`360_TEST_4K.mp4`); 1920x960 proxy of the 114-126 s segment.
+- Real YOLOX detected two presenters in tangent views; spherical directions yaw -27.9/pitch -28.6 and yaw +26.9/pitch -27.8 (independently reproduced).
+- The strongest `person` track held id `t1` across five sampled frames (mean confidence 0.923).
+- The track produced a validated `ReframePlan`; `ReframeRenderer` produced a 640x360 H.264 clip visibly centered on the detected presenter.
+- Normal suite: 219 passed, 0 failed, 1 skipped.
+
+Architecture decision: Decision 020 records the real-detector selection and the preserved boundary.
+
+Next: identity/evidence (`NEXT_TASK.md` Objective 4).
+
+
 
 

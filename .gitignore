@@ -11,3 +11,7 @@ reelcraft_tests
 
 # Generated Qt test moc
 *.moc
+
+# Python helper caches (tools/detector_helper)
+__pycache__/
+*.pyc

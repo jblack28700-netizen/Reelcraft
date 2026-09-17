@@ -167,8 +167,30 @@ Give Reelcraft the ability to resolve targets in 360 footage into deterministic 
 - A bundled real detection model (no CV runtime in this environment; the subprocess seam is ready).
 - "Me" identity / re-identification; speaker localization; semantic/open-vocabulary classification; production tracking quality.
 
-## Next Objective (360 Reframing Objective 3) — NOT STARTED
+## 360 Reframing Objective 3 — Real Detector Integration — Complete
 
-Identity and evidence: resolve "me"/the creator and the active speaker into a target identity (creator-selected seed, re-identification, or audio-visual speaker association), and integrate a real permissively licensed detector helper (for example YOLOX or RT-DETR via ONNX Runtime) behind the existing `ProcessTargetDetector` protocol. Requires its own scoped objective before implementation; must keep the real model optional so the unit suite stays model-free.
+Status: **Complete — implemented and verified (2026-09-17).**
+
+### Objective
+Make the first real computer-vision detector work with actual 360 footage through the existing `ProcessTargetDetector` boundary: real 360 footage -> tangent views -> real detection -> spherical coordinates -> existing tracker -> TargetTrack -> ReframePlan -> deterministic flat render.
+
+### Scope (implemented)
+- Optional external helper `tools/detector_helper/yolox_detector.py` implementing the existing file/JSON protocol, using OpenCV Zoo YOLOX (Apache-2.0) + OpenCV DNN (CPU). Reelcraft links no CV library. `tools/detector_helper/README.md` records model, weights, runtime, licenses, install, GPU note, protocol, and limitations.
+- New integration test `realDetectorIntegration`, skipped unless detector/model/clip env vars are configured; the normal suite stays model-free.
+- No changes to the `TargetDetector`/`ProcessTargetDetector` boundary or the 360 geometry.
+
+### Verified on real footage
+- Real 3840x1920 equirect clip; a 1920x960 proxy of the 114-126 s segment was used for speed (original untouched).
+- Detected two presenters in tangent views: spherical yaw -27.9/pitch -28.6 and yaw +26.9/pitch -27.8.
+- Strongest `person` track held id `t1` across five sampled frames (mean confidence 0.923).
+- Track -> validated `ReframePlan` -> 640x360 H.264 output visibly centered on the detected presenter.
+- Normal suite: 219 passed, 0 failed, 1 skipped (the real-detector test when unconfigured).
+
+### Explicitly not implemented
+- "Me" identity / re-identification; speaker localization; semantic/open-vocabulary classification; production tracking quality; GPU/RunPod inference (no credentials available).
+
+## Next Objective (360 Reframing Objective 4) — NOT STARTED
+
+Identity and evidence: resolve "me"/the creator and the active speaker into a target identity (creator-selected seed, re-identification, or audio-visual speaker association) and make target selection deterministic for multi-person scenes. Requires its own scoped objective before implementation; keep any real model optional so the unit suite stays model-free.
 
 

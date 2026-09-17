@@ -984,6 +984,7 @@ private slots:
     void targetTrackPlannerRejectsEmptyTrack();
     void targetTrackPlannerFiltersLowConfidence();
     void targetResolutionToRenderPipeline();
+    void realDetectorIntegration();
 };
 
 void ProjectTest::initTestCase()
@@ -6668,6 +6669,134 @@ void ProjectTest::targetResolutionToRenderPipeline()
                  nullptr, &renderError),
              qPrintable(renderError));
     QCOMPARE(centeredFrames, 1);
+}
+
+
+// Real-detector integration (skipped unless configured). This is the only test
+// that runs an actual computer-vision model; the normal suite stays model-free.
+// Configure with:
+//   REELCRAFT_TARGET_DETECTOR_PY=<python>           (e.g. /usr/bin/python3)
+//   REELCRAFT_TARGET_DETECTOR_SCRIPT=<helper.py>    (tools/detector_helper/yolox_detector.py)
+//   REELCRAFT_TARGET_YOLOX_MODEL=<model.onnx>       (OpenCV Zoo YOLOX, Apache-2.0)
+//   REELCRAFT_TARGET_CLIP=<clip.mp4>                (equirect 360 source/proxy)
+//   REELCRAFT_TARGET_OUTPUT=<out.mp4>               (optional; default temp dir)
+void ProjectTest::realDetectorIntegration()
+{
+    const QString python = qEnvironmentVariable("REELCRAFT_TARGET_DETECTOR_PY");
+    const QString script = qEnvironmentVariable("REELCRAFT_TARGET_DETECTOR_SCRIPT");
+    const QString model = qEnvironmentVariable("REELCRAFT_TARGET_YOLOX_MODEL");
+    const QString clip = qEnvironmentVariable("REELCRAFT_TARGET_CLIP");
+    if (python.isEmpty() || script.isEmpty() || model.isEmpty() || clip.isEmpty()) {
+        QSKIP("real detector integration not configured "
+              "(set REELCRAFT_TARGET_DETECTOR_PY/_SCRIPT, REELCRAFT_TARGET_YOLOX_MODEL, "
+              "REELCRAFT_TARGET_CLIP)");
+    }
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable");
+    }
+
+    ProcessTargetDetector detector(python, { script, QStringLiteral("--model"), model });
+    FfmpegSeekFrameProvider provider(clip, FrameExtractor::defaultExecutablePath());
+
+    TargetResolveConfig config;
+    config.viewPlan.fieldOfViewDeg = 110.0;
+    config.viewPlan.yawCount = 4;
+    config.viewPlan.pitchCount = 1;
+    config.viewPlan.viewWidth = 512;
+    config.viewPlan.viewHeight = 512;
+    config.minConfidence = 0.35;
+    config.tracker.maxAssociationDistanceDeg = 40.0;
+    config.tracker.maxMisses = 3;
+    TargetResolver resolver(config);
+
+    TargetQuery query;
+    query.label = QStringLiteral("person");
+    query.minConfidence = 0.35;
+
+    const QList<qint64> timestamps = { 5500, 6000, 6500, 7000, 7500 };
+    QList<TargetTrack> tracks;
+    QString error;
+    QVERIFY2(resolver.resolveSequence(&provider, timestamps, query, &detector,
+                                      &tracks, &error),
+             qPrintable(error));
+    for (const QString &note : resolver.notes()) {
+        qInfo("resolver note: %s", qPrintable(note));
+    }
+
+    qInfo("real detector: %d track(s)", static_cast<int>(tracks.size()));
+    QVERIFY2(!tracks.isEmpty(), "no real person was detected in the 360 clip");
+
+    int best = 0;
+    for (int i = 1; i < tracks.size(); ++i) {
+        if (tracks.at(i).size() > tracks.at(best).size()
+            || (tracks.at(i).size() == tracks.at(best).size()
+                && tracks.at(i).meanConfidence() > tracks.at(best).meanConfidence())) {
+            best = i;
+        }
+    }
+    const TargetTrack &track = tracks.at(best);
+    qInfo("chosen track: id=%s label=%s observations=%d meanConf=%.3f",
+          qPrintable(track.id()), qPrintable(track.label()),
+          static_cast<int>(track.size()), track.meanConfidence());
+    for (const TargetObservation &observation : track.observations()) {
+        qInfo("  t=%lldms yaw=%.2f pitch=%.2f conf=%.3f radius=(%.2f,%.2f) source=%s",
+              static_cast<long long>(observation.timeMs), observation.yawDeg,
+              observation.pitchDeg, observation.confidence,
+              observation.yawRadiusDeg, observation.pitchRadiusDeg,
+              qPrintable(observation.source));
+    }
+    QVERIFY(track.size() >= 2);
+
+    ReframePlan plan;
+    QString planError;
+    TargetTrackPlanner::Config plannerConfig;
+    plannerConfig.fieldOfViewDeg = 70.0;
+    plannerConfig.maxKeyframes = 12;
+    plannerConfig.minConfidence = 0.35;
+    QVERIFY2(TargetTrackPlanner::planTrack(
+                 track, ReframePlan::TimeRange{ timestamps.first(), timestamps.last() + 1 },
+                 ReframePlan::OutputSpec{ 640, 360, 2.0 }, plannerConfig, &plan,
+                 &planError),
+             qPrintable(planError));
+    QVERIFY(plan.isValid());
+    for (const CameraKeyframe &keyframe : plan.keyframes()) {
+        qInfo("  keyframe t=%lldms yaw=%.2f pitch=%.2f",
+              static_cast<long long>(keyframe.timeMs), keyframe.yawDeg,
+              keyframe.pitchDeg);
+    }
+
+    QString outputPath = qEnvironmentVariable("REELCRAFT_TARGET_OUTPUT");
+    QTemporaryDir tempDirectory;
+    if (outputPath.isEmpty()) {
+        QVERIFY(tempDirectory.isValid());
+        outputPath = tempDirectory.filePath(QStringLiteral("real_follow.mp4"));
+    }
+    const QString framesDir =
+        QDir(QFileInfo(outputPath).absolutePath())
+            .filePath(QFileInfo(outputPath).completeBaseName() + QStringLiteral("_frames"));
+    QStringList paths;
+    QString renderError;
+    QVERIFY2(ReframeRenderer::renderToPngSequence(plan, &provider, framesDir, &paths,
+                                                  &renderError),
+             qPrintable(renderError));
+    QVERIFY(!paths.isEmpty());
+    const QString pattern =
+        QDir(framesDir).filePath(ReframeRenderer::frameFileNamePattern());
+    QVERIFY2(ReframeRenderer::encodeVideo(FrameExtractor::defaultExecutablePath(),
+                                          pattern, plan.output().fps, outputPath,
+                                          &renderError),
+             qPrintable(renderError));
+    QVERIFY(QFileInfo::exists(outputPath));
+    QVERIFY(QFileInfo(outputPath).size() > 0);
+    qInfo("rendered %d frame(s) -> %s", static_cast<int>(paths.size()),
+          qPrintable(outputPath));
+
+    QImage decoded;
+    QVERIFY2(FrameExtractor::extractFirstFrame(
+                 outputPath, FrameExtractor::defaultExecutablePath(), &decoded,
+                 &renderError),
+             qPrintable(renderError));
+    QCOMPARE(decoded.size(), QSize(640, 360));
 }
 
 QTEST_MAIN(ProjectTest)

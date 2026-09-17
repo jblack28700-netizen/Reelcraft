@@ -250,13 +250,13 @@ Re-verify the standard `scripts/build_and_test.sh` workflow on a host with a wor
 
 ### Status
 
-Open — intentional first-slice boundary; not a defect.
+Partially resolved (2026-09-17) — real detection is now verified on real 360 footage; the helper/model remain external and optional by design.
 
 ### Description
 
-The target-resolution layer (`app/target/`) implements a replaceable detector seam (`TargetDetector`) and a dependency-free subprocess adapter (`ProcessTargetDetector`), but it does not bundle or run a real object/person detector. The current development environment has no OpenCV, ONNX Runtime, TFLite, or Debian `pip`, so model integration could not be verified here. Tests use a deterministic synthetic color detector and a shell helper to exercise the seam and protocol.
+The target-resolution layer (`app/target/`) implements a replaceable detector seam (`TargetDetector`) and a dependency-free subprocess adapter (`ProcessTargetDetector`). Historically it bundled no real detector because the environment had no CV runtime; that gap is now closed for verification: an optional external helper using OpenCV Zoo YOLOX (Apache-2.0) + OpenCV DNN (CPU) runs through the existing protocol and detected real people in the project's real 3840x1920 equirect clip. Reelcraft still links no CV library, and no model weights are committed.
 
-Consequently, "real-world detection verified" is NOT claimed: only the deterministic geometry/tracking infrastructure and the subprocess protocol are verified.
+Consequently, "real-world detection verified" is now claimed with the caveat that a detector helper + model + suitable footage must be provided; the normal unit suite stays model-free (the real test skips when unconfigured).
 
 ### Impact
 
@@ -264,7 +264,7 @@ Requests such as "follow me", "keep me centered", "follow the person speaking", 
 
 ### Planned Resolution
 
-Add an optional, permissively licensed helper behind the existing `ProcessTargetDetector` protocol (recommended: YOLOX or RT-DETR via ONNX Runtime; see `docs/TARGET_RESOLUTION_TECHNOLOGY.md`). Keep it optional so the unit suite stays model-free, and add a separate model/integration test. Do not adopt AGPL Ultralytics models without an explicit product/licensing decision.
+Implemented for the first slice (Decision 020): an optional permissively licensed helper behind the existing `ProcessTargetDetector` protocol (`tools/detector_helper/`), with a separate integration test. Remaining work: GPU/RunPod inference, additional models, and identity/speaker resolution. Do not adopt AGPL Ultralytics models without an explicit product/licensing decision.
 
 ---
 

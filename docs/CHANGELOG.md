@@ -551,4 +551,14 @@ Date: 2026-09-17
 - 39 new tests (geometry, seam/pitch boundaries, view coverage, tracking, resolver, subprocess protocol, planner, and a model-free detection -> plan -> render path). Full test suite: 219 passed, 0 failed, 0 skipped.
 - Not implemented yet: a bundled real detection model, "me" identity, speaker localization, semantic classification, production tracking quality, reframe-plan persistence, and UI integration.
 
+## v0.2.40 — Real Detector Integration (OpenCV Zoo YOLOX)
+
+Date: 2026-09-17
+
+- Connected a real computer-vision detector through the existing replaceable `ProcessTargetDetector` boundary: an optional external helper (`tools/detector_helper/`) using OpenCV Zoo YOLOX 2022nov (Apache-2.0 code and weights) and OpenCV DNN 4.10 on CPU. Reelcraft links no computer-vision library; the model and runtime remain replaceable.
+- Verified on real 360 footage (3840x1920 equirect): real person detections, spherical target coordinates, stable target identity across sampled frames, a generated `ReframePlan`, and a 640x360 H.264 output visibly centered on the detected person.
+- Added a separate real-detector integration test, skipped unless a helper/model/clip are configured; the normal unit suite stays model-free (219 passed, 0 failed, 1 skipped).
+- Documented the exact model, weights, runtime, licenses, install, GPU options, protocol, results, and failure cases in `docs/TARGET_RESOLUTION_TECHNOLOGY.md` and `tools/detector_helper/README.md`; Decision 020 records the selection.
+- Not implemented yet: "me" identity, speaker localization, open-vocabulary classes, production tracking quality, GPU/RunPod inference, reframe-plan persistence, and UI integration.
+
 

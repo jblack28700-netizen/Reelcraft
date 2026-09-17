@@ -1085,6 +1085,50 @@ Objective 1 delivered the deterministic reframing engine but no way to find a ta
 
 - Decision 019 recorded (tangent-view detection, replaceable detector, deterministic tracker, no linked CV dependency, unresolved targets reported). Decision 018 preserved unchanged.
 
+---
+
+# 2026-09-17 — 360 Reframing Objective 3: Real Detector Integration
+
+### Context
+
+Objective 2 established the replaceable `TargetDetector`/`ProcessTargetDetector` boundary but bundled no real model, so real detection was unverified. The objective was to run a real, permissively licensed detector through that boundary on actual 360 footage and carry the result through tracking, planning, and deterministic rendering. No RunPod credentials were available, so lightweight CPU inference was used on-device; the boundary keeps the runtime replaceable.
+
+### Model and licensing
+
+- Selected OpenCV Zoo `object_detection_yolox_2022nov.onnx` (Apache-2.0 code and weights), COCO 80 classes, ~35.8 MB. Runtime: Python 3 + OpenCV DNN 4.10 (`python3-opencv`) on CPU. Verified from the model directory `LICENSE`.
+- Install: `apt-get install -y --no-install-recommends python3-opencv python3-numpy`; weights downloaded to `~/.cache/reelcraft/models/` (not committed).
+- Ultralytics YOLO remains rejected (AGPL-3.0). Recorded in `docs/TARGET_RESOLUTION_TECHNOLOGY.md` and Decision 020.
+
+### Work completed
+
+- Added optional helper `tools/detector_helper/yolox_detector.py` implementing the existing file/JSON protocol, plus `coco_classes.py` and `README.md` (model, weights, runtime, licenses, install, GPU, protocol, limitations). The helper code is adapted from the OpenCV Zoo demo (Apache-2.0); the C++ build links no CV library.
+- Added the `realDetectorIntegration` test to `tests/test_project.cpp`; it is skipped unless `REELCRAFT_TARGET_DETECTOR_PY`, `REELCRAFT_TARGET_DETECTOR_SCRIPT`, `REELCRAFT_TARGET_YOLOX_MODEL`, and `REELCRAFT_TARGET_CLIP` are set, so the normal suite stays model-free.
+- No changes to the target boundary or the 360 geometry.
+
+### Real detection result
+
+- Footage: the project's real `360_TEST_4K.mp4` (3840x1920 VP9, 2:1 equirect, 501 s). A 1920x960 x264 proxy of the 114-126 s segment was used for speed; the original was not modified.
+- Full-equirect sanity check (source t=120 s): 4 `person` detections, top two at confidence 0.89.
+- Tangent-view pipeline (front view, vertical FOV 110, 512x512): presenters mapped to yaw -27.9/pitch -28.6 and yaw +26.9/pitch -27.8. An independent reproduction of the same projection produced identical coordinates, confirming the C++ mapping.
+- Tracker: 9 raw tracks across five sampled frames (proxy 5.5-7.5 s); the strongest `person` track held id `t1` for all five observations (mean confidence 0.923).
+- Reframe: the track produced a validated `ReframePlan`; `ReframeRenderer` produced a 640x360 H.264 clip (4 frames) whose frames visibly center the detected presenter.
+
+### Verification
+
+- Real integration test passed (PASS, ~115 s including 30 detector invocations and rendering).
+- Normal model-free suite: 219 passed, 0 failed, 1 skipped (the real test when unconfigured).
+- Application build clean; offscreen smoke remains green historically (no app source changed).
+
+### Boundary notes / not implemented
+
+- No RunPod/CUDA path was exercised (no credentials); CPU only. The helper can select CUDA/TIM-VX/CANN backends when available.
+- "Me" identity, speaker localization, open-vocabulary classes, and production tracking quality remain future work. The tracker had an easy case (two static presenters about 55 degrees apart).
+- The helper is process-per-view and reloads the model each invocation; intentionally unoptimized.
+
+### Decisions
+
+- Decision 020 recorded (real detector selection and preserved boundary). Decisions 018 and 019 preserved unchanged.
+
 
 
 
