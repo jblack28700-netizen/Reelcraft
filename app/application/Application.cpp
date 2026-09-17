@@ -6,13 +6,18 @@
 #include <QSet>
 #include <QThread>
 
+#include <memory>
+
+#include "media/FfprobeDurationProbe.h"
 #include "media/FrameExtractor.h"
 #include "viewer/ViewportState.h"
 
 Application::Application(QObject *parent)
     : QObject(parent),
-      m_viewportState(new ViewportState(this))
+      m_viewportState(new ViewportState(this)),
+      m_ownedDurationProbe(std::make_unique<FfprobeDurationProbe>())
 {
+    m_durationProbe = m_ownedDurationProbe.get();
     resetReframeCommandExecutor();
 }
 
@@ -64,11 +69,16 @@ void Application::newProject()
     m_hasProject = true;
     const bool hadActiveMedia = !m_activeMediaId.isEmpty();
     const bool hadPreviewTime = m_previewTimeSeconds != 0.0;
+    const bool hadReframeOutputs = !m_reframeOutputs.isEmpty();
     m_mediaItems.clear();
     m_activeMediaId.clear();
     m_previewTimeSeconds = 0.0;
+    m_reframeOutputs.clear();
     resetViewport();
     emit mediaListChanged(m_mediaItems);
+    if (hadReframeOutputs) {
+        emit reframeOutputsChanged(m_reframeOutputs);
+    }
     if (hadActiveMedia) {
         emit activeMediaChanged(m_activeMediaId);
     }
@@ -88,6 +98,7 @@ bool Application::saveProject(const QString &filePath)
     m_currentProject.setViewerState(m_viewportState ? m_viewportState->toJsonObject() : QJsonObject());
     m_currentProject.setMedia(mediaJson());
     m_currentProject.setActiveMediaId(m_activeMediaId);
+    m_currentProject.setReframeOutputs(reframeOutputsJson());
 
     QString error;
     const bool ok = m_currentProject.save(filePath, &error);
@@ -112,6 +123,8 @@ bool Application::openProject(const QString &filePath)
     m_hasProject = true;
     resetViewport();
     restoreMediaFromJson(m_currentProject.media());
+    restoreReframeOutputsFromJson(m_currentProject.reframeOutputs());
+    emit reframeOutputsChanged(m_reframeOutputs);
 
     if (m_viewportState && !m_currentProject.viewerState().isEmpty()) {
         QString viewerError;
@@ -463,6 +476,14 @@ bool Application::runReframeCommandTo(const QString &instruction, qint64 startMs
     // outcome; nothing is silently substituted.
     const auto finish = [this, &outcome]() {
         m_lastReframeOutcome = outcome;
+        // Only commands that reached an output target are recorded/persisted;
+        // early state/validation failures are reported but not stored as
+        // renders. The record is the same structured outcome, so failures carry
+        // their error.
+        if (!outcome.outputPath.isEmpty()) {
+            m_reframeOutputs.append(outcome);
+            emit reframeOutputsChanged(m_reframeOutputs);
+        }
         emit reframeCommandFinished(m_lastReframeOutcome);
         return m_lastReframeOutcome.ok;
     };
@@ -489,6 +510,30 @@ bool Application::runReframeCommandTo(const QString &instruction, qint64 startMs
     }
     outcome.sourceMediaId = media->id();
     outcome.sourcePath = media->path();
+
+    // A zero start/end range means "the whole clip". Resolve it through the
+    // replaceable duration-probe seam; when the duration is unknown the runner
+    // still honours an explicit command range, otherwise it errors honestly.
+    qint64 effectiveStartMs = startMs;
+    qint64 effectiveEndMs = endMs;
+    if (startMs == 0 && endMs == 0 && m_durationProbe) {
+        qint64 durationMs = 0;
+        QString probeError;
+        if (m_durationProbe->durationMs(media->path(), &durationMs, &probeError)
+            && durationMs > 0) {
+            effectiveEndMs = durationMs;
+            outcome.notes.append(QStringLiteral("Using the whole clip (0..%1 ms).")
+                                     .arg(durationMs));
+        } else {
+            outcome.notes.append(
+                QStringLiteral("Could not determine the clip duration; specify "
+                               "an explicit time range. (%1)")
+                    .arg(probeError.isEmpty() ? QStringLiteral("duration unavailable")
+                                              : probeError));
+        }
+    }
+    outcome.startMs = effectiveStartMs;
+    outcome.endMs = effectiveEndMs;
 
     QString resolvedOutput = outputPath.trimmed();
     if (resolvedOutput.isEmpty()) {
@@ -517,14 +562,14 @@ bool Application::runReframeCommandTo(const QString &instruction, qint64 startMs
     request.sourceMediaId = media->id();
     request.instruction = outcome.instruction;
     request.outputPath = outcome.outputPath;
-    request.defaultRange = ReframePlan::TimeRange{ startMs, endMs };
+    request.defaultRange = ReframePlan::TimeRange{ effectiveStartMs, effectiveEndMs };
     request.defaultOutput = ReframePlan::OutputSpec{
         m_reframeOutputWidth, m_reframeOutputHeight, m_reframeOutputFps };
 
     const ReframeCommandResult result =
         m_commandExecutor(request, m_targetDetector, m_commandFrameProvider);
 
-    outcome.notes = result.notes;
+    outcome.notes.append(result.notes);
     outcome.unresolvedReferences = result.unresolvedReferences;
     outcome.resolvedTargets = result.resolvedTargets;
     if (result.intent.hasTimeRange) {
@@ -613,4 +658,44 @@ QString Application::defaultReframeOutputPath(const MediaItem &media) const
     const QFileInfo info(media.path());
     return info.absoluteDir().filePath(
         info.completeBaseName() + QStringLiteral("_reframe.mp4"));
+}
+
+QList<ReframeCommandOutcome> Application::reframeOutputs() const
+{
+    return m_reframeOutputs;
+}
+
+void Application::setMediaDurationProbe(MediaDurationProbe *probe)
+{
+    m_durationProbe = probe ? probe : m_ownedDurationProbe.get();
+}
+
+MediaDurationProbe *Application::mediaDurationProbe() const
+{
+    return m_durationProbe;
+}
+
+QJsonArray Application::reframeOutputsJson() const
+{
+    QJsonArray array;
+    for (const ReframeCommandOutcome &outcome : m_reframeOutputs) {
+        array.append(outcome.toJsonObject());
+    }
+    return array;
+}
+
+void Application::restoreReframeOutputsFromJson(const QJsonArray &outputs)
+{
+    m_reframeOutputs.clear();
+    for (const QJsonValue &value : outputs) {
+        if (!value.isObject()) {
+            continue;
+        }
+        ReframeCommandOutcome outcome;
+        QString error;
+        if (ReframeCommandOutcome::readFromJsonObject(value.toObject(), &outcome,
+                                                      &error)) {
+            m_reframeOutputs.append(outcome);
+        }
+    }
 }

@@ -28,7 +28,9 @@
 #include "core/MediaItem.h"
 #include "core/Project.h"
 #include "media/FfmpegFrameSource.h"
+#include "media/FfprobeDurationProbe.h"
 #include "media/FrameExtractor.h"
+#include "media/MediaDurationProbe.h"
 #include "media/FramePump.h"
 #include "media/FrameSource.h"
 #include "playback/Clock.h"
@@ -987,6 +989,19 @@ private slots:
     void applicationReframeCommandDoesNotModifySource();
     void mainWindowReframeCommandInputEmitsRequest();
     void mainWindowShowsReframeCommandResult();
+    void ffprobeDurationProbeParsesOutput();
+    void ffprobeDurationProbeReadsRealClip();
+    void applicationWholeClipRangeUsesDurationProbe();
+    void applicationExplicitRangeSkipsDurationProbe();
+    void applicationWholeClipProbeFailureIsHonest();
+    void applicationRecordsReframeOutputs();
+    void applicationRecordsFailedCommand();
+    void applicationPersistsReframeOutputs();
+    void applicationNewProjectClearsReframeOutputs();
+    void projectReframeOutputsRoundTrip();
+    void reframeCommandOutcomeJsonRoundTrip();
+    void mainWindowShowsReframeOutputs();
+    void mainWindowWholeClipDefaultRange();
     void realApplicationCommandIntegration();
     void equirectDirectionFromCenterAndSides();
     void equirectPixelRoundTrip();
@@ -7491,6 +7506,436 @@ void ProjectTest::mainWindowShowsReframeCommandResult()
     QVERIFY(label->text().contains(QStringLiteral("unresolved subject reference")));
 }
 
+// ================= 360 output persistence & duration ranges (Phase 4, Obj 10) ======
+// Model-free tests for the duration-probe seam, whole-clip range defaulting, and
+// persisted render records, plus one fast ffprobe/ffmpeg-gated probe test.
+
+namespace {
+
+class FakeDurationProbe : public MediaDurationProbe
+{
+public:
+    void setDuration(qint64 durationMs)
+    {
+        m_durationMs = durationMs;
+        m_ok = true;
+    }
+    void setFailure(const QString &error)
+    {
+        m_ok = false;
+        m_error = error;
+    }
+    QString name() const override { return QStringLiteral("fake"); }
+    bool durationMs(const QString &, qint64 *outDurationMs,
+                    QString *error) override
+    {
+        ++m_calls;
+        if (!m_ok) {
+            if (error) {
+                *error = m_error;
+            }
+            return false;
+        }
+        if (outDurationMs) {
+            *outDurationMs = m_durationMs;
+        }
+        return true;
+    }
+    int calls() const { return m_calls; }
+
+private:
+    qint64 m_durationMs = 0;
+    bool m_ok = false;
+    QString m_error;
+    int m_calls = 0;
+};
+
+// Generates a tiny deterministic clip with the external ffmpeg. Returns false
+// when ffmpeg/lavfi is unavailable, so callers can skip.
+bool generateTestClip(const QString &path, double seconds)
+{
+    const QString ffmpeg = FrameExtractor::defaultExecutablePath();
+    if (ffmpeg.isEmpty()) {
+        return false;
+    }
+    QProcess process;
+    process.setProcessChannelMode(QProcess::SeparateChannels);
+    process.start(ffmpeg, {
+        QStringLiteral("-y"), QStringLiteral("-v"), QStringLiteral("error"),
+        QStringLiteral("-f"), QStringLiteral("lavfi"),
+        QStringLiteral("-i"),
+        QStringLiteral("testsrc=size=64x32:rate=10:duration=%1").arg(seconds),
+        QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"),
+        QStringLiteral("-c:v"), QStringLiteral("libx264"), path
+    });
+    if (!process.waitForStarted(15000)) {
+        return false;
+    }
+    process.closeWriteChannel();
+    if (!process.waitForFinished(30000)) {
+        process.kill();
+        process.waitForFinished(2000);
+        return false;
+    }
+    return process.exitStatus() == QProcess::NormalExit
+        && process.exitCode() == 0 && QFileInfo::exists(path);
+}
+
+ReframeCommandExecutor successExecutor()
+{
+    return [](const ReframeCommandRequest &request, TargetDetector *,
+              ReframeFrameProvider *) {
+        ReframeCommandResult result;
+        result.ok = true;
+        result.frameCount = 5;
+        result.outputPath = request.outputPath;
+        result.plan.setSourceRange(ReframePlan::TimeRange{ 0, 2000 });
+        result.plan.setOutput(ReframePlan::OutputSpec{ 320, 180, 2.0 });
+        CameraKeyframe keyframe;
+        keyframe.timeMs = 0;
+        keyframe.yawDeg = 10.0;
+        keyframe.rollDeg = 0.0;
+        keyframe.fieldOfViewDeg = 90.0;
+        keyframe.interpolation = CameraKeyframe::Interpolation::Linear;
+        result.plan.setKeyframes({ keyframe });
+        return result;
+    };
+}
+
+} // namespace
+
+void ProjectTest::ffprobeDurationProbeParsesOutput()
+{
+    qint64 ms = -1;
+    QString error;
+    QVERIFY(FfprobeDurationProbe::parseDurationOutput(
+        QStringLiteral("12.012000"), &ms, &error));
+    QCOMPARE(ms, qint64(12012));
+    QVERIFY(FfprobeDurationProbe::parseDurationOutput(QStringLiteral("  1.5\n"),
+                                                      &ms, &error));
+    QCOMPARE(ms, qint64(1500));
+    QVERIFY(!FfprobeDurationProbe::parseDurationOutput(QStringLiteral("N/A"), &ms,
+                                                       &error));
+    QVERIFY(!error.isEmpty());
+    QVERIFY(!FfprobeDurationProbe::parseDurationOutput(QStringLiteral("0"), &ms,
+                                                       &error));
+    QVERIFY(!FfprobeDurationProbe::parseDurationOutput(QStringLiteral("-2.0"), &ms,
+                                                       &error));
+    QVERIFY(!FfprobeDurationProbe::parseDurationOutput(QString(), &ms, &error));
+}
+
+void ProjectTest::ffprobeDurationProbeReadsRealClip()
+{
+    if (FfprobeDurationProbe::defaultExecutablePath().isEmpty()) {
+        QSKIP("ffprobe is unavailable");
+    }
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable");
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString clip = directory.filePath(QStringLiteral("clip.mp4"));
+    if (!generateTestClip(clip, 1.0)) {
+        QSKIP("could not generate a test clip");
+    }
+
+    FfprobeDurationProbe probe;
+    qint64 ms = 0;
+    QString error;
+    QVERIFY2(probe.durationMs(clip, &ms, &error), qPrintable(error));
+    QVERIFY(qAbs(ms - 1000) < 200);
+    QVERIFY(!probe.durationMs(directory.filePath(QStringLiteral("missing.mp4")),
+                              &ms, &error));
+    QVERIFY(!error.isEmpty());
+}
+
+void ProjectTest::applicationWholeClipRangeUsesDurationProbe()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    FakeDurationProbe probe;
+    probe.setDuration(25000);
+    app.setMediaDurationProbe(&probe);
+
+    ReframeCommandRequest captured;
+    bool called = false;
+    app.setReframeCommandExecutor(
+        [&called, &captured](const ReframeCommandRequest &request,
+                             TargetDetector *, ReframeFrameProvider *) {
+            called = true;
+            captured = request;
+            ReframeCommandResult result;
+            result.ok = true;
+            result.outputPath = request.outputPath;
+            return result;
+        });
+
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 0,
+                                    directory.filePath(QStringLiteral("out.mp4"))));
+    QVERIFY(called);
+    QCOMPARE(probe.calls(), 1);
+    QCOMPARE(captured.defaultRange.startMs, qint64(0));
+    QCOMPARE(captured.defaultRange.endMs, qint64(25000));
+    QCOMPARE(app.lastReframeCommandOutcome().endMs, qint64(25000));
+    QVERIFY(app.lastReframeCommandOutcome().notes.join(QStringLiteral("\n"))
+                .contains(QStringLiteral("whole clip")));
+}
+
+void ProjectTest::applicationExplicitRangeSkipsDurationProbe()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    FakeDurationProbe probe;
+    probe.setDuration(25000);
+    app.setMediaDurationProbe(&probe);
+
+    ReframeCommandRequest captured;
+    app.setReframeCommandExecutor(
+        [&captured](const ReframeCommandRequest &request, TargetDetector *,
+                    ReframeFrameProvider *) {
+            captured = request;
+            ReframeCommandResult result;
+            result.ok = true;
+            result.outputPath = request.outputPath;
+            return result;
+        });
+
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                    directory.filePath(QStringLiteral("out.mp4"))));
+    QCOMPARE(probe.calls(), 0);
+    QCOMPARE(captured.defaultRange.startMs, qint64(0));
+    QCOMPARE(captured.defaultRange.endMs, qint64(2000));
+}
+
+void ProjectTest::applicationWholeClipProbeFailureIsHonest()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    FakeDurationProbe probe;
+    probe.setFailure(QStringLiteral("ffprobe not found"));
+    app.setMediaDurationProbe(&probe);
+    app.setReframeCommandExecutor(prepareExecutor());
+
+    QVERIFY(!app.runReframeCommandTo(QStringLiteral("pan right"), 0, 0,
+                                     directory.filePath(QStringLiteral("out.mp4"))));
+    const ReframeCommandOutcome &outcome = app.lastReframeCommandOutcome();
+    QVERIFY(!outcome.ok);
+    QVERIFY(outcome.notes.join(QStringLiteral("\n"))
+                .contains(QStringLiteral("Could not determine the clip duration")));
+    QVERIFY(outcome.error.contains(QStringLiteral("range")));
+}
+
+void ProjectTest::applicationRecordsReframeOutputs()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandExecutor(successExecutor());
+
+    int signalCount = 0;
+    QObject::connect(&app, &Application::reframeOutputsChanged,
+                     [&signalCount](const QList<ReframeCommandOutcome> &) {
+                         ++signalCount;
+                     });
+
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                    directory.filePath(QStringLiteral("a.mp4"))));
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                    directory.filePath(QStringLiteral("b.mp4"))));
+
+    QCOMPARE(app.reframeOutputs().size(), 2);
+    QCOMPARE(signalCount, 2);
+    const ReframeCommandOutcome &record = app.reframeOutputs().at(0);
+    QVERIFY(record.ok);
+    QCOMPARE(record.instruction, QStringLiteral("pan right"));
+    QCOMPARE(record.frameCount, 5);
+    QCOMPARE(record.outputWidth, 320);
+    QCOMPARE(record.outputHeight, 180);
+    QCOMPARE(record.sourceMediaId, app.activeMediaId());
+}
+
+void ProjectTest::applicationRecordsFailedCommand()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandExecutor(
+        [](const ReframeCommandRequest &request, TargetDetector *,
+           ReframeFrameProvider *) {
+            ReframeCommandResult result;
+            result.ok = false;
+            result.error = QStringLiteral("simulated render failure");
+            result.outputPath = request.outputPath;
+            return result;
+        });
+
+    QVERIFY(!app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                     directory.filePath(QStringLiteral("out.mp4"))));
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    QVERIFY(!app.reframeOutputs().at(0).ok);
+    QCOMPARE(app.reframeOutputs().at(0).error,
+             QStringLiteral("simulated render failure"));
+}
+
+void ProjectTest::applicationPersistsReframeOutputs()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandExecutor(successExecutor());
+    const QString outputPath = directory.filePath(QStringLiteral("out.mp4"));
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                    outputPath));
+    const QString projectPath = directory.filePath(QStringLiteral("proj.reel"));
+    QVERIFY(app.saveProject(projectPath));
+
+    Application reopened;
+    QVERIFY(reopened.openProject(projectPath));
+    QCOMPARE(reopened.reframeOutputs().size(), 1);
+    const ReframeCommandOutcome &record = reopened.reframeOutputs().at(0);
+    QVERIFY(record.ok);
+    QCOMPARE(record.instruction, QStringLiteral("pan right"));
+    QCOMPARE(record.outputPath, QFileInfo(outputPath).absoluteFilePath());
+    QCOMPARE(record.frameCount, 5);
+    QCOMPARE(reopened.reframeOutputs().at(0).startMs, qint64(0));
+    QCOMPARE(reopened.reframeOutputs().at(0).endMs, qint64(2000));
+}
+
+void ProjectTest::applicationNewProjectClearsReframeOutputs()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandExecutor(successExecutor());
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                    directory.filePath(QStringLiteral("out.mp4"))));
+    QVERIFY(!app.reframeOutputs().isEmpty());
+
+    int signalCount = 0;
+    QObject::connect(&app, &Application::reframeOutputsChanged,
+                     [&signalCount](const QList<ReframeCommandOutcome> &) {
+                         ++signalCount;
+                     });
+    app.newProject();
+    QVERIFY(app.reframeOutputs().isEmpty());
+    QCOMPARE(signalCount, 1);
+}
+
+void ProjectTest::projectReframeOutputsRoundTrip()
+{
+    Project project;
+    QJsonArray outputs;
+    QJsonObject record;
+    record.insert(QStringLiteral("ok"), true);
+    record.insert(QStringLiteral("instruction"), QStringLiteral("pan right"));
+    record.insert(QStringLiteral("outputPath"), QStringLiteral("/tmp/x.mp4"));
+    outputs.append(record);
+    project.setReframeOutputs(outputs);
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("p.reel"));
+    QVERIFY(project.save(path));
+
+    bool ok = false;
+    QString error;
+    const Project loaded = Project::load(path, &ok, &error);
+    QVERIFY2(ok, qPrintable(error));
+    QCOMPARE(loaded.schemaVersion(), Project::CurrentSchemaVersion);
+    QCOMPARE(loaded.reframeOutputs().size(), 1);
+    QCOMPARE(loaded.reframeOutputs().at(0).toObject()
+                 .value(QStringLiteral("outputPath"))
+                 .toString(),
+             QStringLiteral("/tmp/x.mp4"));
+}
+
+void ProjectTest::reframeCommandOutcomeJsonRoundTrip()
+{
+    ReframeCommandOutcome outcome;
+    outcome.ok = true;
+    outcome.instruction = QStringLiteral("follow person 1");
+    outcome.sourceMediaId = QStringLiteral("m1");
+    outcome.sourcePath = QStringLiteral("/tmp/clip.mp4");
+    outcome.outputPath = QStringLiteral("/tmp/out.mp4");
+    outcome.startMs = 35000;
+    outcome.endMs = 70000;
+    outcome.outputWidth = 1080;
+    outcome.outputHeight = 1920;
+    outcome.outputFps = 30.0;
+    outcome.frameCount = 42;
+    outcome.notes << QStringLiteral("using the whole clip");
+    outcome.resolvedTargets.append(
+        ReframeTarget{ QStringLiteral("me"), -27.9, -1.0 });
+
+    ReframeCommandOutcome restored;
+    QString error;
+    QVERIFY2(ReframeCommandOutcome::readFromJsonObject(outcome.toJsonObject(),
+                                                       &restored, &error),
+             qPrintable(error));
+    QVERIFY(restored.ok);
+    QCOMPARE(restored.instruction, QStringLiteral("follow person 1"));
+    QCOMPARE(restored.outputPath, QStringLiteral("/tmp/out.mp4"));
+    QCOMPARE(restored.startMs, qint64(35000));
+    QCOMPARE(restored.endMs, qint64(70000));
+    QCOMPARE(restored.outputWidth, 1080);
+    QCOMPARE(restored.outputHeight, 1920);
+    QCOMPARE(restored.frameCount, 42);
+    QCOMPARE(restored.notes.size(), 1);
+    QCOMPARE(restored.resolvedTargets.size(), 1);
+    QVERIFY(qAbs(restored.resolvedTargets.at(0).yawDeg + 27.9) < 1e-9);
+
+    QJsonObject malformed;
+    malformed.insert(QStringLiteral("instruction"), QStringLiteral("x"));
+    QVERIFY(!ReframeCommandOutcome::readFromJsonObject(malformed, &restored,
+                                                       &error));
+    QVERIFY(!error.isEmpty());
+}
+
+void ProjectTest::mainWindowShowsReframeOutputs()
+{
+    TestMainWindow window;
+    ReframeCommandOutcome success;
+    success.ok = true;
+    success.instruction = QStringLiteral("pan right");
+    success.outputPath = QStringLiteral("/tmp/a.mp4");
+    ReframeCommandOutcome failure;
+    failure.ok = false;
+    failure.instruction = QStringLiteral("follow me");
+    failure.outputPath = QStringLiteral("/tmp/b.mp4");
+    failure.error = QStringLiteral("unresolved subject reference");
+    window.showReframeOutputs({ success, failure });
+
+    auto *list = window.findChild<QListWidget *>("reframeOutputsList");
+    QVERIFY(list);
+    QCOMPARE(list->count(), 2);
+    QVERIFY(list->item(0)->text().contains(QStringLiteral("pan right")));
+    QVERIFY(list->item(1)->text().contains(QStringLiteral("failed")));
+    QVERIFY(list->item(1)->text().contains(
+        QStringLiteral("unresolved subject reference")));
+}
+
+void ProjectTest::mainWindowWholeClipDefaultRange()
+{
+    TestMainWindow window;
+    QSignalSpy spy(&window, &MainWindow::reframeCommandRequested);
+    auto *button = window.findChild<QPushButton *>("runReframeCommandButton");
+    QVERIFY(button);
+    button->click();
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.first().at(1).toLongLong(), qint64(0));
+    QCOMPARE(spy.first().at(2).toLongLong(), qint64(0));
+}
+
 // Real application command path (Objective 9; skipped unless configured).
 void ProjectTest::realApplicationCommandIntegration()
 {
@@ -7523,12 +7968,15 @@ void ProjectTest::realApplicationCommandIntegration()
     app.setTargetDetector(&detector);
     app.setReframeDefaultOutput(640, 360, 2.0);
 
-    const bool ok =
-        app.runReframeCommandTo(QStringLiteral("follow person 1"), 0, 12000,
-                                outputPath);
+    // Whole-clip range (Objective 10): a zero range is resolved from the
+    // probed media duration.
+    const bool ok = app.runReframeCommandTo(QStringLiteral("follow person 1"), 0,
+                                            0, outputPath);
     const ReframeCommandOutcome &outcome = app.lastReframeCommandOutcome();
-    qInfo("application command: ok=%d frames=%d output=%s", ok ? 1 : 0,
-          outcome.frameCount, qPrintable(outcome.outputPath));
+    qInfo("application command: ok=%d range=%lld..%lld frames=%d output=%s",
+          ok ? 1 : 0, static_cast<long long>(outcome.startMs),
+          static_cast<long long>(outcome.endMs), outcome.frameCount,
+          qPrintable(outcome.outputPath));
     for (const QString &note : outcome.notes) {
         qInfo("  app command note: %s", qPrintable(note));
     }
@@ -7536,8 +7984,25 @@ void ProjectTest::realApplicationCommandIntegration()
     QCOMPARE(outcome.resolvedTargets.size(), 1);
     QCOMPARE(outcome.sourceMediaId, app.activeMediaId());
     QVERIFY(outcome.frameCount > 0);
+    QVERIFY(outcome.endMs > 11000); // whole clip probed from the ~12 s proxy
     QVERIFY(QFileInfo::exists(outcome.outputPath));
     QVERIFY(QFileInfo(outcome.outputPath).size() > 0);
+
+    // The render record persists through save/open.
+    QTemporaryDir projectDirectory;
+    QVERIFY(projectDirectory.isValid());
+    const QString projectPath =
+        projectDirectory.filePath(QStringLiteral("obj10.reel"));
+    QVERIFY(app.saveProject(projectPath));
+    Application reopened;
+    QVERIFY(reopened.openProject(projectPath));
+    QCOMPARE(reopened.reframeOutputs().size(), 1);
+    const ReframeCommandOutcome &record = reopened.reframeOutputs().at(0);
+    QVERIFY(record.ok);
+    QCOMPARE(record.instruction, QStringLiteral("follow person 1"));
+    QCOMPARE(record.outputPath, QFileInfo(outcome.outputPath).absoluteFilePath());
+    QVERIFY(record.endMs > 11000);
+    qInfo("persisted render record: %s", qPrintable(record.outputPath));
 }
 
 

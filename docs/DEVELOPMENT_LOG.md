@@ -1352,3 +1352,36 @@ Wire the library-level `ReframeCommandRunner` into the application so a user can
 ### Decisions
 
 - Decision 026 recorded. Decisions 017-025 preserved unchanged.
+---
+
+## 2026-09-17 — 360 Reframing Objective 10: Persisted Outputs and Duration-Aware Ranges
+
+### Objective
+
+Persist generated renders in the project and add duration-aware full-clip ranges via the deferred ffprobe duration metadata, so range-less commands default to the whole clip.
+
+### Work completed
+
+- `app/media/MediaDurationProbe.h` + `app/media/FfprobeDurationProbe.{h,cpp}`: a replaceable, external, fail-safe duration seam (external ffprobe; `REELCRAFT_FFPROBE`, a sibling of the resolved ffmpeg, then `PATH`). Reads only; deterministic failures; no codec dependency linked.
+- `Application::runReframeCommandTo()`: a zero start/end range ("whole clip") is resolved through the probe to `[0, durationMs]`; explicit ranges never probe; if the duration is unknown the request keeps an invalid range and the runner honestly reports it (or uses the command's own range).
+- Render records: every command that reaches an output target appends its `ReframeCommandOutcome` (success or failure with its error) to the authoritative list; `Project` gained an additive `reframeOutputs` section and `CurrentSchemaVersion` 3; `Application` emits `reframeOutputsChanged`; `ReframeCommandOutcome::readFromJsonObject` restores records.
+- `MainWindow`: range controls default to 0/0 (whole clip) and a generated-render list is populated from `reframeOutputsChanged`.
+- 13 new model-free tests; `realApplicationCommandIntegration` extended to whole-clip + save/open persistence.
+
+### Verification
+
+- Model-free suite: 339 passed, 0 failed, 3 skipped (~54 s).
+- Focused Objective 10 tests: 13 passed (including the ffmpeg/ffprobe-gated probe test, which ran).
+- Test build and standalone application build both succeed.
+- Real footage (audio+video proxy; original untouched): the whole-clip probe resolved 0..12012 ms (the 12012 ms sample was honestly recorded as undecodable and skipped), "follow person 1" resolved to t1 and rendered 24 frames to a 640x360 clip, and the render record survived save/open.
+- Change-impact: the probe is a new leaf seam; the record is the existing outcome; `ReframeCommandRunner`, the pipeline/renderer, and all perception/identity layers are unchanged.
+
+### Boundary notes / not implemented
+
+- The whole-clip default requires a working `ffprobe`; without it, range-less commands must specify a range (reported honestly). General playback duration metadata remains future work (Decision 017's broader gate).
+- Records are kept even if their output file later disappears; there is no render-availability revalidation yet.
+- Speaker-aware commands and GPU optimization remain future work.
+
+### Decisions
+
+- Decision 027 recorded. Decisions 017-026 preserved unchanged.

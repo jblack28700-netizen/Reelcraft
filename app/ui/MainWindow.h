@@ -56,6 +56,10 @@ public slots:
     // Presents the structured result of a 360 reframe command (Objective 9).
     void showReframeCommandResult(const ReframeCommandOutcome &outcome);
 
+    // Rebuilds the generated-render list from the authoritative records
+    // (Objective 10).
+    void showReframeOutputs(const QList<ReframeCommandOutcome> &outputs);
+
 signals:
     void newProjectRequested();
     void saveProjectRequested(const QString &filePath);
@@ -108,6 +112,7 @@ private:
     QDoubleSpinBox *m_commandEndSeconds = nullptr;
     QPushButton *m_runCommandButton = nullptr;
     QLabel *m_commandResultLabel = nullptr;
+    QListWidget *m_reframeOutputsList = nullptr;
 
     ViewerWidget *m_viewerWidget = nullptr;
 

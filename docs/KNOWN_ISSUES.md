@@ -348,7 +348,7 @@ Add an optional diarization/audio-visual provider behind the existing `SpeakerEv
 
 ### Status
 
-Open — intentional boundary; not a defect.
+Resolved (2026-09-17, Objective 10) — see Resolution.
 
 ### Description
 
@@ -361,6 +361,10 @@ After restarting or reopening a project, previously generated renders are not sh
 ### Planned Resolution
 
 Add a small project output section (or reuse the existing media/attributes pattern) to persist render records, and implement the deferred ffprobe duration metadata so range-less commands can default to the whole clip. Do not build a large persistence system before the project schema supports it.
+
+### Resolution
+
+Implemented in Objective 10 (Decision 027). `Project` gained an additive `reframeOutputs` section (`CurrentSchemaVersion` 3); the application records every command that reaches an output target and re-lists records through `reframeOutputsChanged`; and a replaceable `MediaDurationProbe`/`FfprobeDurationProbe` seam resolves a zero ("whole clip") range to `[0, durationMs]`. Model-free tests cover parsing, range defaulting, record creation, and save/open persistence; `realApplicationCommandIntegration` verifies whole-clip probing and persistence on real 360 footage. Remaining limitation: records are not revalidated against a now-missing output file, and a missing ffprobe still requires an explicit range.
 
 ---
 

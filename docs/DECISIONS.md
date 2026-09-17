@@ -828,3 +828,24 @@ Objective 8 delivered `ReframeCommandRunner`, a library-level composition entry 
 - 17 new model-free application tests cover project/active-media/empty-command validation, missing source, invalid output directory, source-equals-output, request delegation and outcome mapping, model-free subject resolution, unresolved/ambiguous honesty, missing detector, invalid range, render-failure propagation, determinism, source non-modification, the UI request signal, and result presentation; a resolver-robustness test proves an undecodable sample no longer aborts sequence resolution. Full model-free suite: 326 passed / 0 failed / 3 skipped.
 - A new env-gated `realApplicationCommandIntegration` exercises the application command path on real 360 footage with the Apache-2.0 YOLOX detector; the normal suite stays model-free. Real-run evidence is recorded in `CURRENT_STATE.md` and `DEVELOPMENT_LOG.md`.
 - `ReframeCommandRunner` and everything below it are unchanged; Decisions 017–025 preserved. Persisting rendered outputs and full-clip (duration-aware) ranges remain future work.
+
+# Decision 027 — Duration Probing and Persisted Render Records
+
+**Status:** Accepted (2026-09-17, 360 Reframing Objective 10)
+
+## Context
+
+Decision 017 deferred ffprobe duration metadata to "its own decision/objective", and Objective 9 recorded two gaps (see `KNOWN_ISSUES.md`): generated renders were session state (not persisted in the project), and range-less commands used a caller-supplied fallback range because the application could not know the clip duration. Objective 10 explicitly scopes both: "Persist generated renders (or add a project output section) and add duration-aware full-clip ranges via the deferred ffprobe duration metadata." This decision satisfies that deferred gate for the 360 command path rather than silently reopening it.
+
+## Decisions
+
+- **Duration probing is a replaceable, external, fail-safe media-engine seam.** `app/media/MediaDurationProbe.h` defines `durationMs(filePath, ...)`; `FfprobeDurationProbe` implements it with the external `ffprobe` executable (never linked), resolved via `REELCRAFT_FFPROBE`, then a sibling `ffprobe` next to the resolved ffmpeg executable, then `PATH`. It reads the file only, validates existence/regularity, and fails deterministically (unavailable executable, missing file, non-zero exit, timeout, unparsable or non-positive duration). The application owns no codec dependency.
+- **Whole-clip sentinel.** A zero start/end range means "the whole clip". `Application::runReframeCommandTo()` resolves it through the probe to `[0, durationMs]`. If the probe is unavailable the range stays invalid and the existing `ReframeCommandRunner` honestly reports an invalid range (or uses an explicit range parsed from the command). `MainWindow`'s range controls default to 0/0 with a "(0=whole)" hint. Probing happens only for the whole-clip sentinel, never for an explicit range.
+- **Render records are the existing structured outcome, persisted additively.** Every command that reaches an output target appends its `ReframeCommandOutcome` (success or failure, with the error) to the application's authoritative record list. `Project` gains an additive `reframeOutputs` JSON array and `CurrentSchemaVersion` becomes 3; schema-2 projects load with an empty list and future schemas are still rejected. `Application` emits `reframeOutputsChanged` and `MainWindow` re-lists the records.
+- **No parallel architecture.** The probe is a leaf seam in the media layer mirroring `FrameExtractor`; the record is the existing `ReframeCommandOutcome`; persistence reuses the project's additive-section pattern. `ReframeCommandRunner`, the deterministic pipeline/renderer, the perception/identity/appearance/speaker layers, no-fabrication behavior, and original-media protection are unchanged.
+
+## Consequences
+
+- 13 new model-free tests cover duration-output parsing, whole-clip range defaulting, explicit-range probe skipping, probe-failure honesty, record creation (success and failure), save/open persistence, new-project clearing, the project-section round-trip, outcome JSON round-trip, the UI record list, and the whole-clip UI default; one ffmpeg/ffprobe-gated test probes a generated clip. Full model-free suite: 339 passed / 0 failed / 3 skipped.
+- Real-footage validation at completion: `realApplicationCommandIntegration` now uses the whole-clip range (probed from the ~12 s proxy) and verifies the render record survives save/open; the result is recorded in `CURRENT_STATE.md` and `DEVELOPMENT_LOG.md`.
+- Decisions 017–026 preserved. The deferred Phase 3 ffprobe gate is satisfied for the 360 command path; general playback duration metadata remains future work.

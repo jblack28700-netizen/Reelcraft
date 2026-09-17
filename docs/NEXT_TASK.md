@@ -305,8 +305,22 @@ Wire the library-level `ReframeCommandRunner` into the Reelcraft application so 
 - 17 new model-free tests; full model-free suite 325 passed / 0 failed / 3 skipped. New env-gated `realApplicationCommandIntegration`.
 - Architecture decision: Decision 026.
 
-## Next Objective — Persisted Outputs and Duration-Aware Ranges — NOT STARTED
+## 360 Reframing Objective 10 — Persisted Outputs and Duration-Aware Ranges — Complete
 
-Persist generated renders (or add a project output section) and add duration-aware full-clip ranges via the deferred ffprobe duration metadata, so range-less commands can default to the whole clip. Speaker-aware commands and GPU optimization remain further candidates. Requires its own scoped objective; do not begin automatically.
+Status: **Complete — implemented and verified (2026-09-17).**
+
+### Objective
+Persist generated renders in the project and add duration-aware full-clip ranges via the deferred ffprobe duration metadata, so range-less commands default to the whole clip.
+
+### Scope (implemented)
+- `app/media/MediaDurationProbe.h` + `FfprobeDurationProbe.{h,cpp}`: replaceable, external, fail-safe duration seam (ffprobe resolved via `REELCRAFT_FFPROBE`, a sibling of the ffmpeg executable, or `PATH`).
+- `Application::runReframeCommandTo()`: a zero start/end range means "the whole clip" and is resolved through the probe to `[0, durationMs]`; explicit ranges never probe; an unknown duration errors honestly (or uses the command's own range).
+- Render records: every command that reaches an output target appends its `ReframeCommandOutcome`; `Project` gains an additive `reframeOutputs` section (schema 3); `Application` emits `reframeOutputsChanged`; `MainWindow` re-lists records and defaults its range controls to 0/0 (whole clip).
+- 13 new model-free tests; full model-free suite 339 passed / 0 failed / 3 skipped. `realApplicationCommandIntegration` extended to whole-clip + persistence.
+- Architecture decision: Decision 027.
+
+## Next Objective — Speaker-Aware 360 Commands — NOT STARTED
+
+Reuse the Objective 6/7 speaker evidence layer inside the application command path so commands such as "follow the speaker" select the active speaking target, keeping audio as evidence and never overriding an explicit creator selection. GPU optimization and the deferred Phase 3 player-lifecycle objective remain further candidates. Requires its own scoped objective; do not begin automatically.
 
 

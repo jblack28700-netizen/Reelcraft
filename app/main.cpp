@@ -49,6 +49,8 @@ int main(int argc, char *argv[])
                      &application, &Application::runReframeCommand);
     QObject::connect(&application, &Application::reframeCommandFinished,
                      &window, &MainWindow::showReframeCommandResult);
+    QObject::connect(&application, &Application::reframeOutputsChanged,
+                     &window, &MainWindow::showReframeOutputs);
     QObject::connect(&application, &Application::mediaListChanged,
                      &window, &MainWindow::showMediaList);
     QObject::connect(&application, &Application::activeMediaChanged,

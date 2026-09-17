@@ -5,10 +5,12 @@
 #include <QList>
 
 #include <functional>
+#include <memory>
 
 #include "application/ReframeCommandOutcome.h"
 #include "core/MediaItem.h"
 #include "core/Project.h"
+#include "media/MediaDurationProbe.h"
 #include "reframe/ReframeCommandRunner.h"
 
 class ViewportState;
@@ -137,6 +139,18 @@ public slots:
     // Default output specification used when the command does not specify one.
     void setReframeDefaultOutput(int width, int height, double fps);
 
+    // --- generated render records (Objective 10) ----------------------------
+    // The authoritative, ordered list of command attempts that reached an
+    // output target (success and failure), recorded during the session and
+    // persisted additively in the project.
+    QList<ReframeCommandOutcome> reframeOutputs() const;
+
+    // Replaceable, optional media duration probe used to default a whole-clip
+    // range (a zero start/end). The application owns a built-in ffprobe probe;
+    // this override is non-owned. Passing null restores the built-in probe.
+    void setMediaDurationProbe(MediaDurationProbe *probe);
+    MediaDurationProbe *mediaDurationProbe() const;
+
 signals:
     void projectChanged(const Project &project);
     void backgroundCompleted(const QString &message);
@@ -159,9 +173,15 @@ signals:
     // structured, application-visible information.
     void reframeCommandFinished(const ReframeCommandOutcome &outcome);
 
+    // Emitted whenever the persisted render-record list changes (a new record,
+    // a new/opened project).
+    void reframeOutputsChanged(const QList<ReframeCommandOutcome> &outputs);
+
 private:
     bool decodePreviewFrameAt(double targetSeconds);
     QString defaultReframeOutputPath(const MediaItem &media) const;
+    QJsonArray reframeOutputsJson() const;
+    void restoreReframeOutputsFromJson(const QJsonArray &outputs);
 
     QJsonArray mediaJson() const;
     void restoreMediaFromJson(const QJsonArray &media);
@@ -185,4 +205,8 @@ private:
     int m_reframeOutputWidth = 1920;
     int m_reframeOutputHeight = 1080;
     double m_reframeOutputFps = 30.0;
+
+    std::unique_ptr<MediaDurationProbe> m_ownedDurationProbe;
+    MediaDurationProbe *m_durationProbe = nullptr;
+    QList<ReframeCommandOutcome> m_reframeOutputs;
 };

@@ -27,6 +27,12 @@ public:
     QJsonArray media() const;
     void setMedia(const QJsonArray &media);
 
+    // Optional additive section for generated 360 render records (Objective 10).
+    // Kept as opaque JSON, mirroring the media section: Application owns the
+    // authoritative records and serializes them here on save.
+    QJsonArray reframeOutputs() const;
+    void setReframeOutputs(const QJsonArray &reframeOutputs);
+
     // Optional additive reference to the active/selected media record id.
     // Written only when non-empty; read leniently. Mirrors the viewerState
     // pattern: Application owns the authoritative value and validates it
@@ -35,7 +41,7 @@ public:
     void setActiveMediaId(const QString &activeMediaId);
 
     int schemaVersion() const;
-    static constexpr int CurrentSchemaVersion = 2;
+    static constexpr int CurrentSchemaVersion = 3;
 
     bool save(const QString &filePath, QString *error = nullptr) const;
     static Project load(const QString &filePath, bool *ok = nullptr, QString *error = nullptr);
@@ -46,6 +52,7 @@ private:
     QDateTime m_created;
     QJsonObject m_viewerState;
     QJsonArray m_media;
+    QJsonArray m_reframeOutputs;
     QString m_activeMediaId;
     int m_schemaVersion = CurrentSchemaVersion;
 };

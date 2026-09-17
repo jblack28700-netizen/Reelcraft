@@ -64,6 +64,8 @@ An end-to-end 360 **user-command execution** path is implemented (Decision 025):
 
 That command path is now reachable from the application (Decision 026): `Application::runReframeCommand()`/`runReframeCommandTo()` select the active media, validate application state and the output location, delegate to `ReframeCommandRunner`, and emit a structured `ReframeCommandOutcome`; a minimal `MainWindow` command input/range/run/result surface and `main.cpp` wiring complete the user-visible flow. The detector and frame provider are optional, non-owned inputs (a `ProcessTargetDetector` is built from `REELCRAFT_TARGET_*` when configured). Generated renders are session state (not yet persisted), and range-less commands use a caller-supplied fallback range until duration metadata exists.
 
+Objective 10 (Decision 027) closed both gaps: a replaceable `MediaDurationProbe`/`FfprobeDurationProbe` seam (external ffprobe, no linked codec) resolves a zero ("whole clip") range to `[0, durationMs]`, and generated renders are persisted as an additive `reframeOutputs` project section (`CurrentSchemaVersion` 3) surfaced through `reframeOutputsChanged`. The application still never modifies the source media, and the deterministic command runner is unchanged.
+
 ---
 
 # 4. Current Development Camera

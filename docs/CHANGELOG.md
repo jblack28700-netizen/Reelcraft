@@ -623,3 +623,11 @@ Date: 2026-09-17
 - Hardened `TargetResolver::resolveSequence`: a single undecodable sample (for example the exact end of a clip) is now recorded and skipped instead of aborting the whole sequence, so range-end sampling cannot fail resolution.
 - Decision 026 records the orchestration boundary; Decisions 017-025 preserved.
 
+## v0.2.47 — Persisted Outputs and Duration-Aware Ranges
+
+Date: 2026-09-17
+
+- Added a replaceable media-duration seam: `MediaDurationProbe` + `FfprobeDurationProbe` report a clip's duration with the external `ffprobe` (resolved via `REELCRAFT_FFPROBE`, a sibling of the ffmpeg executable, or `PATH`). No codec dependency is linked, the source is only read, and every failure is deterministic.
+- A zero start/end range now means "the whole clip": `Application::runReframeCommandTo()` resolves it through the probe to `[0, durationMs]`. Explicit ranges are used directly and never probe; when the duration is unknown the command runner honestly reports an invalid range (or uses a range in the command). The UI range controls default to 0/0 (whole clip).
+- Generated render records are now persisted: every command that reaches an output target appends its structured `ReframeCommandOutcome` (success or failure with its error); `Project` gained an additive `reframeOutputs` section and `CurrentSchemaVersion` is 3 (schema-2 projects load with an empty list; future schemas are still rejected). The application emits `reframeOutputsChanged` and the UI re-lists the records.
+- 13 new model-free tests; full model-free suite 339 passed / 0 failed / 3 skipped. `realApplicationCommandIntegration` extended to whole-clip ranges and save/open persistence. Decision 027 recorded; Decisions 017-026 preserved.

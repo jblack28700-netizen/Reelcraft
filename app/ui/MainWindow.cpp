@@ -64,15 +64,17 @@ MainWindow::MainWindow(QWidget *parent)
     m_commandStartSeconds = new QDoubleSpinBox(central);
     m_commandStartSeconds->setRange(0.0, 36000.0);
     m_commandStartSeconds->setDecimals(2);
-    m_commandStartSeconds->setPrefix(QStringLiteral("start s: "));
+    m_commandStartSeconds->setPrefix(QStringLiteral("start s (0=whole): "));
     m_commandStartSeconds->setValue(0.0);
     m_commandEndSeconds = new QDoubleSpinBox(central);
     m_commandEndSeconds->setRange(0.0, 36000.0);
     m_commandEndSeconds->setDecimals(2);
-    m_commandEndSeconds->setPrefix(QStringLiteral("end s: "));
-    m_commandEndSeconds->setValue(10.0);
+    m_commandEndSeconds->setPrefix(QStringLiteral("end s (0=whole): "));
+    m_commandEndSeconds->setValue(0.0);
     m_runCommandButton = new QPushButton(QStringLiteral("Run 360 Command"), central);
     m_commandResultLabel = new QLabel(QStringLiteral("No reframe command run."), central);
+    m_reframeOutputsList = new QListWidget(central);
+    m_reframeOutputsList->setMinimumHeight(60);
 
     m_mediaListWidget = new QListWidget(central);
     m_mediaListWidget->setObjectName("mediaListWidget");
@@ -105,6 +107,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_commandEndSeconds->setObjectName("reframeEndSeconds");
     m_runCommandButton->setObjectName("runReframeCommandButton");
     m_commandResultLabel->setObjectName("reframeResultLabel");
+    m_reframeOutputsList->setObjectName("reframeOutputsList");
 
     m_viewerWidget = new ViewerWidget(central);
     m_viewerWidget->setObjectName("viewerWidget");
@@ -137,6 +140,7 @@ MainWindow::MainWindow(QWidget *parent)
     layout->addWidget(m_commandEndSeconds);
     layout->addWidget(m_runCommandButton);
     layout->addWidget(m_commandResultLabel);
+    layout->addWidget(m_reframeOutputsList);
     layout->addWidget(m_statusLabel);
 
     setCentralWidget(central);
@@ -373,6 +377,24 @@ void MainWindow::showReframeCommandResult(const ReframeCommandOutcome &outcome)
     } else {
         m_commandResultLabel->setText(
             QStringLiteral("Reframe command failed: %1").arg(outcome.error));
+    }
+}
+
+void MainWindow::showReframeOutputs(const QList<ReframeCommandOutcome> &outputs)
+{
+    if (!m_reframeOutputsList) {
+        return;
+    }
+    m_reframeOutputsList->clear();
+    for (const ReframeCommandOutcome &outcome : outputs) {
+        const QString status =
+            outcome.ok ? QStringLiteral("ok") : QStringLiteral("failed");
+        QString text = QStringLiteral("[%1] %2 -> %3")
+                           .arg(status, outcome.instruction, outcome.outputPath);
+        if (!outcome.ok && !outcome.error.isEmpty()) {
+            text += QStringLiteral(" (%1)").arg(outcome.error);
+        }
+        m_reframeOutputsList->addItem(text);
     }
 }
 

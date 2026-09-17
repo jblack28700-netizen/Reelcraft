@@ -2,7 +2,7 @@
 
 ## Current Version
 
-0.2.46
+0.2.47
 
 ## Current Branch
 
@@ -10,7 +10,7 @@ main
 
 ## Current Stage
 
-Phase 4 — 360 Reframing Engine (deterministic vertical slice), Target/Subject Resolution, real detector integration, structured target identity/selection, optional appearance-based re-identification, optional audio/speaker evidence, an audio-visual provider-attribution seam, end-to-end user-command execution, and application-level command orchestration implemented and verified. Phase 3 Media Engine remains open; its player-lifecycle objective is intentionally superseded for now by the human-approved 360 priority.
+Phase 4 — 360 Reframing Engine (deterministic vertical slice), Target/Subject Resolution, real detector integration, structured target identity/selection, optional appearance-based re-identification, optional audio/speaker evidence, an audio-visual provider-attribution seam, end-to-end user-command execution, application-level command orchestration, and persisted render records with duration-aware ranges implemented and verified. Phase 3 Media Engine remains open; its player-lifecycle objective is intentionally superseded for now by the human-approved 360 priority.
 
 ## Project Status
 
@@ -1025,7 +1025,18 @@ Status: Complete (2026-09-17). Wires the library-level `ReframeCommandRunner` in
 - Real footage (`realApplicationCommandIntegration`, audio+video proxy; original untouched): the command "follow person 1" resolved to track t1 (ordinal), rendered 24 frames to a 640x360 clip, and the range-end 12000 ms sample was honestly recorded as undecodable and skipped.
 - Architecture decision: Decision 026.
 
-Next: persist generated renders (or a project output section) and add duration-aware full-clip ranges (the deferred ffprobe duration metadata). Speaker-aware commands and GPU optimization remain further candidates.
+## Phase 4 Objective 10 — Persisted Outputs and Duration-Aware Ranges — Complete
+
+Status: Complete (2026-09-17). Persists generated 360 render records in the project and lets range-less commands default to the whole clip.
+
+- `app/media/MediaDurationProbe.h` + `FfprobeDurationProbe.{h,cpp}`: replaceable, external, fail-safe duration seam (ffprobe resolved via `REELCRAFT_FFPROBE`, a sibling of the ffmpeg executable, or `PATH`). No codec dependency is linked.
+- `Application::runReframeCommandTo()`: a zero start/end range means "the whole clip" and is resolved through the probe to `[0, durationMs]`; an explicit range is used directly and never probes. When the duration is unknown the runner honestly errors (or uses the command's own range).
+- Render records: every command that reaches an output target appends its `ReframeCommandOutcome` (success or failure, with its error); `Project` gains an additive `reframeOutputs` section with `CurrentSchemaVersion` 3; `Application` emits `reframeOutputsChanged`; `MainWindow` re-lists the records. The UI range controls default to 0/0 (whole clip).
+- 13 new model-free tests; full model-free suite 339 passed, 0 failed, 3 skipped. `realApplicationCommandIntegration` extended to whole-clip + persistence.
+- Real footage (`realApplicationCommandIntegration`, audio+video proxy; original untouched): the whole-clip probe resolved 0..12012 ms, "follow person 1" resolved to t1 and rendered 24 frames to a 640x360 clip, and the render record survived save/open.
+- Architecture decision: Decision 027.
+
+Next: speaker-aware 360 commands (reusing the Objective 6/7 speaker layer in the application command path) and GPU optimization remain the leading candidates; the deferred Phase 3 player-lifecycle objective also remains available when it serves the 360 capability. Requires its own scoped objective.
 
 
 

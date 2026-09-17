@@ -77,6 +77,87 @@ struct ReframeCommandOutcome
         object.insert(QStringLiteral("resolvedTargets"), targetArray);
         return object;
     }
+
+    // Restores one record. Lenient about optional fields, but a record must
+    // identify where the result was written (a non-empty output path), so
+    // malformed entries can be skipped deterministically by callers.
+    static bool readFromJsonObject(const QJsonObject &object,
+                                   ReframeCommandOutcome *out,
+                                   QString *error = nullptr)
+    {
+        if (error) {
+            error->clear();
+        }
+        if (!out) {
+            if (error) {
+                *error = QStringLiteral("Reframe command outcome output is null.");
+            }
+            return false;
+        }
+        ReframeCommandOutcome outcome;
+        outcome.ok = object.value(QStringLiteral("ok")).toBool(false);
+        outcome.instruction =
+            object.value(QStringLiteral("instruction")).toString();
+        outcome.sourceMediaId =
+            object.value(QStringLiteral("sourceMediaId")).toString();
+        outcome.sourcePath = object.value(QStringLiteral("sourcePath")).toString();
+        outcome.outputPath = object.value(QStringLiteral("outputPath")).toString();
+        outcome.startMs = static_cast<qint64>(
+            object.value(QStringLiteral("startMs")).toDouble());
+        outcome.endMs = static_cast<qint64>(
+            object.value(QStringLiteral("endMs")).toDouble());
+        outcome.outputWidth = object.value(QStringLiteral("outputWidth")).toInt();
+        outcome.outputHeight =
+            object.value(QStringLiteral("outputHeight")).toInt();
+        outcome.outputFps = object.value(QStringLiteral("outputFps")).toDouble();
+        outcome.frameCount = object.value(QStringLiteral("frameCount")).toInt();
+        outcome.error = object.value(QStringLiteral("error")).toString();
+
+        const QJsonValue notesValue = object.value(QStringLiteral("notes"));
+        if (notesValue.isArray()) {
+            for (const QJsonValue &value : notesValue.toArray()) {
+                if (value.isString()) {
+                    outcome.notes.append(value.toString());
+                }
+            }
+        }
+        const QJsonValue unresolvedValue =
+            object.value(QStringLiteral("unresolvedReferences"));
+        if (unresolvedValue.isArray()) {
+            for (const QJsonValue &value : unresolvedValue.toArray()) {
+                if (value.isString()) {
+                    outcome.unresolvedReferences.append(value.toString());
+                }
+            }
+        }
+        const QJsonValue targetsValue =
+            object.value(QStringLiteral("resolvedTargets"));
+        if (targetsValue.isArray()) {
+            for (const QJsonValue &value : targetsValue.toArray()) {
+                if (!value.isObject()) {
+                    continue;
+                }
+                const QJsonObject targetObject = value.toObject();
+                ReframeTarget target;
+                target.id = targetObject.value(QStringLiteral("id")).toString();
+                target.yawDeg =
+                    targetObject.value(QStringLiteral("yawDeg")).toDouble();
+                target.pitchDeg =
+                    targetObject.value(QStringLiteral("pitchDeg")).toDouble();
+                outcome.resolvedTargets.append(target);
+            }
+        }
+
+        if (outcome.outputPath.isEmpty()) {
+            if (error) {
+                *error = QStringLiteral(
+                    "Reframe command outcome has no output path.");
+            }
+            return false;
+        }
+        *out = outcome;
+        return true;
+    }
 };
 
 Q_DECLARE_METATYPE(ReframeCommandOutcome)

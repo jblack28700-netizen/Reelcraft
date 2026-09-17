@@ -10,6 +10,7 @@ SOURCES += \
     app/core/MediaItem.cpp \
     app/core/Project.cpp \
     app/media/FfmpegFrameSource.cpp \
+    app/media/FfprobeDurationProbe.cpp \
     app/media/FrameExtractor.cpp \
     app/media/FramePump.cpp \
     app/media/FrameSource.cpp \
@@ -58,7 +59,9 @@ HEADERS += \
     app/core/MediaItem.h \
     app/core/Project.h \
     app/media/FfmpegFrameSource.h \
+    app/media/FfprobeDurationProbe.h \
     app/media/FrameExtractor.h \
+    app/media/MediaDurationProbe.h \
     app/media/FramePump.h \
     app/media/FrameSource.h \
     app/playback/Clock.h \

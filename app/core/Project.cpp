@@ -58,6 +58,16 @@ void Project::setMedia(const QJsonArray &media)
     m_media = media;
 }
 
+QJsonArray Project::reframeOutputs() const
+{
+    return m_reframeOutputs;
+}
+
+void Project::setReframeOutputs(const QJsonArray &reframeOutputs)
+{
+    m_reframeOutputs = reframeOutputs;
+}
+
 QString Project::activeMediaId() const
 {
     return m_activeMediaId;
@@ -85,6 +95,9 @@ bool Project::save(const QString &filePath, QString *error) const
     }
     if (!m_media.isEmpty()) {
         object.insert(QStringLiteral("media"), m_media);
+    }
+    if (!m_reframeOutputs.isEmpty()) {
+        object.insert(QStringLiteral("reframeOutputs"), m_reframeOutputs);
     }
     if (!m_activeMediaId.isEmpty()) {
         object.insert(QStringLiteral("activeMediaId"), m_activeMediaId);
@@ -173,6 +186,12 @@ Project Project::load(const QString &filePath, bool *ok, QString *error)
     const QJsonValue mediaValue = object.value(QStringLiteral("media"));
     if (mediaValue.isArray()) {
         project.m_media = mediaValue.toArray();
+    }
+
+    const QJsonValue reframeOutputsValue =
+        object.value(QStringLiteral("reframeOutputs"));
+    if (reframeOutputsValue.isArray()) {
+        project.m_reframeOutputs = reframeOutputsValue.toArray();
     }
 
     const QJsonValue activeMediaIdValue = object.value(QStringLiteral("activeMediaId"));
