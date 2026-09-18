@@ -20,6 +20,11 @@ public:
     bool frameRate(const QString &filePath, double *outFps,
                    QString *error = nullptr) override;
 
+    // Objective 21: elementary-stream summary for the media-analysis technical
+    // layer. One ffprobe invocation, JSON output, no decoding.
+    bool streamSummary(const QString &filePath, StreamSummary *out,
+                       QString *error = nullptr) override;
+
     bool durationMs(const QString &filePath, qint64 *outDurationMs,
                     QString *error = nullptr) override;
 
@@ -31,6 +36,14 @@ public:
     // Exposed so the parsing contract is unit-testable without a process.
     static bool parseDurationOutput(const QString &output, qint64 *outDurationMs,
                                     QString *error = nullptr);
+
+    // Parses ffprobe's JSON stream listing (exposed so the parsing contract is
+    // unit-testable without a process). Reports only what the file actually
+    // declares: an absent video stream is hasVideo == false, never a default
+    // geometry.
+    static bool parseStreamSummary(const QByteArray &json,
+                                   StreamSummary *outSummary,
+                                   QString *error = nullptr);
 
     QString executablePath() const { return m_executablePath; }
 

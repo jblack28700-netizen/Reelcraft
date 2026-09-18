@@ -578,3 +578,45 @@ The mechanism was identified by elimination and artefact evidence rather than by
 - Standing rule (recorded in `DEVELOPMENT_ENVIRONMENT.md`): run `qmake` in **both** `reelcraft/` and `tests/` after adding or renaming source or header files, and re-run `make` twice so the second pass builds nothing.
 - Standing rule: a stack-canary abort or a behaviour change that appears without a corresponding source change should first be treated as a build-consistency problem — check that the artefact that changed is the one you think changed — before being treated as a product defect.
 
+
+# Issue — Media analysis is sampled, and its precision is a recorded limitation (2026-09-18)
+
+### Status
+
+Known and documented; not a defect.
+
+### Description
+
+Whole-video analysis samples the source on a configured interval (default 1000 ms) rather than examining every frame, because decoding every frame of a 4K/8K 360 source is not viable on the development device (a single 4K frame decode measured ~2.6 s). The artifact therefore records, per layer, both the sampling interval and the time ranges the sampling actually covers.
+
+### Impact
+
+- Observations are only as precise as the sampling grid. A cut point or a camera keyframe cannot be justified to better than the sampling interval by this evidence alone; reasoning that needs finer placement must request a targeted re-analysis rather than interpolating.
+- Coverage means "the span the sampling covers", not "every frame in it was examined". Coverage plus the recorded interval make that distinction explicit, but a consumer that ignores the interval can over-read the evidence.
+- The analysis scope is clamped to the last decodable timestamp (the probed duration is the end of the last frame, not a decodable timestamp), so the final frame duration is not sampled.
+
+### Planned Resolution
+
+None required for correctness. If finer placement is needed, the layer spec and coverage model already make "we do not know this interval well enough" decidable, so a targeted higher-resolution re-analysis can be added as a new layer revision without changing the artifact model.
+
+---
+
+# Issue — No retention or size policy for accumulated analysis artifacts (2026-09-18)
+
+### Status
+
+Known; deliberately deferred.
+
+### Description
+
+Analysis artifacts are stored as separate files named from their content identity (`analysis-<id>.json`), so a new analysis never overwrites an older one that a newer build wrote and this build cannot interpret. Nothing currently prunes them, and multiple analyses of the same media (after a specification or provider change) accumulate.
+
+### Impact
+
+- Disk usage grows with the number of distinct analysis runs; unbounded in principle, in the same class as the recorded unbounded edit-decision accumulation issue.
+- Not a correctness problem: the project holds one reference per media and resolution reports `Stale` rather than silently using an outdated artifact.
+
+### Planned Resolution
+
+A retention policy (keep the current artifact per media plus a bounded number of recent revisions, prune the rest on explicit creator action) is a future decision. Analysis is regenerable, so pruning can never lose information that cannot be recomputed.
+

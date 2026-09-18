@@ -25,6 +25,8 @@
 #include <cmath>
 #include <cstring>
 
+#include "analysis/MediaAnalysis.h"
+#include "analysis/MediaAnalysisRunner.h"
 #include "application/Application.h"
 #include "core/MediaItem.h"
 #include "core/Project.h"
@@ -1065,6 +1067,21 @@ private slots:
     void ffmpegFrameSourceLifecycleIsSafe();
     void reframeStreamProviderRejectsBadInputAndEndOfSource();
     void reframeRenderEquivalenceStreamingVersusSeek();
+    void mediaAnalysisJsonRoundTripAndIdentity();
+    void mediaAnalysisSchemaVersionAndDigestHandling();
+    void mediaAnalysisSourceStatusDistinguishesMissingFromChanged();
+    void mediaAnalysisLayerLifecycleAndCoverage();
+    void mediaAnalysisUnavailableFailedAndEmptyAreDistinct();
+    void mediaAnalysisPreservesUnreadableLayers();
+    void mediaAnalysisTechnicalLayerOnRealMedia();
+    void mediaAnalysisTargetsLayerUnavailableWithoutDetector();
+    void mediaAnalysisTargetsLayerPersistsSphericalTracks();
+    void mediaAnalysisSpecificationIdentity();
+    void mediaAnalysisWholeVideoUsesOnePersistentDecoder();
+    void mediaAnalysisPartialCoverageWhenSampleBudgetTruncates();
+    void projectAnalysisRefsPersistWithoutSchemaBump();
+    void mediaAnalysisMissingStaleAndInvalidAreNonFatal();
+    void replayIsIndependentOfMediaAnalysis();
     void realSourcePlaybackIntegration();
     void mainWindowPlaybackButtonsEmitRequests();
     void mainWindowShowsPlaybackStateAndPosition();
@@ -15517,6 +15534,1004 @@ void ProjectTest::speakerRegistryAnnotateDoesNotChangeResolution()
     QCOMPARE(restored.binding(QStringLiteral("me"))->speakerId,
              QStringLiteral("spk1"));
 }
+
+
+// ===========================================================================
+// Objective 21 — Persistent Media Analysis
+// ===========================================================================
+
+namespace {
+
+QDateTime analysisFixedTime()
+{
+    return QDateTime::fromString(QStringLiteral("2026-09-18T12:00:00.000Z"),
+                                 Qt::ISODateWithMs);
+}
+
+bool writeTextFile(const QString &path, const QByteArray &contents)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        return false;
+    }
+    file.write(contents);
+    file.close();
+    return true;
+}
+
+MediaAnalysis::Layer analysisLayer(const QString &kind,
+                                   MediaAnalysis::LayerState state)
+{
+    MediaAnalysis::Layer layer;
+    layer.kind = kind;
+    layer.state = state;
+    return layer;
+}
+
+MediaAnalysis analysisArtifactFor(const MediaItem &media, const QString &specHash)
+{
+    MediaAnalysis analysis;
+    MediaSourceReference source;
+    source.mediaId = media.id();
+    source.path = media.path();
+    source.sizeBytes = media.sizeBytes();
+    source.lastModifiedUtc = media.lastModifiedUtc();
+    analysis.setSource(source);
+    analysis.setCreatedUtc(analysisFixedTime());
+    analysis.setAnalysisSpecHash(specHash);
+    return analysis;
+}
+
+MediaAnalysisReference analysisReferenceFor(const MediaItem &media,
+                                            const MediaAnalysis &analysis,
+                                            const QString &artifactPath)
+{
+    MediaAnalysisReference reference;
+    reference.mediaId = media.id();
+    reference.artifactId = QString::fromLatin1(analysis.analysisId());
+    reference.artifactPath = artifactPath;
+    reference.sourceSizeBytes = media.sizeBytes();
+    reference.sourceLastModifiedUtc = media.lastModifiedUtc();
+    return reference;
+}
+
+} // namespace
+
+void ProjectTest::mediaAnalysisJsonRoundTripAndIdentity()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString mediaPath = directory.filePath(QStringLiteral("clip.bin"));
+    QVERIFY(writeTextFile(mediaPath, QByteArray("media-bytes")));
+    const MediaItem media = MediaItem::createFromFilePath(mediaPath);
+    QVERIFY(media.isValid());
+
+    MediaAnalysis analysis = analysisArtifactFor(media, QStringLiteral("spec-1"));
+    MediaAnalysis::Layer technical = analysisLayer(
+        MediaAnalysis::technicalLayerKind(), MediaAnalysis::LayerState::Complete);
+    technical.provider.name = QStringLiteral("ffprobe");
+    technical.provider.version = QStringLiteral("8.1.2");
+    MediaAnalysis::TimeRange range;
+    range.startMs = 0;
+    range.endMs = 12000;
+    technical.coverage.append(range);
+    QJsonObject facts;
+    facts.insert(QStringLiteral("kind"), QStringLiteral("media-facts"));
+    facts.insert(QStringLiteral("durationMs"), 12000.0);
+    technical.observations.append(facts);
+    analysis.setLayer(technical);
+
+    QVERIFY(analysis.isValid());
+
+    // The identity digest is a deterministic function of the payload.
+    const QByteArray id = analysis.analysisId();
+    QCOMPARE(id.size(), 64);
+    QCOMPARE(analysis.analysisId(), id);
+    QVERIFY(MediaAnalysis::isValidId(QString::fromLatin1(id)));
+    QVERIFY(analysis.suggestedFileName().endsWith(
+        QString::fromLatin1(id) + QStringLiteral(".json")));
+
+    const QString artifactPath = directory.filePath(QStringLiteral("analysis.json"));
+    QString error;
+    QVERIFY2(analysis.save(artifactPath, &error), qPrintable(error));
+
+    bool ok = false;
+    const MediaAnalysis loaded = MediaAnalysis::load(artifactPath, &ok, &error);
+    QVERIFY2(ok, qPrintable(error));
+    QCOMPARE(loaded.schemaVersion(), MediaAnalysis::CurrentSchemaVersion);
+    QCOMPARE(loaded.analysisSpecHash(), QStringLiteral("spec-1"));
+    QCOMPARE(loaded.analysisId(), id);
+    QCOMPARE(loaded.layers().size(), 1);
+    QVERIFY(loaded.isValid());
+    // Byte-identical payload: nothing is lost or reordered by a save/load cycle.
+    QCOMPARE(loaded.toJsonObject(), analysis.toJsonObject());
+    // And the digest survives the round trip, so a stored reference stays valid.
+    QCOMPARE(MediaAnalysis::isValidId(QString::fromLatin1(loaded.analysisId())), true);
+}
+
+void ProjectTest::mediaAnalysisSchemaVersionAndDigestHandling()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString mediaPath = directory.filePath(QStringLiteral("clip.bin"));
+    QVERIFY(writeTextFile(mediaPath, QByteArray("bytes")));
+    const MediaItem media = MediaItem::createFromFilePath(mediaPath);
+
+    MediaAnalysis analysis = analysisArtifactFor(media, QStringLiteral("spec"));
+    analysis.setLayer(analysisLayer(MediaAnalysis::technicalLayerKind(),
+                                    MediaAnalysis::LayerState::Complete));
+
+    MediaAnalysis out;
+    QString error;
+
+    // A future schema version is refused rather than partially understood.
+    QJsonObject future = analysis.toJsonObject();
+    future.insert(QStringLiteral("schemaVersion"),
+                  MediaAnalysis::CurrentSchemaVersion + 1);
+    QVERIFY(!MediaAnalysis::readFromJsonObject(future, &out, &error));
+    QVERIFY(!error.isEmpty());
+
+    // A missing schema version is refused.
+    QJsonObject missingVersion = analysis.toJsonObject();
+    missingVersion.remove(QStringLiteral("schemaVersion"));
+    QVERIFY(!MediaAnalysis::readFromJsonObject(missingVersion, &out, &error));
+
+    // A missing specification identity is refused: the artifact would be
+    // unusable, because staleness could not be decided.
+    QJsonObject missingSpec = analysis.toJsonObject();
+    missingSpec.remove(QStringLiteral("analysisSpecHash"));
+    QVERIFY(!MediaAnalysis::readFromJsonObject(missingSpec, &out, &error));
+
+    // A PRESENT digest that disagrees means the artifact was altered.
+    QJsonObject tampered = analysis.toJsonObject();
+    tampered.insert(QStringLiteral("analysisId"), QString(64, QLatin1Char('a')));
+    QVERIFY(!MediaAnalysis::readFromJsonObject(tampered, &out, &error));
+
+    // A MISSING digest is tolerated: it is derived, not authoritative.
+    QJsonObject withoutId = analysis.toJsonObject();
+    withoutId.remove(QStringLiteral("analysisId"));
+    QVERIFY(MediaAnalysis::readFromJsonObject(withoutId, &out, &error));
+    QCOMPARE(out.analysisId(), analysis.analysisId());
+
+    // A layer entry that is not an object is envelope corruption.
+    QJsonObject badLayer = analysis.toJsonObject();
+    QJsonArray badLayers;
+    badLayers.append(QStringLiteral("not-a-layer"));
+    badLayer.insert(QStringLiteral("layers"), badLayers);
+    QVERIFY(!MediaAnalysis::readFromJsonObject(badLayer, &out, &error));
+
+    // A malformed source reference is envelope corruption.
+    QJsonObject badSource = analysis.toJsonObject();
+    badSource.insert(QStringLiteral("source"), QJsonObject());
+    QVERIFY(!MediaAnalysis::readFromJsonObject(badSource, &out, &error));
+}
+
+void ProjectTest::mediaAnalysisSourceStatusDistinguishesMissingFromChanged()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString mediaPath = directory.filePath(QStringLiteral("clip.bin"));
+    QVERIFY(writeTextFile(mediaPath, QByteArray("original-bytes")));
+    const MediaItem media = MediaItem::createFromFilePath(mediaPath);
+    const MediaAnalysis analysis = analysisArtifactFor(media, QStringLiteral("spec"));
+
+    QString detail;
+    QCOMPARE(analysis.checkSource(&detail), MediaSourceStatus::Matches);
+    QVERIFY(detail.isEmpty());
+
+    // The file exists but is not the analyzed file.
+    QVERIFY(writeTextFile(mediaPath, QByteArray("different-and-longer-bytes")));
+    QCOMPARE(analysis.checkSource(&detail), MediaSourceStatus::FingerprintMismatch);
+    QVERIFY(!detail.isEmpty());
+
+    // The file is gone: a different failure with different operator meaning.
+    QVERIFY(QFile::remove(mediaPath));
+    QCOMPARE(analysis.checkSource(&detail), MediaSourceStatus::FileMissing);
+    QVERIFY(!detail.isEmpty());
+
+    QCOMPARE(mediaSourceStatusToString(MediaSourceStatus::Matches),
+             QStringLiteral("matches"));
+    QCOMPARE(mediaSourceStatusToString(MediaSourceStatus::FileMissing),
+             QStringLiteral("file-missing"));
+    QCOMPARE(mediaSourceStatusToString(MediaSourceStatus::FingerprintMismatch),
+             QStringLiteral("fingerprint-mismatch"));
+}
+
+void ProjectTest::mediaAnalysisLayerLifecycleAndCoverage()
+{
+    const MediaAnalysis::LayerState states[] = {
+        MediaAnalysis::LayerState::NotStarted,
+        MediaAnalysis::LayerState::InProgress,
+        MediaAnalysis::LayerState::Partial,
+        MediaAnalysis::LayerState::Complete,
+        MediaAnalysis::LayerState::Failed,
+        MediaAnalysis::LayerState::Unavailable,
+        MediaAnalysis::LayerState::Stale,
+    };
+    const QString expected[] = {
+        QStringLiteral("not-started"), QStringLiteral("in-progress"),
+        QStringLiteral("partial"),     QStringLiteral("complete"),
+        QStringLiteral("failed"),      QStringLiteral("unavailable"),
+        QStringLiteral("stale"),
+    };
+
+    for (int i = 0; i < 7; ++i) {
+        MediaAnalysis::Layer layer = analysisLayer(MediaAnalysis::targetsLayerKind(), states[i]);
+        layer.provider.name = QStringLiteral("provider");
+        layer.spec.perceptionWidth = 960;
+        layer.spec.perceptionHeight = 480;
+        layer.spec.sampleIntervalMs = 1000;
+        MediaAnalysis::TimeRange first;
+        first.startMs = 1000;
+        first.endMs = 2000;
+        MediaAnalysis::TimeRange second;
+        second.startMs = 3000;
+        second.endMs = 3500;
+        layer.coverage.append(first);
+        layer.coverage.append(second);
+
+        QCOMPARE(MediaAnalysis::layerStateToString(states[i]), expected[i]);
+
+        MediaAnalysis::Layer restored;
+        QString error;
+        QVERIFY2(MediaAnalysis::Layer::readFromJsonObject(layer.toJsonObject(),
+                                                          &restored, &error),
+                 qPrintable(error));
+        QCOMPARE(restored.state, states[i]);
+        QCOMPARE(restored.layerVersion, MediaAnalysis::CurrentLayerSchemaVersion);
+        QCOMPARE(restored.provider.name, QStringLiteral("provider"));
+        QCOMPARE(restored.spec.perceptionWidth, 960);
+        QCOMPARE(restored.spec.perceptionHeight, 480);
+        QCOMPARE(restored.spec.sampleIntervalMs, qint64(1000));
+        QCOMPARE(restored.coverage.size(), 2);
+        QCOMPARE(restored.coverage.at(0).startMs, qint64(1000));
+        QCOMPARE(restored.coverage.at(1).endMs, qint64(3500));
+        QCOMPARE(restored.coveredMs(), qint64(1500));
+
+        // Coverage is queryable, which is what makes "we never looked there"
+        // distinguishable from "nothing was there".
+        QVERIFY(restored.covers(1500));
+        QVERIFY(restored.covers(3200));
+        QVERIFY(!restored.covers(2500));
+        QVERIFY(!restored.covers(900));
+    }
+
+    // An unrecognized state tag is preserved rather than coerced.
+    MediaAnalysis::Layer unknownState =
+        analysisLayer(MediaAnalysis::targetsLayerKind(), MediaAnalysis::LayerState::Complete);
+    QJsonObject raw = unknownState.toJsonObject();
+    raw.insert(QStringLiteral("state"), QStringLiteral("reticulating"));
+    MediaAnalysis::Layer restored;
+    QString error;
+    QVERIFY(MediaAnalysis::Layer::readFromJsonObject(raw, &restored, &error));
+    QVERIFY(!restored.recognized);
+    QVERIFY(!restored.preservationReason.isEmpty());
+}
+
+void ProjectTest::mediaAnalysisUnavailableFailedAndEmptyAreDistinct()
+{
+    // A capability that CANNOT run here.
+    MediaAnalysis::Layer unavailable =
+        analysisLayer(MediaAnalysis::targetsLayerKind(),
+                      MediaAnalysis::LayerState::Unavailable);
+    unavailable.error = QStringLiteral("no detector configured");
+
+    // A capability that was attempted and failed.
+    MediaAnalysis::Layer failed =
+        analysisLayer(MediaAnalysis::targetsLayerKind(),
+                      MediaAnalysis::LayerState::Failed);
+    failed.error = QStringLiteral("the probe timed out");
+
+    // A capability that ran successfully and found nothing.
+    MediaAnalysis::Layer empty =
+        analysisLayer(MediaAnalysis::targetsLayerKind(),
+                      MediaAnalysis::LayerState::Complete);
+
+    QVERIFY(unavailable.state != failed.state);
+    QVERIFY(failed.state != empty.state);
+    QVERIFY(unavailable.state != empty.state);
+
+    // Only the empty layer carries evidence; "no people here" is a result, while
+    // "no detector" and "the detector broke" are not.
+    QVERIFY(!unavailable.hasEvidence());
+    QVERIFY(!failed.hasEvidence());
+    QVERIFY(empty.hasEvidence());
+    QVERIFY(empty.observations.isEmpty());
+
+    // Both non-results must be explainable, so a missing capability is never a
+    // silent blank.
+    QVERIFY(!unavailable.error.isEmpty());
+    QVERIFY(!failed.error.isEmpty());
+    QVERIFY(empty.error.isEmpty());
+
+    // The distinction survives serialization.
+    for (const MediaAnalysis::Layer &layer : { unavailable, failed, empty }) {
+        MediaAnalysis::Layer restored;
+        QString error;
+        QVERIFY(MediaAnalysis::Layer::readFromJsonObject(layer.toJsonObject(),
+                                                         &restored, &error));
+        QCOMPARE(restored.state, layer.state);
+        QCOMPARE(restored.error, layer.error);
+    }
+}
+
+void ProjectTest::mediaAnalysisPreservesUnreadableLayers()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString mediaPath = directory.filePath(QStringLiteral("clip.bin"));
+    QVERIFY(writeTextFile(mediaPath, QByteArray("bytes")));
+    const MediaItem media = MediaItem::createFromFilePath(mediaPath);
+    MediaAnalysis analysis = analysisArtifactFor(media, QStringLiteral("spec"));
+
+    // A capability written by a NEWER build: unknown kind, newer layer version,
+    // and fields this build has never heard of.
+    QJsonObject futureLayer;
+    futureLayer.insert(QStringLiteral("kind"), QStringLiteral("semantic-scenes"));
+    futureLayer.insert(QStringLiteral("layerVersion"),
+                       MediaAnalysis::CurrentLayerSchemaVersion + 1);
+    futureLayer.insert(QStringLiteral("state"), QStringLiteral("complete"));
+    futureLayer.insert(QStringLiteral("sceneGraph"),
+                       QJsonObject{ { QStringLiteral("beats"), 12.0 } });
+    QJsonObject payload = analysis.toJsonObject();
+    QJsonArray layers;
+    layers.append(futureLayer);
+    payload.insert(QStringLiteral("layers"), layers);
+    payload.remove(QStringLiteral("analysisId"));
+
+    MediaAnalysis preserved;
+    QString error;
+    QVERIFY2(MediaAnalysis::readFromJsonObject(payload, &preserved, &error),
+             qPrintable(error));
+    QCOMPARE(preserved.layers().size(), 1);
+    const MediaAnalysis::Layer &layer = preserved.layers().at(0);
+    QVERIFY(!layer.recognized);
+    QVERIFY(!layer.preservationReason.isEmpty());
+    QCOMPARE(layer.kind, QStringLiteral("semantic-scenes"));
+
+    // The critical property: an older build re-saving the artifact emits the
+    // unknown layer EXACTLY as it was written. Nothing is dropped.
+    const QJsonArray emitted =
+        preserved.toJsonObject().value(QStringLiteral("layers")).toArray();
+    QCOMPARE(emitted.size(), 1);
+    QCOMPARE(emitted.at(0).toObject(), futureLayer);
+
+    // A second generation is stable: the preserved bytes survive repeatedly.
+    MediaAnalysis second;
+    QJsonObject again = preserved.toJsonObject();
+    again.remove(QStringLiteral("analysisId"));
+    QVERIFY(MediaAnalysis::readFromJsonObject(again, &second, &error));
+    QCOMPARE(second.toJsonObject().value(QStringLiteral("layers")).toArray().at(0).toObject(),
+             futureLayer);
+
+    // A recognized layer stored next to it is still read normally.
+    QJsonObject mixed = payload;
+    QJsonArray mixedLayers;
+    mixedLayers.append(analysisLayer(MediaAnalysis::technicalLayerKind(),
+                                     MediaAnalysis::LayerState::Complete).toJsonObject());
+    mixedLayers.append(futureLayer);
+    mixed.insert(QStringLiteral("layers"), mixedLayers);
+    MediaAnalysis mixedOut;
+    QVERIFY(MediaAnalysis::readFromJsonObject(mixed, &mixedOut, &error));
+    QCOMPARE(mixedOut.layers().size(), 2);
+    QVERIFY(mixedOut.layers().at(0).recognized);
+    QVERIFY(!mixedOut.layers().at(1).recognized);
+}
+
+
+void ProjectTest::mediaAnalysisTechnicalLayerOnRealMedia()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable in this environment");
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString clip;
+    QVERIFY(createProviderTestClip(directory.path(), 20, 10, &clip));
+    const MediaItem media = MediaItem::createFromFilePath(clip);
+    QVERIFY(media.isValid());
+
+    MediaAnalysisRunner runner;
+    MediaAnalysisRunner::Seams seams;   // no detector: targets must be Unavailable
+    MediaAnalysisRunner::Request request;
+    request.media = media;
+    request.createdUtc = analysisFixedTime();
+
+    const MediaAnalysisRunner::Result result = runner.run(request, seams);
+    QVERIFY2(result.ok, qPrintable(result.error));
+
+    const MediaAnalysis::Layer *technical =
+        result.analysis.layer(MediaAnalysis::technicalLayerKind());
+    QVERIFY(technical != nullptr);
+    QCOMPARE(technical->state, MediaAnalysis::LayerState::Complete);
+    QCOMPARE(technical->observations.size(), 1);
+
+    const QJsonObject facts = technical->observations.at(0).toObject();
+    QCOMPARE(facts.value(QStringLiteral("kind")).toString(),
+             QStringLiteral("media-facts"));
+    // Deterministic facts, read from the real file.
+    QCOMPARE(static_cast<qint64>(facts.value(QStringLiteral("durationMs")).toDouble()),
+             qint64(2000));
+    QVERIFY(qAbs(facts.value(QStringLiteral("frameRate")).toDouble() - 10.0) < 0.01);
+    QCOMPARE(facts.value(QStringLiteral("hasVideo")).toBool(), true);
+    QCOMPARE(facts.value(QStringLiteral("width")).toInt(), 180);
+    QCOMPARE(facts.value(QStringLiteral("height")).toInt(), 90);
+    QVERIFY(qAbs(facts.value(QStringLiteral("aspectRatio")).toDouble() - 2.0) < 0.001);
+    // The fixture is video-only; an absent audio stream is reported as false and
+    // no audio sample rate is invented.
+    QCOMPARE(facts.value(QStringLiteral("hasAudio")).toBool(), false);
+    QVERIFY(!facts.contains(QStringLiteral("audioSampleRate")));
+    QVERIFY(!facts.contains(QStringLiteral("frameConvention")));
+
+    // The artifact is well formed and identifies itself.
+    QVERIFY(result.analysis.isValid());
+    QCOMPARE(result.analysis.analysisSpecHash(), runner.specificationHash(seams));
+}
+
+void ProjectTest::mediaAnalysisTargetsLayerUnavailableWithoutDetector()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable in this environment");
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString clip;
+    QVERIFY(createProviderTestClip(directory.path(), 20, 10, &clip));
+    const MediaItem media = MediaItem::createFromFilePath(clip);
+
+    MediaAnalysisRunner runner;
+    MediaAnalysisRunner::Seams seams;
+    seams.detector = nullptr;
+    MediaAnalysisRunner::Request request;
+    request.media = media;
+    request.createdUtc = analysisFixedTime();
+
+    const MediaAnalysisRunner::Result result = runner.run(request, seams);
+    QVERIFY2(result.ok, qPrintable(result.error));
+
+    const MediaAnalysis::Layer *targets =
+        result.analysis.layer(MediaAnalysis::targetsLayerKind());
+    QVERIFY(targets != nullptr);
+
+    // NOT an empty successful layer: a capability that cannot run here says so,
+    // with a deterministic reason.
+    QCOMPARE(targets->state, MediaAnalysis::LayerState::Unavailable);
+    QVERIFY(!targets->error.isEmpty());
+    QVERIFY(targets->observations.isEmpty());
+    QVERIFY(!targets->hasEvidence());
+
+    // And no decoder was opened, because nothing could be computed.
+    QCOMPARE(result.decoderOpens, 0);
+    QCOMPARE(result.decodedFrames, qint64(0));
+}
+
+void ProjectTest::mediaAnalysisTargetsLayerPersistsSphericalTracks()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable in this environment");
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString clip;
+    QVERIFY(createProviderTestClip(directory.path(), 20, 10, &clip));
+    const MediaItem media = MediaItem::createFromFilePath(clip);
+
+    // The fixture paints a coloured block at the FRONT of the sphere, cycling
+    // through three colours; all three are reported as the same label so the
+    // tracker associates them into one identity across the clip.
+    SyntheticColorDetector detector;
+    detector.addSpec(kReviewFrameColors[0], QStringLiteral("person"));
+    detector.addSpec(kReviewFrameColors[1], QStringLiteral("person"));
+    detector.addSpec(kReviewFrameColors[2], QStringLiteral("person"));
+
+    MediaAnalysisRunner::Config config;
+    config.perceptionWidth = 180;
+    config.perceptionHeight = 90;
+    config.sampleIntervalMs = 200;
+    config.maxSamples = 16;
+    MediaAnalysisRunner runner(config);
+
+    MediaAnalysisRunner::Seams seams;
+    seams.detector = &detector;
+    MediaAnalysisRunner::Request request;
+    request.media = media;
+    request.createdUtc = analysisFixedTime();
+
+    const MediaAnalysisRunner::Result result = runner.run(request, seams);
+    QVERIFY2(result.ok, qPrintable(result.error));
+
+    const MediaAnalysis::Layer *targets =
+        result.analysis.layer(MediaAnalysis::targetsLayerKind());
+    QVERIFY(targets != nullptr);
+    QCOMPARE(targets->state, MediaAnalysis::LayerState::Complete);
+    QCOMPARE(targets->provider.name, detector.name());
+    QCOMPARE(targets->spec.perceptionWidth, 180);
+    QCOMPARE(targets->spec.perceptionHeight, 90);
+    QCOMPARE(targets->spec.sampleIntervalMs, qint64(200));
+    QCOMPARE(result.decoderOpens, 1);
+    QVERIFY(result.samplesAnalyzed > 0);
+    QVERIFY2(!targets->observations.isEmpty(),
+             "the synthetic detector found no target in any sampled view");
+
+    // Pick the longest persisted track and prove the spherical values survived.
+    TargetTrack longest;
+    for (const QJsonValue &value : targets->observations) {
+        TargetTrack candidate;
+        QString error;
+        QVERIFY2(MediaAnalysisRunner::targetTrackFromJson(value.toObject(),
+                                                          &candidate, &error),
+                 qPrintable(error));
+        if (candidate.size() > longest.size()) {
+            longest = candidate;
+        }
+    }
+    QVERIFY(longest.size() >= 5);
+    QVERIFY(!longest.id().isEmpty());
+
+    const TargetObservation observation = longest.observations().first();
+    // Viewpoint-independent spherical coordinates, not view pixels.
+    QVERIFY(qAbs(observation.yawDeg) < 45.0);
+    QVERIFY(qAbs(observation.pitchDeg) < 45.0);
+    QVERIFY(observation.confidence > 0.5);
+    QVERIFY(observation.yawRadiusDeg > 0.0);
+    QVERIFY(!observation.source.isEmpty());
+
+    // The persisted payload round-trips exactly.
+    TargetTrack reRead;
+    QString error;
+    QVERIFY2(MediaAnalysisRunner::targetTrackFromJson(
+                 MediaAnalysisRunner::targetTrackToJson(longest), &reRead, &error),
+             qPrintable(error));
+    QCOMPARE(reRead.id(), longest.id());
+    QCOMPARE(reRead.size(), longest.size());
+    QCOMPARE(reRead.observations().at(0).yawDeg, observation.yawDeg);
+    QCOMPARE(reRead.observations().at(0).pitchDeg, observation.pitchDeg);
+    QCOMPARE(reRead.observations().at(0).timeMs, observation.timeMs);
+
+    // And the whole artifact survives a save/load cycle with the tracks intact.
+    const QString artifactPath = directory.filePath(QStringLiteral("analysis.json"));
+    QString saveError;
+    QVERIFY2(result.analysis.save(artifactPath, &saveError), qPrintable(saveError));
+    bool ok = false;
+    const MediaAnalysis reloaded = MediaAnalysis::load(artifactPath, &ok, &saveError);
+    QVERIFY2(ok, qPrintable(saveError));
+    QCOMPARE(reloaded.analysisId(), result.analysis.analysisId());
+}
+
+void ProjectTest::mediaAnalysisSpecificationIdentity()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString mediaPath = directory.filePath(QStringLiteral("clip.bin"));
+    QVERIFY(writeTextFile(mediaPath, QByteArray("bytes")));
+    const MediaItem media = MediaItem::createFromFilePath(mediaPath);
+
+    MediaAnalysisRunner runner;
+    MediaAnalysisRunner::Seams noDetector;
+    const QString baseline = runner.specificationHash(noDetector);
+    QCOMPARE(baseline.size(), 64);
+    QVERIFY(MediaAnalysis::isValidId(baseline));
+    // Pure function of configuration and provider identities.
+    QCOMPARE(runner.specificationHash(noDetector), baseline);
+
+    // The perception resolution is part of the specification.
+    MediaAnalysisRunner::Config wider;
+    wider.perceptionWidth = 1920;
+    QVERIFY(MediaAnalysisRunner(wider).specificationHash(noDetector) != baseline);
+
+    // So is the sampling interval.
+    MediaAnalysisRunner::Config denser;
+    denser.sampleIntervalMs = 250;
+    QVERIFY(MediaAnalysisRunner(denser).specificationHash(noDetector) != baseline);
+
+    // So is the provider identity: swapping a model changes what an observation
+    // means, and must invalidate a stored artifact.
+    SyntheticColorDetector detector;
+    MediaAnalysisRunner::Seams withDetector;
+    withDetector.detector = &detector;
+    const QString detectorHash = runner.specificationHash(withDetector);
+    QVERIFY(detectorHash != baseline);
+
+    // Freshness is decided by comparing a stored artifact against the spec.
+    MediaAnalysis analysis = analysisArtifactFor(media, baseline);
+    QVERIFY(analysis.matchesSpec(baseline));
+    QVERIFY(!analysis.matchesSpec(detectorHash));
+    QVERIFY(!analysis.matchesSpec(QString()));
+}
+
+void ProjectTest::mediaAnalysisWholeVideoUsesOnePersistentDecoder()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable in this environment");
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString clip;
+    QVERIFY(createProviderTestClip(directory.path(), 20, 10, &clip));
+    const MediaItem media = MediaItem::createFromFilePath(clip);
+
+    SyntheticColorDetector detector;
+    detector.addSpec(kReviewFrameColors[0], QStringLiteral("person"));
+    detector.addSpec(kReviewFrameColors[1], QStringLiteral("person"));
+    detector.addSpec(kReviewFrameColors[2], QStringLiteral("person"));
+
+    MediaAnalysisRunner::Config config;
+    config.perceptionWidth = 90;
+    config.perceptionHeight = 45;
+    config.sampleIntervalMs = 500;
+    config.maxSamples = 16;
+    MediaAnalysisRunner runner(config);
+
+    MediaAnalysisRunner::Seams seams;
+    seams.detector = &detector;
+    MediaAnalysisRunner::Request request;
+    request.media = media;
+    request.createdUtc = analysisFixedTime();
+
+    const MediaAnalysisRunner::Result result = runner.run(request, seams);
+    QVERIFY2(result.ok, qPrintable(result.error));
+
+    const MediaAnalysis::Layer *targets =
+        result.analysis.layer(MediaAnalysis::targetsLayerKind());
+    QVERIFY(targets != nullptr);
+    QVERIFY(targets->hasEvidence());
+
+    // THE performance contract: one persistent decoder for the whole run, never
+    // one process per sample.
+    QCOMPARE(result.decoderOpens, 1);
+    QVERIFY(result.decodedFrames > 0);
+    QVERIFY(result.decodedFrames >= result.samplesAnalyzed);
+
+    // 2 s clip at 10 fps: the scope ends at the last real frame (1900 ms), so
+    // samples are 0, 500, 1000, 1500 and the 1900 ms end point.
+    QCOMPARE(result.samplesRequested, 5);
+    QCOMPARE(result.samplesAnalyzed, 5);
+    QVERIFY(!result.scopeTruncated);
+    QCOMPARE(targets->state, MediaAnalysis::LayerState::Complete);
+    QCOMPARE(targets->coverage.size(), 1);
+    QCOMPARE(targets->coverage.at(0).startMs, qint64(0));
+    QCOMPARE(targets->coverage.at(0).endMs, qint64(1900));
+    QVERIFY(targets->covers(1000));
+    QVERIFY(!targets->covers(2500));
+
+    // The PERCEPTION resolution is what was configured and is persisted with the
+    // layer. It is deliberately its own concept, not the viewer's display proxy.
+    QCOMPARE(targets->spec.perceptionWidth, 90);
+    QCOMPARE(targets->spec.perceptionHeight, 45);
+    QCOMPARE(targets->spec.sampleIntervalMs, qint64(500));
+    QVERIFY(targets->spec.perceptionWidth !=
+            MediaAnalysisRunner::Config().perceptionWidth);
+    const MediaAnalysisRunner::Config defaults;
+    QVERIFY(!(defaults.perceptionWidth == 1024 && defaults.perceptionHeight == 512));
+}
+
+void ProjectTest::mediaAnalysisPartialCoverageWhenSampleBudgetTruncates()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable in this environment");
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString clip;
+    QVERIFY(createProviderTestClip(directory.path(), 20, 10, &clip));
+    const MediaItem media = MediaItem::createFromFilePath(clip);
+
+    SyntheticColorDetector detector;
+    detector.addSpec(kReviewFrameColors[0], QStringLiteral("person"));
+    detector.addSpec(kReviewFrameColors[1], QStringLiteral("person"));
+    detector.addSpec(kReviewFrameColors[2], QStringLiteral("person"));
+
+    MediaAnalysisRunner::Config config;
+    config.perceptionWidth = 180;
+    config.perceptionHeight = 90;
+    config.sampleIntervalMs = 100;
+    config.maxSamples = 2;   // the budget stops the pass early
+    MediaAnalysisRunner runner(config);
+
+    MediaAnalysisRunner::Seams seams;
+    seams.detector = &detector;
+    MediaAnalysisRunner::Request request;
+    request.media = media;
+    request.createdUtc = analysisFixedTime();
+
+    const MediaAnalysisRunner::Result result = runner.run(request, seams);
+    QVERIFY2(result.ok, qPrintable(result.error));
+
+    const MediaAnalysis::Layer *targets =
+        result.analysis.layer(MediaAnalysis::targetsLayerKind());
+    QVERIFY(targets != nullptr);
+
+    // Truncation is reported, and the layer is honestly Partial rather than
+    // silently claiming the whole clip.
+    QVERIFY(result.scopeTruncated);
+    QCOMPARE(result.samplesRequested, 2);
+    QCOMPARE(targets->state, MediaAnalysis::LayerState::Partial);
+    QVERIFY(targets->hasEvidence());
+    QCOMPARE(targets->coverage.size(), 1);
+
+    // Coverage describes what was ACTUALLY covered, not the declared scope.
+    QVERIFY(targets->coverage.at(0).endMs < qint64(1900));
+    QVERIFY(targets->covers(0));
+    QVERIFY(!targets->covers(1500));
+
+    // Sampling is used for the technical layer too: the declared behaviour is
+    // testable without a process.
+    bool truncated = false;
+    const QList<qint64> timestamps =
+        MediaAnalysisRunner::deriveSampleTimestamps(0, 1000, 400, 16, &truncated);
+    QCOMPARE(timestamps.size(), 4);
+    QCOMPARE(timestamps.first(), qint64(0));
+    QCOMPARE(timestamps.last(), qint64(1000));
+    QVERIFY(!truncated);
+
+    bool truncatedSmall = false;
+    const QList<qint64> few =
+        MediaAnalysisRunner::deriveSampleTimestamps(0, 1000, 100, 3, &truncatedSmall);
+    QCOMPARE(few.size(), 3);
+    QVERIFY(truncatedSmall);
+}
+
+void ProjectTest::projectAnalysisRefsPersistWithoutSchemaBump()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    Project project;
+    project.setName(QStringLiteral("Analysis refs"));
+    QCOMPARE(project.schemaVersion(), Project::CurrentSchemaVersion);
+    QVERIFY(project.analysisRefs().isEmpty());
+
+    MediaAnalysisReference reference;
+    reference.mediaId = QStringLiteral("media-1");
+    reference.artifactId = QString(64, QLatin1Char('c'));
+    reference.artifactPath = QStringLiteral("/tmp/analysis-x.json");
+    reference.sourceSizeBytes = 12345;
+    reference.sourceLastModifiedUtc = analysisFixedTime();
+    QVERIFY(reference.isValid());
+
+    QJsonArray refs;
+    refs.append(reference.toJsonObject());
+    project.setAnalysisRefs(refs);
+
+    const QString projectPath = directory.filePath(QStringLiteral("analysis.reel"));
+    QString error;
+    QVERIFY2(project.save(projectPath, &error), qPrintable(error));
+
+    bool ok = false;
+    const Project loaded = Project::load(projectPath, &ok, &error);
+    QVERIFY2(ok, qPrintable(error));
+    // Additive section: the project schema stays 3.
+    QCOMPARE(loaded.schemaVersion(), Project::CurrentSchemaVersion);
+    QCOMPARE(loaded.analysisRefs().size(), 1);
+
+    MediaAnalysisReference restored;
+    QVERIFY(MediaAnalysisReference::readFromJsonObject(
+        loaded.analysisRefs().at(0).toObject(), &restored, &error));
+    QCOMPARE(restored.mediaId, QStringLiteral("media-1"));
+    QCOMPARE(restored.artifactId, QString(64, QLatin1Char('c')));
+    QCOMPARE(restored.artifactPath, QStringLiteral("/tmp/analysis-x.json"));
+    QCOMPARE(restored.sourceSizeBytes, qint64(12345));
+
+    // A reference with no artifact id cannot identify anything and is refused.
+    QJsonObject noArtifact;
+    noArtifact.insert(QStringLiteral("mediaId"), QStringLiteral("media-1"));
+    MediaAnalysisReference invalid;
+    QVERIFY(!MediaAnalysisReference::readFromJsonObject(noArtifact, &invalid, &error));
+    QVERIFY(!invalid.isValid());
+
+    // A project with no analysis writes no section at all.
+    Project bare;
+    bare.setName(QStringLiteral("No analysis"));
+    const QString barePath = directory.filePath(QStringLiteral("bare.reel"));
+    QVERIFY(bare.save(barePath, &error));
+    QFile file(barePath);
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    const QJsonObject bareObject = QJsonDocument::fromJson(file.readAll()).object();
+    file.close();
+    QVERIFY(!bareObject.contains(QStringLiteral("analysisRefs")));
+    QVERIFY(Project::load(barePath, &ok, &error).analysisRefs().isEmpty());
+    QVERIFY(ok);
+}
+
+void ProjectTest::mediaAnalysisMissingStaleAndInvalidAreNonFatal()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString mediaPath = directory.filePath(QStringLiteral("clip.bin"));
+    QVERIFY(writeTextFile(mediaPath, QByteArray("analysis-source")));
+    const MediaItem media = MediaItem::createFromFilePath(mediaPath);
+    const MediaAnalysis analysis = analysisArtifactFor(media, QStringLiteral("spec-A"));
+    const QString artifactPath = directory.filePath(QStringLiteral("analysis.json"));
+    QString error;
+    QVERIFY2(analysis.save(artifactPath, &error), qPrintable(error));
+
+    // No reference at all.
+    QCOMPARE(resolveMediaAnalysisReference(MediaAnalysisReference()).status,
+             MediaAnalysisRefStatus::None);
+
+    // Recorded but never written.
+    MediaAnalysisReference unwritten;
+    unwritten.mediaId = media.id();
+    unwritten.artifactId = QString::fromLatin1(analysis.analysisId());
+    QCOMPARE(resolveMediaAnalysisReference(unwritten).status,
+             MediaAnalysisRefStatus::ArtifactMissing);
+
+    // Points at a file that is not there.
+    MediaAnalysisReference missing = analysisReferenceFor(media, analysis, artifactPath);
+    missing.artifactPath = directory.filePath(QStringLiteral("gone.json"));
+    QCOMPARE(resolveMediaAnalysisReference(missing).status,
+             MediaAnalysisRefStatus::ArtifactMissing);
+
+    // Present but not parseable.
+    const QString garbagePath = directory.filePath(QStringLiteral("garbage.json"));
+    QVERIFY(writeTextFile(garbagePath, QByteArray("{not json")));
+    MediaAnalysisReference garbage = analysisReferenceFor(media, analysis, garbagePath);
+    QCOMPARE(resolveMediaAnalysisReference(garbage).status,
+             MediaAnalysisRefStatus::ArtifactUnreadable);
+
+    // Present and readable, but not the artifact the reference names.
+    MediaAnalysisReference mismatched = analysisReferenceFor(media, analysis, artifactPath);
+    mismatched.artifactId = QString(64, QLatin1Char('d'));
+    QCOMPARE(resolveMediaAnalysisReference(mismatched).status,
+             MediaAnalysisRefStatus::ArtifactMismatch);
+
+    // The good case.
+    const MediaAnalysisReference good = analysisReferenceFor(media, analysis, artifactPath);
+    const MediaAnalysisResolution resolved = resolveMediaAnalysisReference(good);
+    QCOMPARE(resolved.status, MediaAnalysisRefStatus::Resolved);
+    QVERIFY(resolved.isResolved());
+    QCOMPARE(resolved.analysis.analysisId(), analysis.analysisId());
+
+    // Fresh, but produced by a different specification.
+    const MediaAnalysisResolution stale =
+        resolveMediaAnalysisReference(good, QStringLiteral("spec-B"));
+    QCOMPARE(stale.status, MediaAnalysisRefStatus::Stale);
+    QVERIFY(!stale.detail.isEmpty());
+
+    // The source changed underneath the analysis.
+    QVERIFY(writeTextFile(mediaPath, QByteArray("analysis-source-edited")));
+    const MediaAnalysisResolution changed = resolveMediaAnalysisReference(good);
+    QCOMPARE(changed.status, MediaAnalysisRefStatus::SourceChanged);
+    QVERIFY(!changed.detail.isEmpty());
+
+    // The source is gone entirely: a different failure, reported differently.
+    QVERIFY(QFile::remove(mediaPath));
+    const MediaAnalysisResolution gone = resolveMediaAnalysisReference(good);
+    QCOMPARE(gone.status, MediaAnalysisRefStatus::SourceMissing);
+    QVERIFY(!gone.detail.isEmpty());
+
+    QCOMPARE(mediaAnalysisRefStatusToString(MediaAnalysisRefStatus::Resolved),
+             QStringLiteral("resolved"));
+    QCOMPARE(mediaAnalysisRefStatusToString(MediaAnalysisRefStatus::SourceChanged),
+             QStringLiteral("source-changed"));
+
+    // Application-level: a dangling reference never breaks the project.
+    Application app;
+    app.newProject();
+    QVERIFY(app.setAnalysisReference(missing));
+    QCOMPARE(app.analysisReferences().size(), 1);
+    QCOMPARE(app.analysisReferenceFor(media.id()).artifactId,
+             QString::fromLatin1(analysis.analysisId()));
+    QCOMPARE(app.resolveAnalysis(media.id()).status,
+             MediaAnalysisRefStatus::ArtifactMissing);
+    // A malformed reference is refused rather than stored.
+    QVERIFY(!app.setAnalysisReference(MediaAnalysisReference()));
+    QCOMPARE(app.analysisReferences().size(), 1);
+
+    const QString projectPath = directory.filePath(QStringLiteral("with-ref.reel"));
+    QVERIFY(app.saveProject(projectPath));
+    Application reopened;
+    QVERIFY(reopened.openProject(projectPath));
+    QCOMPARE(reopened.analysisReferences().size(), 1);
+    // Still resolves to the same non-fatal status after a round trip.
+    QCOMPARE(reopened.resolveAnalysis(media.id()).status,
+             MediaAnalysisRefStatus::ArtifactMissing);
+}
+
+
+void ProjectTest::replayIsIndependentOfMediaAnalysis()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable in this environment");
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString sourcePath;
+    QVERIFY(createEquirectReviewVideo(directory.path(),
+                                      FrameExtractor::defaultExecutablePath(), 2,
+                                      &sourcePath));
+
+    // Environment capability probe, mirroring the other replay tests: on this
+    // proot/Termux device a single frame extraction can approach the seam's own
+    // budget for reasons unrelated to the code under test.
+    QElapsedTimer probe;
+    probe.start();
+    QImage probeFrame;
+    QString probeError;
+    const bool probed = FrameExtractor::extractFrameAt(
+        sourcePath, FrameExtractor::defaultExecutablePath(), 0.0, &probeFrame,
+        &probeError);
+    if (!probed || probe.elapsed() > 5000) {
+        QSKIP(qPrintable(QStringLiteral(
+            "Frame extraction costs %1 ms per frame here; too slow to run a "
+            "multi-render replay test reliably.")
+                             .arg(probe.elapsed())));
+    }
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(sourcePath));
+    const MediaItem media = app.mediaItems().first();
+    QVERIFY(app.setActiveMedia(media.id()));
+    app.setReframeDefaultOutput(160, 90, 2.0);
+
+    // Baseline replay, with NO analysis anywhere.
+    const QString firstOutput = directory.filePath(QStringLiteral("render_a.mp4"));
+    QVERIFY2(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 1000, firstOutput),
+             qPrintable(app.lastReframeCommandOutcome().error));
+    QVERIFY(app.reframeOutputs().at(0).hasEditDecision());
+    const QByteArray baseline = decodeAllFramesRaw(firstOutput);
+    QVERIFY(!baseline.isEmpty());
+
+    const QString noAnalysisOutput =
+        directory.filePath(QStringLiteral("render_b.mp4"));
+    const ReplayResult withoutAnalysis = app.replayEditDecision(0, noAnalysisOutput);
+    QVERIFY2(withoutAnalysis.ok, qPrintable(withoutAnalysis.error));
+    QCOMPARE(decodeAllFramesRaw(noAnalysisOutput), baseline);
+
+    // Now attach analysis: a real stored artifact for this media, plus a
+    // reference whose artifact does not exist at all.
+    const MediaAnalysis analysis = analysisArtifactFor(media, QStringLiteral("spec"));
+
+    const QString artifactPath = directory.filePath(QStringLiteral("analysis.json"));
+    QString saveError;
+    QVERIFY2(analysis.save(artifactPath, &saveError), qPrintable(saveError));
+    QVERIFY(app.setAnalysisReference(
+        analysisReferenceFor(media, analysis, artifactPath)));
+
+    MediaAnalysisReference dangling;
+    dangling.mediaId = QStringLiteral("no-such-media");
+    dangling.artifactId = QString(64, QLatin1Char('e'));
+    dangling.artifactPath = directory.filePath(QStringLiteral("absent.json"));
+    QVERIFY(app.setAnalysisReference(dangling));
+
+    // The analysis genuinely resolves for the active media...
+    QCOMPARE(app.resolveAnalysis(media.id()).status, MediaAnalysisRefStatus::Resolved);
+    // ...and the dangling one does not, without breaking anything.
+    QCOMPARE(app.resolveAnalysis(dangling.mediaId).status,
+             MediaAnalysisRefStatus::ArtifactMissing);
+
+    // THE INVARIANT (Decision 040): deterministic replay is byte-for-byte
+    // identical whether analysis is absent, present or broken. Replay consumes
+    // EditDecision::plan() and nothing else.
+    const QString withAnalysisOutput =
+        directory.filePath(QStringLiteral("render_c.mp4"));
+    const ReplayResult withAnalysis = app.replayEditDecision(0, withAnalysisOutput);
+    QVERIFY2(withAnalysis.ok, qPrintable(withAnalysis.error));
+    const QByteArray afterAnalysis = decodeAllFramesRaw(withAnalysisOutput);
+    QCOMPARE(afterAnalysis, baseline);
+    QCOMPARE(QCryptographicHash::hash(afterAnalysis, QCryptographicHash::Sha256).toHex(),
+             QCryptographicHash::hash(baseline, QCryptographicHash::Sha256).toHex());
+
+    // The replayed record carries the SAME decision as the original: analysis
+    // never rewrites or supplements a stored decision.
+    QCOMPARE(app.reframeOutputs().size(), 3);
+    QCOMPARE(app.reframeOutputs().at(2).editDecision().decisionHash(),
+             app.reframeOutputs().at(0).editDecision().decisionHash());
+    QCOMPARE(app.reframeOutputs().at(2).editDecision().plan().toJsonObject(),
+             app.reframeOutputs().at(0).editDecision().plan().toJsonObject());
+
+    // Deleting the artifact afterwards changes nothing about replay.
+    QVERIFY(QFile::remove(artifactPath));
+    QCOMPARE(app.resolveAnalysis(media.id()).status,
+             MediaAnalysisRefStatus::ArtifactMissing);
+    const QString afterDeleteOutput =
+        directory.filePath(QStringLiteral("render_d.mp4"));
+    const ReplayResult afterDelete = app.replayEditDecision(0, afterDeleteOutput);
+    QVERIFY2(afterDelete.ok, qPrintable(afterDelete.error));
+    QCOMPARE(decodeAllFramesRaw(afterDeleteOutput), baseline);
+}
+
 
 QTEST_MAIN(ProjectTest)
 #include "test_project.moc"

@@ -9,60 +9,19 @@
 
 Q_LOGGING_CATEGORY(reelcraftDecision, "reelcraft.decision")
 
+// The source-reference vocabulary, its fingerprint comparison and the streaming
+// content digest now live in core/MediaSourceReference.h so that EditDecision and
+// MediaAnalysis share one definition. The local helper below is the only piece
+// that stayed here; it is used for timestamp serialization.
+
 namespace {
 
-// Streaming content digest. Chunked so a multi-gigabyte 360 source never has to
-// be loaded into memory; used only when a decision carries contentSha256.
-bool computeContentSha256(const QString &path, QByteArray *out, QString *error)
-{
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) {
-        if (error) {
-            *error = file.errorString();
-        }
-        return false;
-    }
-    QCryptographicHash hash(QCryptographicHash::Sha256);
-    constexpr qint64 kChunk = 1 << 20;
-    while (!file.atEnd()) {
-        const QByteArray chunk = file.read(kChunk);
-        if (chunk.isEmpty() && file.error() != QFile::NoError) {
-            if (error) {
-                *error = file.errorString();
-            }
-            return false;
-        }
-        hash.addData(chunk);
-    }
-    if (out) {
-        *out = hash.result().toHex();
-    }
-    return true;
-}
-
-// Fingerprint timestamps are quantized to whole milliseconds.
-//
-// The artifact is serialized as ISO-8601 with milliseconds (Qt::ISODateWithMs),
-// the same precision MediaItem uses when it persists a media record, while
-// QFileInfo reports the filesystem's full (often sub-millisecond) resolution.
-// Comparing raw values would therefore report a spurious "the file changed"
-// after every save/load cycle, so both sides are quantized to the precision the
-// artifact actually stores.
 QDateTime toUtcMilliseconds(const QDateTime &value)
 {
-    if (!value.isValid()) {
-        return QDateTime();
-    }
-    return QDateTime::fromMSecsSinceEpoch(value.toMSecsSinceEpoch(), Qt::UTC);
+    return mediaSourceTimestampToUtcMs(value);
 }
 
 } // namespace
-
-bool EditDecision::SourceReference::isValid() const
-{
-    return !mediaId.isEmpty() && !path.isEmpty() && sizeBytes >= 0
-        && lastModifiedUtc.isValid();
-}
 
 QString EditDecision::originCommand()
 {
@@ -136,15 +95,8 @@ EditDecision EditDecision::revisedFrom(const EditDecision &parent,
 
 QString EditDecision::sourceStatusToString(SourceStatus status)
 {
-    switch (status) {
-    case SourceStatus::Matches:
-        return QStringLiteral("matches");
-    case SourceStatus::FileMissing:
-        return QStringLiteral("file-missing");
-    case SourceStatus::FingerprintMismatch:
-        return QStringLiteral("fingerprint-mismatch");
-    }
-    return QStringLiteral("unknown");
+    // One definition for every artifact that references source media.
+    return mediaSourceStatusToString(status);
 }
 
 bool EditDecision::isValid(QString *error) const
@@ -185,72 +137,9 @@ bool EditDecision::isValid(QString *error) const
 
 EditDecision::SourceStatus EditDecision::checkSource(QString *detail) const
 {
-    if (detail) {
-        detail->clear();
-    }
-
-    // Class 1: the referenced file is not there at all.
-    const QFileInfo info(m_source.path);
-    if (m_source.path.isEmpty() || !info.exists() || !info.isFile()) {
-        if (detail) {
-            *detail = QStringLiteral("The referenced source file does not exist: %1")
-                          .arg(m_source.path.isEmpty()
-                                   ? QStringLiteral("(empty path)")
-                                   : m_source.path);
-        }
-        return SourceStatus::FileMissing;
-    }
-
-    // Class 2: the file is there but it is not the file the decision was made
-    // against. Reported separately from FileMissing on purpose.
-    if (m_source.sizeBytes >= 0 && info.size() != m_source.sizeBytes) {
-        if (detail) {
-            *detail = QStringLiteral(
-                          "The source file has changed: recorded %1 bytes, found %2 "
-                          "bytes.")
-                          .arg(m_source.sizeBytes)
-                          .arg(info.size());
-        }
-        return SourceStatus::FingerprintMismatch;
-    }
-
-    const QDateTime currentLastModified =
-        toUtcMilliseconds(info.lastModified());
-    if (m_source.lastModifiedUtc.isValid()
-        && currentLastModified != m_source.lastModifiedUtc) {
-        if (detail) {
-            *detail = QStringLiteral(
-                          "The source file has changed: recorded modification time "
-                          "%1, found %2.")
-                          .arg(m_source.lastModifiedUtc.toString(Qt::ISODateWithMs),
-                               currentLastModified.toString(Qt::ISODateWithMs));
-        }
-        return SourceStatus::FingerprintMismatch;
-    }
-
-    if (!m_source.contentSha256.isEmpty()) {
-        QByteArray actual;
-        QString hashError;
-        if (!computeContentSha256(m_source.path, &actual, &hashError)) {
-            if (detail) {
-                *detail = QStringLiteral(
-                              "The source file could not be read for verification: %1")
-                              .arg(hashError);
-            }
-            return SourceStatus::FingerprintMismatch;
-        }
-        if (actual.compare(m_source.contentSha256.toLatin1(), Qt::CaseInsensitive) != 0) {
-            if (detail) {
-                *detail = QStringLiteral(
-                              "The source file has changed: recorded content hash %1, "
-                              "found %2.")
-                              .arg(m_source.contentSha256, QString::fromLatin1(actual));
-            }
-            return SourceStatus::FingerprintMismatch;
-        }
-    }
-
-    return SourceStatus::Matches;
+    // One implementation for every artifact that references source media, so
+    // the three outcomes mean exactly the same thing everywhere.
+    return checkMediaSourceStatus(m_source, detail);
 }
 
 QJsonObject EditDecision::payloadWithoutHash() const

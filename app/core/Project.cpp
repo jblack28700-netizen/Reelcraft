@@ -68,6 +68,16 @@ void Project::setReframeOutputs(const QJsonArray &reframeOutputs)
     m_reframeOutputs = reframeOutputs;
 }
 
+QJsonArray Project::analysisRefs() const
+{
+    return m_analysisRefs;
+}
+
+void Project::setAnalysisRefs(const QJsonArray &analysisRefs)
+{
+    m_analysisRefs = analysisRefs;
+}
+
 QString Project::activeMediaId() const
 {
     return m_activeMediaId;
@@ -98,6 +108,9 @@ bool Project::save(const QString &filePath, QString *error) const
     }
     if (!m_reframeOutputs.isEmpty()) {
         object.insert(QStringLiteral("reframeOutputs"), m_reframeOutputs);
+    }
+    if (!m_analysisRefs.isEmpty()) {
+        object.insert(QStringLiteral("analysisRefs"), m_analysisRefs);
     }
     if (!m_activeMediaId.isEmpty()) {
         object.insert(QStringLiteral("activeMediaId"), m_activeMediaId);
@@ -192,6 +205,12 @@ Project Project::load(const QString &filePath, bool *ok, QString *error)
         object.value(QStringLiteral("reframeOutputs"));
     if (reframeOutputsValue.isArray()) {
         project.m_reframeOutputs = reframeOutputsValue.toArray();
+    }
+
+    const QJsonValue analysisRefsValue =
+        object.value(QStringLiteral("analysisRefs"));
+    if (analysisRefsValue.isArray()) {
+        project.m_analysisRefs = analysisRefsValue.toArray();
     }
 
     const QJsonValue activeMediaIdValue = object.value(QStringLiteral("activeMediaId"));

@@ -7,6 +7,7 @@
 #include <QString>
 
 #include "core/MediaItem.h"
+#include "core/MediaSourceReference.h"
 #include "reframe/ReframePlan.h"
 
 // EditDecision (Objective 16) is the persisted, versioned, reproducible record of
@@ -58,27 +59,19 @@ public:
     // replay actually opens. sizeBytes + lastModifiedUtc are the cheap
     // fingerprint; contentSha256 is an OPTIONAL stronger fingerprint, normally
     // empty because hashing multi-gigabyte 360 footage is not free.
-    struct SourceReference
-    {
-        QString mediaId;
-        QString path;
-        qint64 sizeBytes = -1;
-        QDateTime lastModifiedUtc;
-        QString contentSha256;
-
-        bool isValid() const;
-    };
+    // Objective 21: the vocabulary is SHARED with the other persisted artifacts
+    // that reference source media (core/MediaSourceReference.h), so field names,
+    // fingerprint semantics and JSON vocabulary cannot drift apart between them.
+    // These are aliases, not new types, so every existing
+    // EditDecision::SourceReference / EditDecision::SourceStatus use keeps
+    // compiling and the serialized payload is unchanged.
+    using SourceReference = MediaSourceReference;
 
     // Result of comparing a decision's fingerprint against the file on disk RIGHT
     // NOW. Deliberately an enum, not a boolean: "the file is gone" and "the file
     // changed" are different failures with different operator meaning and are
     // never collapsed into one another.
-    enum class SourceStatus
-    {
-        Matches,              // the file exists and the fingerprint agrees
-        FileMissing,          // the referenced path does not exist
-        FingerprintMismatch,  // the file exists but is not the recorded file
-    };
+    using SourceStatus = MediaSourceStatus;
 
     EditDecision() = default;
 

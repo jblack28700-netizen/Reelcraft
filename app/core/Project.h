@@ -33,6 +33,18 @@ public:
     QJsonArray reframeOutputs() const;
     void setReframeOutputs(const QJsonArray &reframeOutputs);
 
+    // Optional additive section for Media Analysis references (Objective 21).
+    // Kept as opaque JSON, mirroring the media/reframeOutputs sections:
+    // Application owns the authoritative references and serializes them here on
+    // save. The section is a REFERENCE, never the analysis itself -- the
+    // artifacts live beside the project, and the project must stay loadable and
+    // fully functional when every one of them is missing, stale or unreadable.
+    // Project::CurrentSchemaVersion is deliberately NOT bumped: the section is
+    // additive and its absence reads back as an empty list, exactly like every
+    // other optional section added since schema 3.
+    QJsonArray analysisRefs() const;
+    void setAnalysisRefs(const QJsonArray &analysisRefs);
+
     // Optional additive reference to the active/selected media record id.
     // Written only when non-empty; read leniently. Mirrors the viewerState
     // pattern: Application owns the authoritative value and validates it
@@ -53,6 +65,7 @@ private:
     QJsonObject m_viewerState;
     QJsonArray m_media;
     QJsonArray m_reframeOutputs;
+    QJsonArray m_analysisRefs;
     QString m_activeMediaId;
     int m_schemaVersion = CurrentSchemaVersion;
 };

@@ -443,3 +443,15 @@ This document defines the intended conceptual structure of a Reelcraft project.
 It is not yet an implementation schema.
 
 No production application implementation is implied by this document.
+
+## 6a. Media Analysis — Status (Objective 21, 2026-09-18)
+
+This section is now backed by an implementation rather than being purely conceptual.
+
+- **Artifact:** `app/analysis/MediaAnalysis.{h,cpp}` — a persisted, versioned record with its own `schemaVersion`, a source reference and fingerprint, a three-way source status (`Matches` / `FileMissing` / `FingerprintMismatch`), an analysis-specification identity, and a deterministic `analysisId`. It is **not** stored inside the project file: the project holds a small `analysisRefs` reference (address only), exactly as this model requires analysis to remain derived data.
+- **Shape:** a small closed envelope (addressing, provenance, lifecycle, coverage, confidence) over named, independently versioned capability layers. There is deliberately no catch-all struct.
+- **Analysis as derived data:** deleting every analysis artifact leaves a project loadable, renderable and replayable. Analysis is never a correctness dependency and is never on the deterministic replay path.
+- **Provider normalization:** normalized Reelcraft observations are persisted; provider-native output is retained opaquely and never interpreted by core.
+- **Implemented capabilities:** `technical` (duration, frame rate, resolution, aspect, audio-track presence, declared projection, 360 frame convention) and `targets` (normalized spherical observations and tracks over time).
+- **Still conceptual in this section:** transcripts, speaker information beyond voice-activity intervals, scene boundaries, shot information, visual descriptions, motion information, content embeddings and quality/capability information. The model accommodates them as additional layer kinds; none of them exists yet.
+

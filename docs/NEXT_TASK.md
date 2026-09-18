@@ -512,10 +512,37 @@ Focused-test wall times on this device (recorded, not gates): lifecycle 19 s, ma
 
 ---
 
+
+## 360 Reframing Objective 21 — Persistent Media Analysis — Complete
+
+Status: **Complete — implemented and verified (2026-09-18).**
+
+### Objective
+
+Human-authorized scope (Decision 038). Close the documented gap between the workflow's "Media Analysis" stage and the implementation: give Reelcraft a persisted, versioned, provider-neutral record of what it learned about a piece of media, without implementing every future AI capability.
+
+### Scope (implemented)
+
+- `app/analysis/MediaAnalysis.{h,cpp}`: versioned artifact with its own schema gate, source reference + fingerprint, source validity status, specification identity, creation/provenance, independently versioned capability layers, explicit layer lifecycle state, explicit time coverage, provider identity, deterministic error/unavailable reasons, strict envelope loading, version-retaining serialization, and verbatim preservation of unreadable/unknown layer data.
+- `app/analysis/MediaAnalysisRunner.{h,cpp}`: one whole-video pass with a single persistent decoder at a configured perception resolution, interval sampling, honest coverage, and a recorded perception/sampling specification.
+- Two capabilities: `technical` (deterministic, existing ffprobe seam) and `targets` (existing 360 resolver/tracker/view coverage, unchanged). A missing detector is recorded `Unavailable` with a reason, never as an empty success.
+- Project: additive `analysisRefs` reference section; schema stays 3.
+- `app/core/MediaSourceReference.{h,cpp}`: source-reference/status vocabulary shared by `EditDecision` and `MediaAnalysis`.
+- `MediaDurationProbe::streamSummary()`: additive optional seam method (default reports unavailable), implemented by `FfprobeDurationProbe`.
+
+### Verification
+
+- 15 new tests covering round trip, schema/version handling, source fingerprint status, lifecycle states, coverage persistence, Unavailable vs Failed vs empty, unknown-layer preservation, the technical layer on real media, the detector-unavailable target layer, spherical track persistence, specification identity, single-persistent-decoder behaviour, perception resolution, sampling/coverage, project reference persistence, missing/stale/invalid non-fatality, and replay independence.
+- Targeted regression of the touched components: **31 passed / 0 failed / 0 skipped**.
+- Full model-free suite run at the checkpoint.
+
+---
+
 ## Next Objective — NOT SCOPED
 
 The established product direction is that Reelcraft must first become a working 360 video editor, with 360 reframing as the central problem. Leading candidates, in the light of Objective 19:
 
+- **the Analysis -> Reasoning boundary** (editorial reasoning over persisted analysis evidence), which is the stage Decision 039 defines as producing only the existing validated ReframePlan;
 - **audio in the rendered output** (renders are still silent; Objective 20 removed the per-frame decoder process but added no audio);
 - **the trajectory-to-camera-path stage** (dense tracking plus a deterministic smoothing/framing layer), which is where reframing quality is actually won;
 - **creator review and revision surface** over persisted decisions (`decisionProvenance()` and `reviseEditDecision()` exist as APIs with no UI);

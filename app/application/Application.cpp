@@ -10,6 +10,7 @@
 #include <cmath>
 #include <memory>
 
+#include "analysis/MediaAnalysis.h"
 #include "media/FfprobeDurationProbe.h"
 #include "media/FfmpegFrameSource.h"
 #include "media/FrameExtractor.h"
@@ -110,11 +111,13 @@ void Application::newProject()
     const bool hadActiveMedia = !m_activeMediaId.isEmpty();
     const bool hadPreviewTime = m_previewTimeSeconds != 0.0;
     const bool hadReframeOutputs = !m_reframeOutputs.isEmpty();
+    const bool hadAnalysisRefs = !m_analysisRefs.isEmpty();
     const bool hadCreatorSelection = m_hasCreatorSelection;
     m_mediaItems.clear();
     m_activeMediaId.clear();
     m_previewTimeSeconds = 0.0;
     m_reframeOutputs.clear();
+    m_analysisRefs.clear();
     m_hasCreatorSelection = false;
     m_creatorSelection = CreatorTargetSelection();
     resetViewport();
@@ -124,6 +127,9 @@ void Application::newProject()
     }
     if (hadReframeOutputs) {
         emit reframeOutputsChanged(m_reframeOutputs);
+    }
+    if (hadAnalysisRefs) {
+        emit analysisReferencesChanged();
     }
     if (hadActiveMedia) {
         emit activeMediaChanged(m_activeMediaId);
@@ -145,6 +151,7 @@ bool Application::saveProject(const QString &filePath)
     m_currentProject.setMedia(mediaJson());
     m_currentProject.setActiveMediaId(m_activeMediaId);
     m_currentProject.setReframeOutputs(reframeOutputsJson());
+    m_currentProject.setAnalysisRefs(analysisRefsJson());
 
     QString error;
     const bool ok = m_currentProject.save(filePath, &error);
@@ -178,6 +185,8 @@ bool Application::openProject(const QString &filePath)
     restoreMediaFromJson(m_currentProject.media());
     restoreReframeOutputsFromJson(m_currentProject.reframeOutputs());
     emit reframeOutputsChanged(m_reframeOutputs);
+    restoreAnalysisRefsFromJson(m_currentProject.analysisRefs());
+    emit analysisReferencesChanged();
 
     if (m_viewportState && !m_currentProject.viewerState().isEmpty()) {
         QString viewerError;
@@ -996,7 +1005,109 @@ void Application::appendReframeOutput(const ReframeCommandOutcome &outcome)
     emit reframeOutputsChanged(m_reframeOutputs);
 }
 
+
+// --- Objective 21: media analysis references --------------------------------
+//
+// These accessors only ever READ. Analysis is derived data: nothing here can
+// fail a project load, a render or a replay, and no deterministic execution path
+// consults any of it (Decision 040).
+
+QList<MediaAnalysisReference> Application::analysisReferences() const
+{
+    return m_analysisRefs;
+}
+
+MediaAnalysisReference Application::analysisReferenceFor(const QString &mediaId) const
+{
+    if (mediaId.isEmpty()) {
+        return MediaAnalysisReference();
+    }
+    for (const MediaAnalysisReference &reference : m_analysisRefs) {
+        if (reference.mediaId == mediaId) {
+            return reference;
+        }
+    }
+    return MediaAnalysisReference();
+}
+
+bool Application::setAnalysisReference(const MediaAnalysisReference &reference)
+{
+    if (!reference.isValid()) {
+        // An unnamed or artifact-less reference would be a dangling pointer in
+        // persisted form, so it is refused rather than stored.
+        return false;
+    }
+    for (int i = 0; i < m_analysisRefs.size(); ++i) {
+        if (m_analysisRefs.at(i).mediaId == reference.mediaId) {
+            m_analysisRefs[i] = reference;
+            emit analysisReferencesChanged();
+            return true;
+        }
+    }
+    m_analysisRefs.append(reference);
+    emit analysisReferencesChanged();
+    return true;
+}
+
+MediaAnalysisResolution Application::resolveAnalysis(
+    const QString &mediaId, const QString &expectedSpecHash) const
+{
+    return resolveMediaAnalysisReference(analysisReferenceFor(mediaId),
+                                         expectedSpecHash);
+}
+
+QJsonArray Application::analysisRefsJson() const
+{
+    QJsonArray array;
+    for (const MediaAnalysisReference &reference : m_analysisRefs) {
+        array.append(reference.toJsonObject());
+    }
+    return array;
+}
+
+void Application::restoreAnalysisRefsFromJson(const QJsonArray &refs)
+{
+    m_analysisRefs.clear();
+
+    // Lenient, and never silent. A reference that cannot be read is skipped and
+    // counted, because analysis is derived data and a damaged reference must not
+    // make a project unopenable -- but a project that lost its analysis should
+    // say so rather than quietly behaving as if it never had any.
+    int unreadableRefs = 0;
+    QString firstError;
+
+    for (const QJsonValue &value : refs) {
+        if (!value.isObject()) {
+            ++unreadableRefs;
+            if (firstError.isEmpty()) {
+                firstError = QStringLiteral("a reference entry is not an object");
+            }
+            continue;
+        }
+        MediaAnalysisReference reference;
+        QString error;
+        if (MediaAnalysisReference::readFromJsonObject(value.toObject(),
+                                                       &reference, &error)) {
+            m_analysisRefs.append(reference);
+        } else {
+            ++unreadableRefs;
+            if (firstError.isEmpty()) {
+                firstError = error;
+            }
+        }
+    }
+
+    if (unreadableRefs > 0) {
+        emit backgroundCompleted(
+            QStringLiteral("%1 stored media-analysis reference(s) could not be "
+                           "read and were skipped: %2")
+                .arg(unreadableRefs)
+                .arg(firstError));
+    }
+}
+
 void Application::setReframeReplayRenderer(const ReframeReplayRenderer &renderer)
+
 {
     if (renderer) {
         m_replayRenderer = renderer;

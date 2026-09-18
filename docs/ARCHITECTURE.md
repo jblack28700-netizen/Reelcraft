@@ -413,3 +413,24 @@ To preserve future Apple portability without premature implementation:
 - Keep deterministic media engine, AI orchestration, GPU strategy, storage, permissions, background processing, and hardware acceleration platform-neutral.
 - Treat macOS, iOS, and iPadOS requirements as future platform-specific adapters, not core assumptions.
 - Do not introduce Linux, X11, Wayland, Android, macOS, iOS, or iPadOS-specific behavior into core layers.
+
+## 22. Media Analysis Subsystem — 2026-09-18 (Objective 21)
+
+The analysis stage the workflow always assumed now exists. It sits **beside** the AI-to-media boundary, not inside it: it produces evidence that reasoning may consume, and it never produces an edit.
+
+    Source Media
+      |
+      v
+    Media Analysis  (MediaAnalysisRunner)  -->  MediaAnalysis artifact (persisted beside the project)
+      |                                              |
+      |  capability layers (technical, targets, ...)  |  referenced by Project::analysisRefs
+      v                                              v
+    Project Context --> Creator Intent --> AI Reasoning --> Structured Edit Plan --> Deterministic Execution
+
+- **`app/analysis/MediaAnalysis.{h,cpp}`** — a versioned artifact with its own schema gate (independent of the Project schema), a source reference and fingerprint, a three-way source status, an analysis-specification identity, and a deterministic `analysisId`. Its **envelope** is deliberately small and closed: addressing, provenance, lifecycle, coverage and confidence. Capability-specific data lives in **independently versioned layers**, so a new capability is a new layer kind rather than a new envelope field.
+- **`app/analysis/MediaAnalysisRunner.{h,cpp}`** — one whole-video pass: a single persistent decoder at a configured **perception resolution**, strictly sequential decoding with interval sampling, and a persisted perception/sampling specification. It composes the existing `TargetResolver`, `SphericalTargetTracker` and equirect view coverage unchanged.
+- **Layering.** `core/MediaSourceReference` holds the source-reference and status vocabulary shared with `EditDecision`. `analysis/` depends on `core/`, `media/` and `target/`; nothing depends on `analysis/` except the application layer, and no deterministic execution path does.
+- **Replay isolation (Decision 040).** Analysis is never on the deterministic replay path. `replayEditDecision()` consumes `EditDecision::plan()` and nothing else; deleting every analysis artifact leaves rendering, replay and project loading fully functional.
+- **Degradation is a status.** Artifact missing, unreadable, mismatched, stale, source moved or gone are reported conditions, never project corruption.
+- Deliberately not present: transcript, diarization, scene segmentation, quality/salience, B-roll reasoning, LLM reasoning, Creator Memory, embeddings.
+

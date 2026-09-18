@@ -753,3 +753,17 @@ Date: 2026-09-18
 - Measured on a real 360 render of six output frames, FFmpeg process creations fell from 9 to 5, with no decoder process scaling with the frame count.
 - 6 new tests; full suite 431 passed / 0 failed / 9 skipped. Decision 037 records the architecture.
 
+
+## v0.2.59 — Persistent Media Analysis
+
+Date: 2026-09-18
+
+- Reelcraft now records what it has learned about a piece of footage, instead of re-examining the same material every time it is asked to do something.
+- The record is a separate, versioned file kept beside the project rather than inside it, so it does not bloat the project file and can be moved, deleted or regenerated safely. The project itself stays compatible with existing projects and simply keeps a small reference to it.
+- What the system knows is stored as independent capability layers, each with its own status and the time ranges it actually covers. A capability that could not run is reported as unavailable with a reason, and is never confused with a capability that ran and found nothing.
+- Two capabilities are included: a technical layer (duration, frame rate, resolution, aspect ratio, whether the footage has audio, and its declared projection) and a target layer that records where detected people or objects are, over time, as positions on the sphere rather than positions in a particular view.
+- Analysis is done in one pass with a single decoder, at a resolution chosen for analysis rather than for playback, and never at the full source resolution. Both the analysis resolution and how densely the footage was sampled are recorded with the results.
+- Anything written by a newer version of Reelcraft is preserved rather than discarded, so opening and re-saving a project cannot destroy information this version does not understand.
+- **No new intelligence was added.** There is still no transcription, no scene understanding, no shot or B-roll reasoning, no language model and no creator-preference learning; those remain future work. This release adds the place where such capabilities will be recorded.
+- Existing behaviour is unchanged: renders and replays produce byte-identical results whether analysis is present, absent, stale or unreadable. 15 new tests; targeted regression 31 passed / 0 failed / 0 skipped. Decisions 038-042 record the design.
+

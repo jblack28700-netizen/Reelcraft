@@ -9,6 +9,7 @@
 #include <functional>
 #include <memory>
 
+#include "analysis/MediaAnalysis.h"
 #include "application/ReframeCommandOutcome.h"
 #include "core/MediaItem.h"
 #include "core/Project.h"
@@ -226,6 +227,30 @@ public slots:
     // persisted additively in the project.
     QList<ReframeCommandOutcome> reframeOutputs() const;
 
+    // --- media analysis references (Objective 21) ----------------------------
+    // Analysis is DERIVED data, never a correctness dependency. Every accessor
+    // here is safe when there is no analysis at all, when the artifact file is
+    // missing or unreadable, when the source media has moved or changed, and when
+    // the artifact was produced by a different specification. Each of those is
+    // reported as a STATUS through resolveAnalysis(); none of them can fail a
+    // project load, a render or a replay.
+    //
+    // Analysis is deliberately NOT reachable from replayEditDecision() or from
+    // any deterministic execution path (Decision 040).
+    QList<MediaAnalysisReference> analysisReferences() const;
+    // The reference recorded for one media record. An invalid reference when
+    // none is recorded.
+    MediaAnalysisReference analysisReferenceFor(const QString &mediaId) const;
+    // Records (or replaces) the reference for one media record. An invalid
+    // reference is refused rather than stored.
+    bool setAnalysisReference(const MediaAnalysisReference &reference);
+    // Resolves the recorded reference to a usable artifact, reading it from disk.
+    // expectedSpecHash is optional; when supplied, an artifact produced by a
+    // different specification resolves as Stale rather than Resolved.
+    MediaAnalysisResolution resolveAnalysis(
+        const QString &mediaId,
+        const QString &expectedSpecHash = QString()) const;
+
     // --- edit-decision replay (Objective 16) --------------------------------
     // Re-renders the indexed persisted record from its EditDecision, without
     // re-parsing the instruction and without any perception provider: the
@@ -412,6 +437,9 @@ signals:
     // a new/opened project).
     void reframeOutputsChanged(const QList<ReframeCommandOutcome> &outputs);
 
+    // Emitted whenever the media-analysis reference list changes (Objective 21).
+    void analysisReferencesChanged();
+
     // Emitted when the creator "me" selection is set or cleared (Objective 12).
     void creatorSelectionChanged(bool hasSelection);
 
@@ -443,6 +471,10 @@ private:
     QString defaultReframeOutputPath(const MediaItem &media) const;
     QJsonArray reframeOutputsJson() const;
     void restoreReframeOutputsFromJson(const QJsonArray &outputs);
+    QJsonArray analysisRefsJson() const;
+    // Restores references leniently: a malformed entry is skipped and REPORTED,
+    // never silently dropped and never fatal.
+    void restoreAnalysisRefsFromJson(const QJsonArray &refs);
     // The single append/emit path for render records, shared by the command path
     // and by replayEditDecision so records are only ever persisted through one
     // gate (Objective 16).
@@ -483,6 +515,7 @@ private:
     SpeakerEvidenceProvider *m_speakerProvider = nullptr;
     QList<QPair<QString, QString>> m_speakerBindings;
     QList<ReframeCommandOutcome> m_reframeOutputs;
+    QList<MediaAnalysisReference> m_analysisRefs;
     ReframeReplayRenderer m_replayRenderer;
 
     // Objective 12: creator "me" selection and render preview.

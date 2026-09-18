@@ -1374,3 +1374,129 @@ The constraint that shapes every choice below is that this must be a **throughpu
 - A build-integrity defect surfaced while debugging this objective and is fixed and recorded: a generated makefile predated the new header and did not declare it as a dependency of the translation unit that instantiates the provider on the stack, so a header change never recompiled it and the binary mixed two revisions of the class. The failure mode (stack-canary abort plus a spurious frame mismatch) is recorded in `KNOWN_ISSUES.md`, and the operational requirement in `DEVELOPMENT_ENVIRONMENT.md`.
 - Not in this objective: audio, perception/detection/tracking, camera-path generation, auto-reframing, export presets, equirect export, UI, `EditDecision`/`ReframeIntent` schema changes, `ReframePlan` redesign, and any change to the Objective 19 1024x512 playback proxy. Decisions 017-036 are preserved.
 
+
+---
+
+# Decision 038 — Media Analysis Is a Versioned, Layered, Provider-Neutral Artifact Referenced by the Project
+
+**Status:** Accepted (2026-09-18, Objective 21)
+
+## Context
+
+The documented workflow (MASTER_GUIDE §3, AI_EDIT_CONTRACT §2) places **Media Analysis** between source media and creator intent, and PROJECT_MODEL §6 defines analysis as *derived data* that must stay distinguishable from creator decisions. Nothing implemented that stage: perception ran per command, over a command-scoped range, evenly sampled, and was discarded immediately, and the Project schema (v3) had no place to record what had been learned.
+
+## Decision
+
+- **Analysis is a persisted artifact with its own compatibility gate.** `MediaAnalysis` owns a `schemaVersion` independent of the Project schema, following the `EditDecision` artifact conventions exactly: a strict envelope loader, version-retaining serialization, and preservation of anything it cannot interpret.
+- **The artifact is a small closed ENVELOPE containing named CAPABILITY LAYERS.** The envelope carries only addressing, provenance, lifecycle, coverage and confidence. Capability-specific observations live inside a typed layer. A new capability is a new layer kind, never a new envelope field — this is what prevents the catch-all schema the design explicitly avoids.
+- **Layers are independently versioned** (`layerVersion`) and independently available, so one capability can evolve, or fail, without invalidating the others.
+- **The Project stores REFERENCES, never analysis.** An additive `analysisRefs` section holds a small record per media (mediaId, artifactId, artifactPath, source fingerprint). `Project::CurrentSchemaVersion` stays **3**: the section is additive and its absence reads back as an empty list, exactly like `viewerState`/`activeMediaId`/`reframeOutputs`.
+- **Analysis is a performance and review optimization, never a correctness dependency.** A project must open, render, replay and review with every analysis artifact deleted, moved, stale, unreadable, or referring to missing media. Each of those is a reported STATUS, never a load failure and never corruption.
+- **Provider-native output never enters the core model.** Tier-1 normalized observations are Reelcraft types; Tier-2 provider output is retained opaquely and is never interpreted by core. The provider adapter owns the mapping.
+- **Source-reference vocabulary is shared, not duplicated.** `core/MediaSourceReference` now defines the source reference and the `Matches`/`FileMissing`/`FingerprintMismatch` status used by both `EditDecision` and `MediaAnalysis`, so the two artifacts cannot drift apart in field names, fingerprint semantics or JSON shape.
+
+## Consequences
+
+- Objective 21 delivers the first two capabilities — `technical` (deterministic, no model, from the existing ffprobe seam) and `targets` (the existing 360 resolver, tracker and equirect view coverage, unchanged).
+- Every future capability (transcript, scene boundaries, quality, salience, B-roll) plugs into the same envelope without new persistence, lifecycle, invalidation or provider machinery.
+- A damaged or missing reference is reported through the existing status channel and skipped; analysis can never make a project unopenable.
+- Analysis for large media does not bloat the project file, and personal/derived data stays separable from the shareable project.
+- No new dependency, no ML runtime, no LLM. Decisions 017-037 preserved.
+
+---
+
+# Decision 039 — Analysis Is Evidence, Never Editorial Decision
+
+**Status:** Accepted (2026-09-18, Objective 21)
+
+## Context
+
+The whole point of separating AI reasoning from deterministic execution (Decision 001) is that the decision layer and the execution layer have different trust properties. A media-analysis artifact that quietly accumulates editorial judgements would reintroduce the coupling that boundary exists to prevent, and would make "what did the footage show?" indistinguishable from "what did the system decide?".
+
+## Decision
+
+- **Analysis may assert what is observable; it may never assert what to do.** There is no `ReframePlan`, no camera keyframe, no cut list, and no A-roll/B-roll label anywhere in the analysis model.
+- **The test to apply:** if two creators with different intents could disagree about a statement, it is reasoning, not analysis. Positions, times, labels, metrics, associations and confidence are analysis; "this is a usable A-roll candidate", "this is boring", "cut here" are reasoning.
+- **Salience and quality are split deliberately:** the METRICS are analysis, the RANKING and SELECTION are reasoning.
+- **Reasoning consumes `(MediaAnalysis, ProjectContext, ReframeIntent)` and produces only the existing validated `ReframePlan`.** No new plan type is introduced; whatever reasoner appears later — deterministic rules today, a model later — must emit that structure, exactly as `ReframeIntent` was designed to be produced by a future provider.
+- **Analysis may be absent and reasoning must still work**, degrading honestly rather than assuming silence.
+
+## Consequences
+
+- The deterministic engine, the contract checker (Decision 035) and replay (Decision 033) are untouched by any future analysis capability.
+- The evidence→plan boundary is now explicit and testable at the model level: a plan cannot be smuggled into an artifact that has no field for it.
+- Explainability and grounding belong to the decision, not the analysis. A future plan-level explanation field is a separate, additive decision and is NOT part of Objective 21.
+
+---
+
+# Decision 040 — Analysis Is Never on the Deterministic Replay Path
+
+**Status:** Accepted (2026-09-18, Objective 21)
+
+## Context
+
+Decision 033 guarantees that a persisted `EditDecision` reproduces a render byte-for-byte with no parser and no perception provider on the replay path, verified at object-code level. Analysis is produced by models and is therefore non-deterministic. Letting it influence replay would silently destroy the strongest reproducibility guarantee the project has.
+
+## Decision
+
+- **Replay consumes `EditDecision::plan()` and nothing else.** `replayEditDecision()` and every deterministic execution path must remain free of `MediaAnalysis`.
+- **Analysis is deletable without consequence.** Deleting every analysis artifact must leave rendering, replay and project loading fully functional; the worst case is the previous behaviour of resolving perception on demand.
+- **A stored decision is never rewritten or supplemented by analysis.** Learning, preference and analysis may influence FUTURE reasoning only.
+- **The invariant is verified behaviourally and must stay verified.** `replayIsIndependentOfMediaAnalysis` renders and replays with no analysis present, then with a resolving artifact plus a dangling reference, then after deleting the artifact, and asserts the decoded frames and the stored decision hash are identical in every case.
+
+## Consequences
+
+- Non-deterministic perception can never leak into a reproducible render.
+- The test is a permanent regression guard: a future change that reaches for analysis during replay fails it.
+- Combined with Decision 036 (silent renders) and Decision 033 (perception-free replay), the reproducibility contract now covers the whole analysis stage.
+
+---
+
+# Decision 041 — Capability Layers Are Independently Available, Coverage-Aware, and Explicitly Unavailable Rather Than Empty
+
+**Status:** Accepted (2026-09-18, Objective 21)
+
+## Context
+
+A video may have person tracks and timings available while transcription or scene understanding is unavailable. The dangerous failure mode is not a missing capability but an ambiguous one: an empty result list is indistinguishable from "nothing was there", and a silent absence is indistinguishable from "we never looked".
+
+## Decision
+
+- **Seven explicit layer states:** `NotStarted`, `InProgress`, `Partial`, `Complete`, `Failed`, `Unavailable`, `Stale`.
+- **`Unavailable` (this environment cannot produce the capability) and `Failed` (it was attempted and errored) are different from each other AND from an empty successful result.** Both non-results must carry a deterministic explanatory reason. This follows the precedent already set by `SpeakerAnalysis::available`, `SpeakerVerdict::Unavailable` and the probe seam's "unknown" defaults.
+- **Coverage is mandatory for any state that carries evidence.** A layer records the time ranges it actually covers, so "no observation at 07:30" is distinguishable from "we never looked at 07:30". Coverage means *the span the sampling covers*, not a claim that every frame in it was examined; the sampling interval is persisted in the layer spec so the difference is explicit.
+- **Source validity and analysis freshness are separate axes and are never collapsed.** Source validity is `Matches`/`FileMissing`/`FingerprintMismatch`; freshness is whether the artifact was produced by the specification currently in use. An artifact can be fresh about a file that has moved, or stale about an unchanged file.
+- **Everything the build cannot interpret is preserved verbatim**, so an older build can never destroy a newer capability's data; a re-saved artifact re-emits unknown layers byte-for-byte.
+
+## Consequences
+
+- A partial analysis is usable and honestly labelled; truncation by budget or a skipped sample produces `Partial`, never a silent claim of the whole span.
+- The UI/status layer can explain *why* something is missing instead of showing a blank.
+- Objective 21's implementation deliberately exercises this: with no detector configured the `targets` layer is recorded `Unavailable` with a reason, and opens no decoder at all, and this is asserted by test.
+
+---
+
+# Decision 042 — One Decode Pass Per Analysis Run at a Recorded Perception Resolution
+
+**Status:** Accepted (2026-09-18, Objective 21)
+
+## Context
+
+A single 4K frame decode costs seconds on the development device, so whole-video analysis at source resolution is impossible rather than merely slow. The viewer's 1024x512 display proxy exists for display latency and is not a perception budget. Objective 20 established that decoder processes must not scale with the amount of work.
+
+## Decision
+
+- **Exactly one persistent visual decoder per analysis run**, opened at the configured **perception resolution**, decoding strictly sequentially and sampling on a configured interval. Never one process per sampled frame; never source resolution by default.
+- **The perception resolution is its own concept.** It is not the viewer display proxy and not the source resolution. It is explicit, configurable, and **persisted in the layer specification**, because an observation is only comparable with another made at the same settings.
+- **The sampling interval is persisted too**, because it bounds the temporal precision of every conclusion drawn from the layer.
+- **Sampling never invents a timestamp.** The probed duration is the END of the last frame, so the analysis scope is clamped to the last decodable timestamp rather than requesting a frame that was never encoded.
+- **The specification identity is a deterministic hash** over perception resolution, sampling, participating capabilities and provider identities, so swapping a model or changing a resolution invalidates a stored artifact instead of silently reusing it.
+- Audio-only capabilities never open the visual decoder.
+
+## Consequences
+
+- Whole-video analysis is bounded by the scope and the sample budget, not by the number of capabilities; adding a second visual capability costs no extra decode.
+- `decoderOpens` is surfaced on the run result, so a violation of the single-decoder contract would be caught rather than hidden.
+- Suite cost is recorded honestly: the real-media analysis tests add roughly 100 s on this device.
+- Sampling precision is a recorded limitation: observations on a 1 s grid cannot justify frame-accurate edits. Fine-grained placement requires targeted re-analysis, which the layer spec and coverage model make decidable.
+

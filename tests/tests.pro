@@ -8,8 +8,11 @@ INCLUDEPATH += ../app
 SOURCES += \
     test_project.cpp \
     ../app/core/MediaItem.cpp \
+    ../app/core/MediaSourceReference.cpp \
     ../app/core/Project.cpp \
     ../app/application/Application.cpp \
+    ../app/analysis/MediaAnalysis.cpp \
+    ../app/analysis/MediaAnalysisRunner.cpp \
     ../app/media/FfmpegFrameSource.cpp \
     ../app/media/FfprobeDurationProbe.cpp \
     ../app/media/FrameExtractor.cpp \
@@ -60,8 +63,11 @@ SOURCES += \
 
 HEADERS += \
     ../app/core/MediaItem.h \
+    ../app/core/MediaSourceReference.h \
     ../app/core/Project.h \
     ../app/application/Application.h \
+    ../app/analysis/MediaAnalysis.h \
+    ../app/analysis/MediaAnalysisRunner.h \
     ../app/application/ReframeCommandOutcome.h \
     ../app/media/FfmpegFrameSource.h \
     ../app/media/FfprobeDurationProbe.h \

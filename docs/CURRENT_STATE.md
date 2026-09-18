@@ -2,7 +2,7 @@
 
 ## Current Version
 
-0.2.58
+0.2.59
 
 ## Current Branch
 
@@ -81,7 +81,7 @@ Status: Partially implemented — deterministic reframing vertical slice complet
 
 Status: Implemented and continuously verified.
 
-A Qt Test suite covers project state, viewer/media, the media-source seam and frame pump, player/timing, the 360 reframing engine (plan validation/round-trip, camera interpolation, rendering determinism, intent parsing, plan building, and a real FFmpeg end-to-end render), and target resolution (equirect/view geometry, seam and pitch boundaries, view coverage, deterministic tracking, resolver behavior, the subprocess detector protocol, the track planner, and a model-free detection -> plan -> render path). Current result: 431 passed, 0 failed, 9 skipped (~563 s; the real-FFmpeg render and decode tests dominate). Eight skips are environment-gated real-media/model integrations (real detector, speaker, appearance, real 360 clip, rendered playback, source playback, compound command, application/user command) that run only when the corresponding helper, model and clip variables are configured; the ninth is the child-only slot driven by the fresh-process replay test. The normal suite stays model-free.
+A Qt Test suite covers project state, viewer/media, the media-source seam and frame pump, player/timing, the 360 reframing engine (plan validation/round-trip, camera interpolation, rendering determinism, intent parsing, plan building, and a real FFmpeg end-to-end render), and target resolution (equirect/view geometry, seam and pitch boundaries, view coverage, deterministic tracking, resolver behavior, the subprocess detector protocol, the track planner, and a model-free detection -> plan -> render path). Current result: 446 passed, 0 failed, 9 skipped (~688 s; the real-FFmpeg render, decode and analysis tests dominate). Eight skips are environment-gated real-media/model integrations (real detector, speaker, appearance, real 360 clip, rendered playback, source playback, compound command, application/user command) that run only when the corresponding helper, model and clip variables are configured; the ninth is the child-only slot driven by the fresh-process replay test. The normal suite stays model-free.
 
 ## Technology Direction
 
@@ -1199,4 +1199,27 @@ Status: Complete (2026-09-18). Human-authorized scope (Decision 037). Core requi
 - Deliberately NOT in this objective: audio, perception/detection/tracking, camera-path generation, auto-reframing, diarization, LLM integration, export presets, equirect export, UI redesign, `EditDecision`/`ReframeIntent` schema changes, `ReframePlan` redesign, and any change to the Objective 19 1024x512 playback proxy.
 - **Build-integrity defect found and fixed during this objective:** `tests/Makefile` predated the new header and did not declare it as a dependency of `test_project.o`, so the test binary could be linked from objects compiled against different revisions of the class. See KNOWN_ISSUES.md and DEVELOPMENT_ENVIRONMENT.md.
 - Architecture decision: Decision 037.
+
+
+## Phase 4 Objective 21 — Persistent Media Analysis (Envelope, Lifecycle, One Whole-Video Pass) — Complete
+
+Status: Complete (2026-09-18). Human-authorized scope (Decision 038). This closes the architectural gap identified by the product-vision investigation: the documented workflow required a Media Analysis stage, and neither the Project schema nor the implementation had one.
+
+- **`app/analysis/MediaAnalysis.{h,cpp}`** (new): the persisted, versioned record of what Reelcraft learned about ONE piece of media. It owns its `schemaVersion` (independent of the Project schema), a source reference with a cheap fingerprint, a `SourceStatus` (`Matches`/`FileMissing`/`FingerprintMismatch`), an analysis-specification identity, a creation time, and a deterministic `analysisId` (SHA-256 over the compact payload). The loader is strict about the ENVELOPE (version, creation time, source reference, specification identity, layer entry shape) and lenient about layer CONTENT.
+- **Small closed envelope + named capability layers.** The envelope carries only addressing, provenance, lifecycle, coverage and confidence. Capability data lives in typed, independently versioned layers. A new capability is a new layer kind, never a new envelope field.
+- **Preservation instead of destruction.** A layer this build cannot interpret (unknown kind, newer `layerVersion`, unrecognized state, malformed coverage) is kept verbatim and re-emitted byte-for-byte, so an older build opening and re-saving an artifact can never silently destroy a newer capability's data.
+- **Seven explicit layer states** — `NotStarted`, `InProgress`, `Partial`, `Complete`, `Failed`, `Unavailable`, `Stale` — with **mandatory time coverage** for any state carrying evidence, so "nothing was there" is distinguishable from "we never looked". `Unavailable` (cannot run here) and `Failed` (attempted and errored) are distinct from each other and from an empty successful result, and both carry a deterministic reason.
+- **Two capabilities implemented.** `technical` (deterministic, no model: duration, frame rate, resolution, aspect, audio-track presence, declared projection, 360 frame convention; facts that cannot be determined are NAMED as unavailable, never defaulted) and `targets` (the existing `TargetResolver` + `SphericalTargetTracker` + equirect tangent-view coverage, unchanged, persisted as normalized spherical observations and tracks — never provider/view-pixel coordinates).
+- **No detector means `Unavailable`, not empty.** With no detector configured the `targets` layer records an explicit reason and opens no decoder at all.
+- **`app/analysis/MediaAnalysisRunner.{h,cpp}`** (new): one whole-video pass. Scope resolution from the probed duration, **exactly one persistent decoder** opened at the configured **perception resolution**, strictly sequential decoding with interval sampling, honest coverage, and a recorded perception/sampling specification. The scope is clamped to the last decodable timestamp (the probed duration is the END of the last frame), so no sample asks for a frame that was never encoded. `decoderOpens` is surfaced so a violation of the single-decoder contract is caught rather than hidden.
+- **Project integration is a reference, never the data.** Additive `analysisRefs` section; `Project::CurrentSchemaVersion` stays **3**. Each reference is small (mediaId, artifactId, artifactPath, source fingerprint) and sufficient only to locate the artifact and verify it still corresponds to the expected media.
+- **Degradation is a status, not a failure.** `MediaAnalysisRefStatus` (`None`, `Resolved`, `ArtifactMissing`, `ArtifactUnreadable`, `ArtifactMismatch`, `SourceMissing`, `SourceChanged`, `Stale`) is reported; a project loads, renders and replays with every artifact missing, unreadable, stale, mismatched or referring to missing media. `Application` gained `analysisReferences()`, `analysisReferenceFor()`, `setAnalysisReference()`, `resolveAnalysis()` and `analysisReferencesChanged()`.
+- **Shared source vocabulary.** `app/core/MediaSourceReference.{h,cpp}` (new) now defines the source reference, the three-way status, the fingerprint comparison, the chunked content digest and the millisecond timestamp quantization; `EditDecision` reuses them through type aliases, so the two artifacts cannot drift apart. The `EditDecision` serialized payload is unchanged and its tests pass unmodified.
+- **Additive probe extension.** `MediaDurationProbe::streamSummary()` was added using the established pattern (a virtual with a default that reports *unavailable*), implemented by `FfprobeDurationProbe` with one JSON ffprobe call; existing probes and test doubles stayed valid without change.
+- **Replay is provably independent of analysis (Decision 040).** `replayIsIndependentOfMediaAnalysis` renders and replays with no analysis, then with a resolving artifact plus a dangling reference, then after deleting the artifact, asserting identical decoded frames and the identical stored decision hash throughout.
+- **Verification:** 15 new tests; targeted regression across the touched components (EditDecision artifact, replay, Project schema, MediaItem, ffprobe probe, Application persistence) **31 passed / 0 failed / 0 skipped**.
+- Deliberately NOT in this objective: transcript/dialogue, diarization, scene or shot segmentation, quality/salience metrics, B-roll, LLM or editorial reasoning, Creator Memory, embeddings, generated coverage, multi-source editing, and any change to `ReframePlan`, camera-path semantics, the renderer, Objective 20's streaming render, `EditDecision` immutability or replay.
+- Architecture decisions: 038, 039, 040, 041, 042.
+
+Next: the **Analysis -> Reasoning boundary** (editorial reasoning over persisted evidence) is the natural successor and is explicitly a separate checkpoint. Creator Memory remains a future architectural topic with no decision recorded.
 

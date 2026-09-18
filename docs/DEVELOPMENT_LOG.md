@@ -1790,3 +1790,51 @@ Two blocking defects appeared during this objective: an intermittent `*** stack 
 
 - Decision 037 recorded (persistent render decoding architecture: anchored stream with a bounded sequential window, seek fallback, frame-identity contract, per-source frame rate). Decisions 017-036 preserved.
 
+
+## 2026-09-18 — Phase 4 Objective 21: Persistent Media Analysis
+
+### Objective
+
+The product-vision investigation found a genuine architectural gap: MASTER_GUIDE's workflow and AI_EDIT_CONTRACT's canonical flow both place **Media Analysis** between source media and creator intent, PROJECT_MODEL section 6 defines analysis as derived data, and REQUIREMENTS section 5 lists the analysis capabilities -- but the Project schema (v3) had no analysis section and the implementation had no whole-video analysis stage. Perception ran per command, over a command-scoped range, evenly sampled, and was discarded.
+
+The authorized objective (Decision 038) was to close that gap with the smallest foundation future capabilities can plug into: the artifact, the lifecycle, the persistence, the invalidation and one real whole-video pass -- and explicitly NOT transcript, diarization, scene understanding, quality ranking, B-roll, an LLM, Creator Memory or multi-source editing.
+
+### What was built
+
+- **`app/analysis/MediaAnalysis.{h,cpp}`** -- a small, closed envelope (addressing, provenance, lifecycle, coverage, confidence) containing named capability layers. Deliberately shaped like `EditDecision`: its own `schemaVersion`, a source reference with a cheap fingerprint, a three-way source status, a specification identity, a SHA-256 `analysisId` over the compact payload, a strict envelope loader, version-retaining serialization, and verbatim preservation of layers it cannot interpret.
+- **Seven layer states** with mandatory coverage for any state carrying evidence. `Unavailable` (cannot run here), `Failed` (attempted and errored) and an empty successful result are three different things, and both non-results carry a deterministic reason -- the same discipline already used by `SpeakerAnalysis.available` and the probe seam's "unknown" defaults.
+- **Two capabilities.** `technical` is deterministic and model-free, built on the existing ffprobe seam; facts it cannot determine are named in an `unavailable` list rather than defaulted. `targets` reuses `TargetResolver`, `SphericalTargetTracker` and the equirect tangent-view coverage unchanged, and persists normalized spherical observations and tracks -- never provider or view-pixel coordinates.
+- **`app/analysis/MediaAnalysisRunner.{h,cpp}`** -- the whole-video pass: one persistent `FfmpegFrameSource` per run at a configured perception resolution, sequential decoding with interval sampling, honest coverage, and a persisted perception/sampling specification. `decoderOpens` is surfaced so the single-decoder contract cannot be violated silently.
+- **Project references, not data.** An additive `analysisRefs` section (schema stays 3) holding a small record per media, sufficient only to locate the artifact and verify it still matches the expected source.
+- **Shared vocabulary.** `core/MediaSourceReference` now defines the source reference, the `Matches`/`FileMissing`/`FingerprintMismatch` status, the fingerprint comparison and the chunked content digest; `EditDecision` reuses them through type aliases so the two artifacts cannot drift apart. The decision's serialized payload is unchanged.
+- **Additive probe extension.** `MediaDurationProbe::streamSummary()` follows the rule `frameRate()` established: a new optional virtual whose default reports *unavailable*, so existing probes and test doubles stayed valid.
+
+### Design decisions taken during implementation
+
+- **The probed duration is the END of the last frame, not a decodable timestamp.** For a 2 s 10 fps clip the frames run 0..1900 ms, so an unclamped scope asks the decoder for a frame that was never encoded. The analysis scope is now clamped to the last usable timestamp, which keeps coverage truthful instead of reporting a sample the stream cannot serve.
+- **Coverage means "the span the sampling covers", not "every frame was examined".** The sampling interval is persisted in the layer spec so the difference is explicit rather than implied.
+- **Preservation is per layer, strictness is per envelope.** An unknown kind or a newer `layerVersion` is preserved and re-emitted byte-for-byte; a layers entry that is not an object at all is envelope corruption. The boundary was chosen so that no data which could ever be interpreted is discarded.
+
+### Failure recovery
+
+Two focused tests failed on first run, both because of a real defect the tests correctly caught: `resolveMediaAnalysisReference()` reported `ArtifactMissing` as `ArtifactUnreadable`, collapsing "the artifact file is not there" (a routine cache miss) into "the file is there but this build cannot read it". The resolution logic now checks the artifact's existence before loading and the two outcomes are distinct, matching the enum's documented meaning. Both tests then passed unmodified.
+
+Two compile failures occurred and were fixed: a missing `m_config` member on the runner, and the `QCryptographicHash`/`QFile` includes that were still needed by `EditDecision.cpp` after the shared helpers moved to core.
+
+### Verification
+
+- 15 new tests: artifact round trip and identity; schema/version and digest handling; source fingerprint status; seven lifecycle states with coverage; Unavailable vs Failed vs empty; unknown-layer preservation across repeated re-saves; the technical layer on real generated media; the detector-unavailable target layer; spherical track persistence and round trip; specification identity and staleness; single-persistent-decoder whole-video sampling with recorded perception resolution and coverage; truncation to `Partial`; project reference persistence without a schema bump; missing/stale/invalid references being non-fatal; and replay independence.
+- Targeted regression across the touched components (EditDecision artifact, replay, Project schema, MediaItem, ffprobe probe, Application persistence): **31 passed / 0 failed / 0 skipped**.
+- Full model-free suite run at the checkpoint; results recorded in the Objective 21 checkpoint report.
+
+### Boundary notes / not implemented
+
+- No transcript, diarization, scene/shot segmentation, quality or salience metrics, B-roll reasoning, LLM, Creator Memory, embeddings, generated coverage or multi-source editing.
+- No change to `ReframePlan` semantics, camera-path semantics, the renderer, Objective 20's streaming render path, `EditDecision` immutability, replay guarantees or source-media read-only guarantees.
+- No new dependency and no ML runtime.
+- Recorded limitation: observations made on a sampling grid cannot justify frame-accurate edits; fine-grained placement would need targeted re-analysis, which the coverage model now makes decidable.
+
+### Decisions
+
+- Decisions 038-042 recorded (persistent layered artifact; analysis is evidence not decision; analysis is never on the replay path; coverage-aware independently-available layers; one decode pass at a recorded perception resolution). Decision 043 (Creator Memory) is deliberately NOT recorded: Creator Memory remains a future architectural topic.
+

@@ -42,6 +42,39 @@ public:
         return false;
     }
 
+    // Optional: which elementary streams the file contains and at what geometry
+    // (Objective 21). The media-analysis "technical" layer persists these facts;
+    // nothing here is inferred or defaulted, because a fabricated resolution is
+    // worse than an honestly missing one.
+    //
+    // Same additive-seam rule as frameRate() above: the default implementation
+    // reports "unavailable" so existing probes and test doubles stay valid, and a
+    // probe that can answer overrides it.
+    struct StreamSummary
+    {
+        bool hasVideo = false;
+        int videoWidth = 0;
+        int videoHeight = 0;
+        bool hasAudio = false;
+        int audioSampleRate = 0;
+        int audioChannels = 0;
+
+        // A summary is usable when it says something definite about the file.
+        bool isValid() const { return hasVideo || hasAudio; }
+    };
+
+    virtual bool streamSummary(const QString &filePath, StreamSummary *out,
+                               QString *error = nullptr)
+    {
+        Q_UNUSED(filePath);
+        Q_UNUSED(out);
+        if (error) {
+            *error = QStringLiteral(
+                "Media stream summary is not reported by this probe.");
+        }
+        return false;
+    }
+
 protected:
     MediaDurationProbe() = default;
 };
