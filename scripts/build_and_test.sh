@@ -28,5 +28,10 @@ ensure_makefile
 make
 
 echo "Running tests offscreen..."
-# 240s ceiling: Objective 15+ FFmpeg-generated review fixtures raise suite runtime.
-QT_QPA_PLATFORM=offscreen timeout 240 ./reelcraft_tests
+# 900s ceiling. The complete suite (446 tests, including the real-FFmpeg render,
+# decode and analysis tests added since Objective 19) measures ~720-743 s on this
+# proot device, so the old 240 s value -- written when the suite ran in ~221-241 s
+# -- killed it partway through and made the script exit 124. 900 s leaves ~21%
+# headroom over the slowest observed run. If this ceiling is ever reached, measure
+# the suite again before raising it further.
+QT_QPA_PLATFORM=offscreen timeout 900 ./reelcraft_tests
