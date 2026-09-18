@@ -85,6 +85,17 @@ MainWindow::MainWindow(QWidget *parent)
     m_stopRenderButton = new QPushButton(QStringLiteral("Stop Render"), central);
     m_playbackPositionLabel = new QLabel(QStringLiteral("Playback: stopped"), central);
 
+    m_playSourceButton = new QPushButton(QStringLiteral("Play Source"), central);
+    m_pauseSourceButton = new QPushButton(QStringLiteral("Pause Source"), central);
+    m_stopSourceButton = new QPushButton(QStringLiteral("Stop Source"), central);
+    m_sourceSeekSeconds = new QDoubleSpinBox(central);
+    m_sourceSeekSeconds->setRange(0.0, 100000.0);
+    m_sourceSeekSeconds->setDecimals(3);
+    m_sourceSeekSeconds->setSingleStep(1.0);
+    m_sourceSeekSeconds->setValue(0.0);
+    m_seekSourceButton = new QPushButton(QStringLiteral("Seek Source"), central);
+    m_sourcePlaybackLabel = new QLabel(QStringLiteral("Source: stopped"), central);
+
     m_mediaListWidget = new QListWidget(central);
     m_mediaListWidget->setObjectName("mediaListWidget");
     m_mediaListWidget->setMinimumHeight(80);
@@ -125,6 +136,12 @@ MainWindow::MainWindow(QWidget *parent)
     m_playRenderButton->setObjectName("playRenderButton");
     m_pauseRenderButton->setObjectName("pauseRenderButton");
     m_stopRenderButton->setObjectName("stopRenderButton");
+    m_playSourceButton->setObjectName("playSourceButton");
+    m_pauseSourceButton->setObjectName("pauseSourceButton");
+    m_stopSourceButton->setObjectName("stopSourceButton");
+    m_seekSourceButton->setObjectName("seekSourceButton");
+    m_sourceSeekSeconds->setObjectName("sourceSeekSeconds");
+    m_sourcePlaybackLabel->setObjectName("sourcePlaybackLabel");
     m_playbackPositionLabel->setObjectName("playbackPositionLabel");
 
     m_viewerWidget = new ViewerWidget(central);
@@ -168,6 +185,12 @@ MainWindow::MainWindow(QWidget *parent)
     layout->addWidget(m_pauseRenderButton);
     layout->addWidget(m_stopRenderButton);
     layout->addWidget(m_playbackPositionLabel);
+    layout->addWidget(m_playSourceButton);
+    layout->addWidget(m_pauseSourceButton);
+    layout->addWidget(m_stopSourceButton);
+    layout->addWidget(m_sourceSeekSeconds);
+    layout->addWidget(m_seekSourceButton);
+    layout->addWidget(m_sourcePlaybackLabel);
     layout->addWidget(m_statusLabel);
 
     setCentralWidget(central);
@@ -279,6 +302,16 @@ MainWindow::MainWindow(QWidget *parent)
             &MainWindow::pauseReframeOutputPlaybackRequested);
     connect(m_stopRenderButton, &QPushButton::clicked, this,
             &MainWindow::stopReframeOutputPlaybackRequested);
+    connect(m_playSourceButton, &QPushButton::clicked, this,
+            &MainWindow::playSourceRequested);
+    connect(m_pauseSourceButton, &QPushButton::clicked, this,
+            &MainWindow::pauseSourceRequested);
+    connect(m_stopSourceButton, &QPushButton::clicked, this,
+            &MainWindow::stopSourceRequested);
+    connect(m_seekSourceButton, &QPushButton::clicked, this, [this]() {
+        emit seekSourceRequested(
+            static_cast<qint64>(qRound64(m_sourceSeekSeconds->value() * 1000.0)));
+    });
 
     m_newProjectButton->installEventFilter(this);
     m_saveButton->installEventFilter(this);
@@ -582,4 +615,17 @@ void MainWindow::showReframePlaybackPosition(qint64 frameCount,
         QStringLiteral("Playback: frame %1, %2 ms")
             .arg(frameCount)
             .arg(positionMs));
+}
+
+void MainWindow::showSourcePlaybackState(bool playing)
+{
+    m_sourcePlaybackLabel->setText(
+        playing ? QStringLiteral("Source: playing")
+                : QStringLiteral("Source: paused/stopped"));
+}
+
+void MainWindow::showSourcePlaybackPosition(qint64 positionMs)
+{
+    m_sourcePlaybackLabel->setText(
+        QStringLiteral("Source: %1 ms").arg(positionMs));
 }

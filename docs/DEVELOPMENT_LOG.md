@@ -1705,3 +1705,46 @@ All three rules hold by construction on both paths today: both planners derive o
 
 - Decision 035 updated with an implementation-outcome section; its scope text is unchanged. Decisions 017-034 preserved.
 
+
+## 2026-09-18 — Objective 19 Implementation: Real 360 Source Playback
+
+### Objective
+
+Make real equirectangular 360 media observable inside Reelcraft: continuous playback, seek, viewpoint interaction, clean stop/end-of-media, without a decoder process per displayed frame. Automatic reframing explicitly out of scope.
+
+### Inspection (before any change)
+
+- Media import path (`MediaItem::createFromFilePath`, `Application::importMediaFile`), `FfmpegFrameSource`, `FramePump`, `Player`/`Playhead`, `EquirectView` + the projection path, the single-frame preview path, the rendered-result playback path (Objective 13), audio handling (none), and the playback tests.
+- Key findings: `FfmpegFrameSource::open()` already applies an FFmpeg `scale=` filter and requires caller-supplied geometry; there is no seek support; `Player` paces presentation but has no seek; audio is absent everywhere (`-an`, no QtMultimedia); the rendered-result path already demonstrates the persistent-subprocess playback pattern and the QTimer-driven `tick()`. Reuse was therefore chosen over a new architecture.
+
+### Work completed
+
+- `FfmpegFrameSource::open` gained two OPTIONAL parameters: an input seek (`-ss` before `-i`) and an aspect-preserving scale mode. The original three-argument call and its argument list are unchanged.
+- `MediaDurationProbe` gained `frameRate()` with a default implementation reporting *unknown* (so existing probes and test doubles stayed valid); `FfprobeDurationProbe` overrides it, parsing `r_frame_rate`.
+- `Application` gained a source-playback pipeline (own `FrameSource`/`FramePump`/`Player`), sharing the single event-loop timer which now dispatches by active player; the two playbacks are mutually exclusive and tear down on project lifecycle events.
+- Added `SourcePlaybackSourceFactory` as an injectable seam, the four signals, position/duration/interval readouts, and `seekSourcePlayback()`.
+- UI: Play/Pause/Stop Source, a seek spinbox + button, and a position readout; `main.cpp` wires the signals, presenting source frames through the existing projection-routed preview path.
+- 9 new tests plus an env-gated `realSourcePlaybackIntegration`.
+
+### Verification
+
+- Focused run of the 9 new tests: `Totals: 11 passed, 0 failed, 0 skipped`.
+- Targeted regression (source playback, rendered playback, media import/identity, preview/seeking, ffprobe duration, decision/replay/contract): `Totals: 44 passed, 0 failed, 0 skipped` (40.3 s).
+- Real-media validation (`realSourcePlaybackIntegration`) against a real 360 proxy: passed (72.9 s) — import, equirect declaration, continuous play, pause, seek to midpoint, viewpoint change, resume, end-of-media, original untouched.
+
+### Failure recovery
+
+- A test-authoring bug, not a product defect, caused two iterations of the real-media test: it called `resumeSourcePlayback()` after a seek that had preserved the *playing* state (resume correctly refuses an already-playing stream), and then asserted *playing* immediately after a seek landing 300 ms before the end, where the stream can end before the assertion. The test now asserts on the ended signal.
+- One genuine product fix came out of testing: a seek performed while paused originally left the player in the *Stopped* state (unresumable). `openSourcePlaybackAt` now always enters Playing and pauses again when the open must not run, so a paused seek stays positioned and resumable.
+- Environment note (separate from code correctness): a single 4K frame decode on this device measured ~2.6 s, making a validation run against the 779 MB 4K original take ~518 s. Validation therefore uses a 12 s 1280x640 2:1 proxy extracted from the same real footage (original untouched), which is also the reason the playback stream is a bounded proxy. Recorded in `DEVELOPMENT_ENVIRONMENT.md`.
+
+### Boundary notes / not implemented
+
+- Audio: deferred (Decision 036) with the smallest viable follow-up recorded. Playback is video-only.
+- No automatic 360 detection or spherical metadata parsing (creator declaration remains sufficient).
+- No perception, tracking, camera-path generation, export or parser change.
+
+### Decisions
+
+- Decision 036 recorded (source-playback architecture: separate pipeline, single event-loop driver, bounded proxy stream, seek-by-reopen, frame-rate pacing, audio deferred). Decisions 017-035 preserved.
+

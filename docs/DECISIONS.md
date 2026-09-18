@@ -1313,3 +1313,33 @@ The rules are currently satisfied **by construction** on both paths: the builder
 
 No parser, `ReframeIntent`, `ReframePlan`, `CameraKeyframe` or `EditDecision` change; no schema bump; no persisted checker result; no persistence on rejection; no new dependency; no LLM; no renderer or playback change; no convergence refactor. Decisions 017-034 are preserved.
 
+
+---
+
+# Decision 036 — Source-Media Playback Architecture
+
+**Status:** Accepted (2026-09-18, 360 Reframing Objective 19)
+
+## Context
+
+The product direction is that Reelcraft must first become a working 360 video editor, and the prerequisite for improving automatic reframing is that real 360 footage is *observable*. Until this objective the application could show a single decoded frame of the active media and step through time one frame at a time, while continuous playback existed only for rendered results (Objective 13, Decision 030). Watching 360 footage, scrubbing it, and looking around while it plays were not possible.
+
+## Decisions
+
+- **Source playback is a separate pipeline that reuses the existing seams, not a generalisation of the rendered-result path.** It owns its own `FrameSource`/`FramePump`/`Player`; the two playbacks share the single event-loop timer, which dispatches by which player exists, and they are mutually exclusive (starting either stops the other). The tested Objective 13 path is deliberately left unperturbed; unifying the two was rejected as a change to a tested boundary for no functional gain.
+- **Continuous decoding, never a process per displayed frame.** Playback uses the existing persistent FFmpeg subprocess seam (`FfmpegFrameSource` + `FramePump` + `Player`). The requirement that playback must not regress into decode-one-frame-per-process is therefore structural: one decoding process serves the whole session.
+- **The decoded stream is a bounded 2:1 proxy chosen by the application (1024x512), not the native source resolution.** `FfmpegFrameSource` already scales inside FFmpeg, so the caller supplies the geometry and pays one decode per presented frame whose cost is independent of the source resolution. For a 4K equirect source this is what makes viewing viable at all on the development device, where a single native frame decode measured seconds. **The original media is only ever read.**
+- **Aspect ratio is preserved by letterboxing when the media aspect differs from the proxy.** `FfmpegFrameSource::open` gained an optional aspect-preserving scale mode; stretching a declared-equirect frame would silently corrupt the 360 projection. The option is additive and defaults to the previous behaviour, so the rendered-result path is byte-for-byte unchanged.
+- **Seeking reopens the continuous stream with an input seek.** `FfmpegFrameSource::open` gained an optional start offset (`-ss` before `-i`), and the application carries the offset so the reported position is absolute source time. A seek preserves whether playback was running, and a seek performed while paused leaves the stream paused at the new position and resumable.
+- **The source frame rate is learned once per open, through the existing ffprobe seam.** `MediaDurationProbe` gained `frameRate()` with a default implementation that honestly reports *unknown*, so existing probes and test doubles stayed valid; `FfprobeDurationProbe` overrides it by parsing `r_frame_rate`. Playback is paced at the source rate when known and at a documented default otherwise. The interval is a playback pacing parameter, never media metadata, and is never written anywhere.
+- **Presentation reuses the existing viewer path.** Source frames are emitted and routed through the same projection-aware preview path as the single-frame preview, so 360 footage uses the equirectangular camera and the authoritative `ViewportState` keeps working during playback: looking around while the footage plays needs no new viewer code.
+- **Audio is DEFERRED, deliberately and explicitly.** Reelcraft has no audio output: rendered results are silent by design, `QtMultimedia` was explicitly deferred by Decision 017, and the media seams decode with `-an`. Adding synchronized audio playback would introduce a new output subsystem, a new dependency and a seek/pause synchronization model — a disproportionate expansion of a video-playback objective. Source playback is therefore **video-only**, and it is kept extensible: the frame/timestamp emission point is the natural place for an audio scheduler to attach, and the reopen-on-seek model already defines what a seek means.
+
+## Consequences
+
+- Real 360 footage is now watchable in Reelcraft: play, pause, seek, look around, resume, and clean end-of-media handling, all without a process per frame.
+- The emitted proxy frames and the reported position are the intended feed for the future automatic-reframing work, so perception can consume the same stream instead of duplicating the decoding pipeline. **Caveat recorded for that objective:** the 1024x512 proxy is a *viewing* budget, and detection may require a larger or separate decode; the proxy size is an application constant, not a contract.
+- Known limitation: playback is silent. The smallest viable follow-up is an audio output seam driven by the same position/seek model (a `QAudioSink`-based or external-player implementation behind an injectable interface), which should be scoped as its own objective.
+- Known limitation: the source frame rate is discovered by an ffprobe call at each open (start and each seek). An unknown rate falls back to the default pacing, so playback speed can differ from the source rate when ffprobe is unavailable or reports nothing.
+- No parser, plan, decision-artifact, renderer, export or perception change. Decisions 017-035 are preserved.
+

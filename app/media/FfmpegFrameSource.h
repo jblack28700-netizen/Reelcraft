@@ -25,6 +25,13 @@ public:
     // (rawvideo). Returns false with a deterministic error when geometry is
     // missing, the file is invalid, or the FFmpeg process cannot start.
     bool open(const QString &filePath, int frameWidth, int frameHeight);
+    // Objective 19: the same open, with two OPTIONAL behaviours that default
+    // to the original semantics. startMs > 0 seeks the input before decoding (-ss
+    // before -i) so a source can be scrubbed without a per-frame process;
+    // preserveAspectRatio letterboxes instead of stretching when the media aspect
+    // does not match the requested proxy geometry.
+    bool open(const QString &filePath, int frameWidth, int frameHeight,
+              qint64 startMs, bool preserveAspectRatio);
 
     bool readNextFrame(int timeoutMs, ReadResult *result,
                        QImage *outFrame) override;

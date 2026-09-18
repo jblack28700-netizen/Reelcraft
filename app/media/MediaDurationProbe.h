@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QString>
+#include <QtGlobal>
 
 // MediaDurationProbe is the replaceable media-engine seam that reports the
 // duration of a media file (Objective 10). It exists so range-less 360 commands
@@ -25,6 +26,21 @@ public:
     // unmodified on failure.
     virtual bool durationMs(const QString &filePath, qint64 *outDurationMs,
                             QString *error = nullptr) = 0;
+
+    // Optional: the video frame rate, used to pace playback at the source rate.
+    // The default implementation reports "unknown" so that existing probes and
+    // test doubles remain valid without change; a probe that can answer overrides
+    // it. Returns false (leaving *outFps unmodified) when unknown.
+    virtual bool frameRate(const QString &filePath, double *outFps,
+                           QString *error = nullptr)
+    {
+        Q_UNUSED(filePath);
+        Q_UNUSED(outFps);
+        if (error) {
+            *error = QStringLiteral("Frame rate is not reported by this probe.");
+        }
+        return false;
+    }
 
 protected:
     MediaDurationProbe() = default;

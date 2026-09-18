@@ -1048,6 +1048,16 @@ private slots:
     void applicationPlaybackPreservesSingleFramePreview();
     void applicationPlaybackSourceFactoryFailureIsHonest();
     void applicationPlaybackDecodeErrorStops();
+    void sourcePlaybackStartsPresentsAndStops();
+    void sourcePlaybackRequiresProjectAndActiveMedia();
+    void sourcePlaybackSeekReopensAtRequestedPosition();
+    void sourcePlaybackEndOfStreamStopsCleanly();
+    void sourcePlaybackPacesAtProbedFrameRate();
+    void sourcePlaybackMutuallyExclusiveWithRenderedPlayback();
+    void sourcePlaybackViewpointStaysUsable();
+    void ffprobeDurationProbeReportsFrameRate();
+    void mainWindowSourcePlaybackButtonsEmitRequests();
+    void realSourcePlaybackIntegration();
     void mainWindowPlaybackButtonsEmitRequests();
     void mainWindowShowsPlaybackStateAndPosition();
     void realReframePlaybackIntegration();
@@ -8085,7 +8095,26 @@ public:
         m_ok = false;
         m_error = error;
     }
+    void setFrameRate(double fps)
+    {
+        m_fps = fps;
+        m_hasFps = true;
+    }
     QString name() const override { return QStringLiteral("fake"); }
+    bool frameRate(const QString &, double *outFps,
+                   QString *error) override
+    {
+        if (!m_hasFps) {
+            if (error) {
+                *error = QStringLiteral("no frame rate");
+            }
+            return false;
+        }
+        if (outFps) {
+            *outFps = m_fps;
+        }
+        return true;
+    }
     bool durationMs(const QString &, qint64 *outDurationMs,
                     QString *error) override
     {
@@ -8104,6 +8133,8 @@ public:
     int calls() const { return m_calls; }
 
 private:
+    double m_fps = 0.0;
+    bool m_hasFps = false;
     qint64 m_durationMs = 0;
     bool m_ok = false;
     QString m_error;
@@ -11784,7 +11815,485 @@ void ProjectTest::applicationTemporalOutcomePlaysBack()
     app.stopReframeOutputPlayback();
 }
 
+// ============ Real 360 source playback (Objective 19) ============
+
+namespace {
+
+struct RecordedSourceRequest
+{
+    QString path;
+    int width = 0;
+    int height = 0;
+    qint64 startMs = -1;
+};
+
+// Records every request the application makes for a continuous source stream and
+// hands back an in-memory frame source, so source-playback orchestration stays
+// model-free while still asserting what was asked for.
+SourcePlaybackSourceFactory recordingSourceFactory(
+    QList<RecordedSourceRequest> *requests, const QList<QImage> &frames,
+    int *closeCount)
+{
+    return [requests, frames, closeCount](const QString &path, int width,
+                                          int height, qint64 startMs,
+                                          QString *) -> std::unique_ptr<FrameSource> {
+        RecordedSourceRequest request;
+        request.path = path;
+        request.width = width;
+        request.height = height;
+        request.startMs = startMs;
+        requests->append(request);
+        return std::unique_ptr<FrameSource>(
+            new PlaybackSourceDouble(frames, closeCount));
+    };
+}
+
+} // namespace
+
+void ProjectTest::sourcePlaybackStartsPresentsAndStops()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QString mediaPath;
+    QVERIFY(setupActiveMedia(app, directory, &mediaPath));
+    FakeDurationProbe probe;
+    probe.setDuration(10000);
+    app.setMediaDurationProbe(&probe);
+
+    const QList<QImage> frames{ playerTestFrame(0), playerTestFrame(1),
+                                playerTestFrame(2) };
+    QList<RecordedSourceRequest> requests;
+    int closeCount = 0;
+    app.setSourcePlaybackSourceFactory(
+        recordingSourceFactory(&requests, frames, &closeCount));
+    ManualClock clock;
+    RecordingPacingPolicy pacing(1);
+    app.setPlaybackClock(&clock);
+    app.setPlaybackPacing(&pacing);
+
+    QList<QImage> presented;
+    QObject::connect(&app, &Application::sourcePlaybackFrameReady,
+                     [&presented](const QImage &image) { presented.append(image); });
+
+    QVERIFY(app.startSourcePlayback());
+    QVERIFY(app.isSourcePlaybackActive());
+    QVERIFY(app.isSourcePlaybackPlaying());
+    QCOMPARE(requests.size(), 1);
+    QCOMPARE(requests.at(0).path, mediaPath);
+    QCOMPARE(requests.at(0).startMs, qint64(0));
+    // A bounded 2:1 proxy, never the full-resolution source.
+    QCOMPARE(requests.at(0).width, 1024);
+    QCOMPARE(requests.at(0).height, 512);
+    QCOMPARE(requests.at(0).width, 2 * requests.at(0).height);
+    QCOMPARE(app.sourcePlaybackDurationMs(), qint64(10000));
+
+    // Continuous decoding: frames keep arriving from the SAME stream. A second
+    // open would show up as a second recorded request.
+    clock.advance(1000);
+    QCOMPARE(app.tickSourcePlayback(), 1);
+    clock.advance(1000);
+    QCOMPARE(app.tickSourcePlayback(), 1);
+    QCOMPARE(presented.size(), 2);
+    QCOMPARE(requests.size(), 1);
+
+    app.stopSourcePlayback();
+    QVERIFY(!app.isSourcePlaybackActive());
+    QVERIFY(!app.isSourcePlaybackPlaying());
+    QCOMPARE(closeCount, 1);
+}
+
+void ProjectTest::sourcePlaybackRequiresProjectAndActiveMedia()
+{
+    // No project at all.
+    Application noProject;
+    QVERIFY(!noProject.startSourcePlayback());
+    QVERIFY(!noProject.isSourcePlaybackActive());
+
+    // A project with no active media.
+    Application noMedia;
+    noMedia.newProject();
+    QVERIFY(!noMedia.startSourcePlayback());
+    QVERIFY(!noMedia.isSourcePlaybackActive());
+
+    // An active media whose file has gone away.
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QString mediaPath;
+    QVERIFY(setupActiveMedia(app, directory, &mediaPath));
+    QVERIFY(QFile::remove(mediaPath));
+    QVERIFY(!app.startSourcePlayback());
+    QVERIFY(!app.isSourcePlaybackActive());
+}
+
+void ProjectTest::sourcePlaybackSeekReopensAtRequestedPosition()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    FakeDurationProbe probe;
+    probe.setDuration(10000);
+    app.setMediaDurationProbe(&probe);
+
+    const QList<QImage> frames{ playerTestFrame(0), playerTestFrame(1) };
+    QList<RecordedSourceRequest> requests;
+    int closeCount = 0;
+    app.setSourcePlaybackSourceFactory(
+        recordingSourceFactory(&requests, frames, &closeCount));
+    ManualClock clock;
+    RecordingPacingPolicy pacing(1);
+    app.setPlaybackClock(&clock);
+    app.setPlaybackPacing(&pacing);
+
+    QVERIFY(app.startSourcePlayback());
+    QCOMPARE(requests.size(), 1);
+
+    // Seeking re-opens the continuous stream at the requested absolute position.
+    QVERIFY(app.seekSourcePlayback(5000));
+    QCOMPARE(requests.size(), 2);
+    QCOMPARE(requests.at(1).startMs, qint64(5000));
+    QCOMPARE(app.sourcePlaybackPositionMs(), qint64(5000));
+    QVERIFY(app.isSourcePlaybackActive());
+    // The previous stream was closed, so exactly one decoding process is live.
+    QCOMPARE(closeCount, 1);
+
+    // The playing/paused state survives a seek.
+    QVERIFY(app.pauseSourcePlayback());
+    QVERIFY(!app.isSourcePlaybackPlaying());
+    QVERIFY(app.seekSourcePlayback(2000));
+    QCOMPARE(app.sourcePlaybackPositionMs(), qint64(2000));
+    QVERIFY(!app.isSourcePlaybackPlaying());
+    QVERIFY(app.resumeSourcePlayback());
+    QVERIFY(app.isSourcePlaybackPlaying());
+
+    // A seek beyond the media is clamped inside it rather than opening past the
+    // end.
+    QVERIFY(app.seekSourcePlayback(999999));
+    QCOMPARE(app.sourcePlaybackPositionMs(), qint64(9999));
+    QVERIFY(app.isSourcePlaybackActive());
+}
+
+void ProjectTest::sourcePlaybackEndOfStreamStopsCleanly()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    FakeDurationProbe probe;
+    probe.setDuration(1000);
+    app.setMediaDurationProbe(&probe);
+
+    const QList<QImage> frames{ playerTestFrame(0) };
+    QList<RecordedSourceRequest> requests;
+    int closeCount = 0;
+    app.setSourcePlaybackSourceFactory(
+        recordingSourceFactory(&requests, frames, &closeCount));
+    ManualClock clock;
+    RecordingPacingPolicy pacing(1);
+    app.setPlaybackClock(&clock);
+    app.setPlaybackPacing(&pacing);
+
+    QSignalSpy endedSpy(&app, &Application::sourcePlaybackEnded);
+    QVERIFY(app.startSourcePlayback());
+
+    clock.advance(1000);
+    QCOMPARE(app.tickSourcePlayback(), 1);
+    clock.advance(1000);
+    QCOMPARE(app.tickSourcePlayback(), 0);
+    QCOMPARE(endedSpy.count(), 1);
+    QVERIFY(!app.isSourcePlaybackPlaying());
+
+    // The stream is still open and stoppable after the end of the media.
+    app.stopSourcePlayback();
+    QVERIFY(!app.isSourcePlaybackActive());
+    QCOMPARE(closeCount, 1);
+}
+
+void ProjectTest::sourcePlaybackPacesAtProbedFrameRate()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+
+    FakeDurationProbe probe;
+    probe.setDuration(10000);
+    probe.setFrameRate(10.0);
+    app.setMediaDurationProbe(&probe);
+
+    const QList<QImage> frames{ playerTestFrame(0) };
+    QList<RecordedSourceRequest> requests;
+    int closeCount = 0;
+    app.setSourcePlaybackSourceFactory(
+        recordingSourceFactory(&requests, frames, &closeCount));
+
+    QVERIFY(app.startSourcePlayback());
+    // Paced at the probed source rate rather than a fixed guess.
+    QCOMPARE(app.sourcePlaybackFrameIntervalMs(), qint64(100));
+    app.stopSourcePlayback();
+
+    // An unknown frame rate falls back to the documented default pacing.
+    FakeDurationProbe noRate;
+    noRate.setDuration(10000);
+    app.setMediaDurationProbe(&noRate);
+    QVERIFY(app.startSourcePlayback());
+    QCOMPARE(app.sourcePlaybackFrameIntervalMs(), qint64(40));
+    app.stopSourcePlayback();
+}
+
+void ProjectTest::sourcePlaybackMutuallyExclusiveWithRenderedPlayback()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandExecutor(successExecutor());
+    const QString outputPath = directory.filePath(QStringLiteral("render.mp4"));
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                    outputPath));
+    QVERIFY(createPlayableRecord(app, outputPath));
+
+    const QList<QImage> renderFrames{ playerTestFrame(0), playerTestFrame(1) };
+    int renderCloseCount = 0;
+    app.setPlaybackSourceFactory(
+        [&renderFrames, &renderCloseCount](const ReframeCommandOutcome &, QString *)
+            -> std::unique_ptr<FrameSource> {
+            return std::unique_ptr<FrameSource>(
+                new PlaybackSourceDouble(renderFrames, &renderCloseCount));
+        });
+
+    const QList<QImage> sourceFrames{ playerTestFrame(2) };
+    QList<RecordedSourceRequest> requests;
+    int sourceCloseCount = 0;
+    app.setSourcePlaybackSourceFactory(
+        recordingSourceFactory(&requests, sourceFrames, &sourceCloseCount));
+
+    // Starting source playback stops rendered-result playback.
+    QVERIFY(app.startReframeOutputPlayback(0));
+    QVERIFY(app.isReframeOutputPlaybackActive());
+    QVERIFY(app.startSourcePlayback());
+    QVERIFY(app.isSourcePlaybackActive());
+    QVERIFY(!app.isReframeOutputPlaybackActive());
+
+    // ... and starting rendered-result playback stops source playback.
+    QVERIFY(app.startReframeOutputPlayback(0));
+    QVERIFY(app.isReframeOutputPlaybackActive());
+    QVERIFY(!app.isSourcePlaybackActive());
+
+    app.stopReframeOutputPlayback();
+}
+
+void ProjectTest::sourcePlaybackViewpointStaysUsable()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    FakeDurationProbe probe;
+    probe.setDuration(10000);
+    app.setMediaDurationProbe(&probe);
+
+    const QList<QImage> frames{ playerTestFrame(0), playerTestFrame(1) };
+    QList<RecordedSourceRequest> requests;
+    int closeCount = 0;
+    app.setSourcePlaybackSourceFactory(
+        recordingSourceFactory(&requests, frames, &closeCount));
+
+    QVERIFY(app.startSourcePlayback());
+    ViewportState *viewport = app.viewportState();
+    QVERIFY(viewport);
+    const double yawBefore = viewport->yaw();
+    const double fovBefore = viewport->fieldOfView();
+
+    // Looking around during playback does not disturb playback, and the
+    // authoritative viewport state keeps working.
+    app.adjustViewportYaw(30.0);
+    app.adjustViewportFieldOfView(-20.0);
+    QVERIFY(qAbs(viewport->yaw() - (yawBefore + 30.0)) < 1e-9);
+    QVERIFY(qAbs(viewport->fieldOfView() - (fovBefore - 20.0)) < 1e-9);
+    QVERIFY(app.isSourcePlaybackActive());
+
+    // Project lifecycle tears source playback down.
+    app.newProject();
+    QVERIFY(!app.isSourcePlaybackActive());
+    QCOMPARE(closeCount, 1);
+}
+
+void ProjectTest::ffprobeDurationProbeReportsFrameRate()
+{
+    if (FfprobeDurationProbe::defaultExecutablePath().isEmpty()) {
+        QSKIP("ffprobe is unavailable");
+    }
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable");
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString clip = directory.filePath(QStringLiteral("clip.mp4"));
+    if (!generateTestClip(clip, 1.0)) {
+        QSKIP("could not generate a test clip");
+    }
+
+    FfprobeDurationProbe probe;
+    double fps = 0.0;
+    QString error;
+    QVERIFY2(probe.frameRate(clip, &fps, &error), qPrintable(error));
+    QVERIFY(std::isfinite(fps));
+    QVERIFY(fps > 0.0);
+
+    // The default implementation honestly reports "unknown" instead of guessing.
+    FakeDurationProbe plain;
+    double unused = 0.0;
+    QString plainError;
+    QVERIFY(!plain.frameRate(clip, &unused, &plainError));
+    QVERIFY(!plainError.isEmpty());
+
+    // A missing file fails deterministically rather than inventing a rate.
+    double missing = 0.0;
+    QString missingError;
+    QVERIFY(!probe.frameRate(directory.filePath(QStringLiteral("absent.mp4")),
+                             &missing, &missingError));
+    QVERIFY(!missingError.isEmpty());
+}
+
+void ProjectTest::realSourcePlaybackIntegration()
+{
+    const QString clip = qEnvironmentVariable("REELCRAFT_TARGET_CLIP");
+    if (clip.isEmpty() || !QFileInfo::exists(clip)) {
+        QSKIP("real source playback not configured (set REELCRAFT_TARGET_CLIP)");
+    }
+    if (FrameExtractor::defaultExecutablePath().isEmpty()) {
+        QSKIP("ffmpeg is unavailable");
+    }
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(clip));
+    const QString mediaId = app.mediaItems().first().id();
+    QVERIFY(app.setActiveMedia(mediaId));
+    // Creator-declared equirectangular media is sufficient for this milestone.
+    QVERIFY(app.declareMediaProjection(mediaId, QStringLiteral("equirectangular")));
+
+    int presented = 0;
+    QObject::connect(&app, &Application::sourcePlaybackFrameReady,
+                     [&presented](const QImage &image) {
+                         if (!image.isNull()) {
+                             ++presented;
+                         }
+                     });
+    QSignalSpy endedSpy(&app, &Application::sourcePlaybackEnded);
+
+    // 1-3. Imported real 360 media enters the continuous playback path.
+    QVERIFY(app.startSourcePlayback());
+    QVERIFY(app.isSourcePlaybackActive());
+    QVERIFY(app.isSourcePlaybackPlaying());
+    QVERIFY(app.sourcePlaybackDurationMs() > 0);
+
+    // 3. Continuously play (bounded; driven explicitly so the test is
+    // deterministic rather than wall-clock dependent).
+    for (int i = 0; i < 100 && presented < 3; ++i) {
+        QTest::qWait(40);
+        app.tickSourcePlayback();
+    }
+    QVERIFY2(presented >= 1, "no source frames were presented");
+
+    // 4. Pause.
+    QVERIFY(app.pauseSourcePlayback());
+    QVERIFY(!app.isSourcePlaybackPlaying());
+
+    // 5. Seek.
+    const qint64 duration = app.sourcePlaybackDurationMs();
+    const qint64 midpoint = duration / 2;
+    QVERIFY(app.seekSourcePlayback(midpoint));
+    QVERIFY(qAbs(app.sourcePlaybackPositionMs() - midpoint) < 2);
+    QVERIFY(app.isSourcePlaybackActive());
+
+    // 6. Change viewpoint during source viewing.
+    ViewportState *viewport = app.viewportState();
+    QVERIFY(viewport);
+    const double yawBefore = viewport->yaw();
+    app.adjustViewportYaw(15.0);
+    QVERIFY(qAbs(viewport->yaw() - (yawBefore + 15.0)) < 1e-6);
+
+    // 7. Resume playback from the sought position.
+    QSignalSpy statusSpy(&app, &Application::backgroundCompleted);
+    QVERIFY2(app.resumeSourcePlayback(),
+             qPrintable(QStringLiteral("resume failed: active=%1 playing=%2 "
+                                       "pos=%3 dur=%4 status=%5")
+                            .arg(app.isSourcePlaybackActive())
+                            .arg(app.isSourcePlaybackPlaying())
+                            .arg(app.sourcePlaybackPositionMs())
+                            .arg(app.sourcePlaybackDurationMs())
+                            .arg(statusSpy.isEmpty()
+                                     ? QStringLiteral("none")
+                                     : statusSpy.last().at(0).toString())));
+    QVERIFY(app.isSourcePlaybackPlaying());
+    for (int i = 0; i < 20; ++i) {
+        QTest::qWait(40);
+        app.tickSourcePlayback();
+    }
+    QVERIFY(app.sourcePlaybackPositionMs() >= midpoint);
+
+    // 8. Reach and handle the end of the media. A seek preserves whether
+    // playback was running, so playback continues from just before the end.
+    QVERIFY(app.seekSourcePlayback(qMax<qint64>(0, duration - 300)));
+    QVERIFY(app.isSourcePlaybackActive());
+    for (int i = 0; i < 300 && endedSpy.isEmpty(); ++i) {
+        QTest::qWait(40);
+        app.tickSourcePlayback();
+    }
+    QCOMPARE(endedSpy.count(), 1);
+    QVERIFY(!app.isSourcePlaybackPlaying());
+
+    app.stopSourcePlayback();
+    QVERIFY(!app.isSourcePlaybackActive());
+
+    // The original media is untouched and still readable.
+    const MediaItem *item = app.activeMediaItem();
+    QVERIFY(item);
+    QVERIFY(item->referenceExists());
+}
+
+void ProjectTest::mainWindowSourcePlaybackButtonsEmitRequests()
+
+{
+    TestMainWindow window;
+    auto *play = window.findChild<QPushButton *>("playSourceButton");
+    auto *pause = window.findChild<QPushButton *>("pauseSourceButton");
+    auto *stop = window.findChild<QPushButton *>("stopSourceButton");
+    auto *seek = window.findChild<QPushButton *>("seekSourceButton");
+    auto *seconds = window.findChild<QDoubleSpinBox *>("sourceSeekSeconds");
+    QVERIFY(play && pause && stop && seek && seconds);
+
+    QSignalSpy playSpy(&window, &MainWindow::playSourceRequested);
+    QSignalSpy pauseSpy(&window, &MainWindow::pauseSourceRequested);
+    QSignalSpy stopSpy(&window, &MainWindow::stopSourceRequested);
+    QSignalSpy seekSpy(&window, &MainWindow::seekSourceRequested);
+
+    play->click();
+    pause->click();
+    stop->click();
+    seconds->setValue(2.5);
+    seek->click();
+
+    QCOMPARE(playSpy.count(), 1);
+    QCOMPARE(pauseSpy.count(), 1);
+    QCOMPARE(stopSpy.count(), 1);
+    QCOMPARE(seekSpy.count(), 1);
+    QCOMPARE(seekSpy.first().at(0).toLongLong(), qint64(2500));
+
+    window.showSourcePlaybackState(true);
+    auto *label = window.findChild<QLabel *>("sourcePlaybackLabel");
+    QVERIFY(label);
+    QVERIFY(label->text().contains(QStringLiteral("playing")));
+    window.showSourcePlaybackPosition(1234);
+    QVERIFY(label->text().contains(QStringLiteral("1234")));
+}
+
 void ProjectTest::mainWindowPlaybackButtonsEmitRequests()
+
 {
     TestMainWindow window;
     QSignalSpy playSpy(&window, &MainWindow::playReframeOutputRequested);

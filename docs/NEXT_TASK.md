@@ -459,11 +459,39 @@ Human-authorized scope (Decision 035): a deterministic, pure contract checker ov
 - 6 new tests; focused run 8 passed / 0 failed / 0 skipped; targeted regression 55 passed / 0 failed / 0 skipped.
 - Full model-free suite run at the checkpoint.
 
+## 360 Reframing Objective 19 — Real 360 Source Playback — Complete
+
+Status: **Complete — implemented and verified (2026-09-18).**
+
+### Objective
+
+Make real equirectangular 360 media observable: import it, play it continuously, seek it, look around while it plays. Prerequisite for developing automatic reframing. Not the automatic-reframing objective.
+
+### Scope (implemented)
+
+- Continuous source playback reusing the persistent streaming decode seams, with no per-frame process.
+- A bounded 2:1 proxy stream (1024x512) so per-frame cost is independent of source resolution; the original is read-only and aspect is preserved.
+- play / pause / seek / resume / stop, absolute source position, clean end-of-media handling.
+- Source frame rate read once per open via the existing ffprobe seam; pacing follows the source rate when known.
+- Presentation through the existing equirectangular viewer path, so viewpoint interaction works during playback.
+- Minimal UI: Play/Pause/Stop Source, a seek control, a position readout.
+- **Audio deferred** (Decision 036) with a recorded follow-up; playback is video-only.
+
+### Verification
+
+- 9 new tests; targeted regression 44 passed / 0 failed / 0 skipped.
+- Real-media validation passed on a real 360 clip.
+
 ## Next Objective — NOT SCOPED
 
-The leading candidates are: persisting the creator target selection / target identity (explicitly excluded from Objectives 17 and 18), and a retention/compaction policy for accumulating decisions (`KNOWN_ISSUES.md`).
+The established product direction is that Reelcraft must first become a working 360 video editor, with 360 reframing as the central problem. Leading candidates, in the light of Objective 19:
 
-**Carried-forward constraint (Decisions 033 / 034, binding):** persisted decisions are **immutable**. A revision is expressed as a **new decision referencing the prior one through a single parent hash**, never as a mutation. Any future design that edits a stored decision in place contradicts these decisions and must be rejected.
+- **render throughput and audio in the output** (the render path decodes one FFmpeg process per frame and writes silent video);
+- **the trajectory-to-camera-path stage** (dense tracking plus a deterministic smoothing/framing layer), which is where reframing quality is actually won;
+- **creator review and revision surface** over persisted decisions (`decisionProvenance()` and `reviseEditDecision()` exist as APIs with no UI);
+- **speaker/dialogue capability**, which first needs a licensing-and-capability evaluation before any engineering.
+
+**Carried-forward constraint (Decisions 033 / 034, binding):** persisted decisions are **immutable**. A revision is expressed as a **new decision referencing the prior one through a single parent hash**, never as a mutation.
 
 Requires its own scoped objective; do not begin automatically.
 

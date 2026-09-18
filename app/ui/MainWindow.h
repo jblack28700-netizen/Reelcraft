@@ -76,6 +76,10 @@ public slots:
     void showReframePlaybackState(bool playing);
     void showReframePlaybackPosition(qint64 frameCount, qint64 positionMs);
 
+    // Objective 19: source-media playback presentation.
+    void showSourcePlaybackState(bool playing);
+    void showSourcePlaybackPosition(qint64 positionMs);
+
 signals:
     void newProjectRequested();
     void saveProjectRequested(const QString &filePath);
@@ -94,6 +98,12 @@ signals:
     void playReframeOutputRequested(int index);
     void pauseReframeOutputPlaybackRequested();
     void stopReframeOutputPlaybackRequested();
+
+    // Objective 19: source-media playback requests.
+    void playSourceRequested();
+    void pauseSourceRequested();
+    void stopSourceRequested();
+    void seekSourceRequested(qint64 positionMs);
     void backgroundDemoRequested();
     void resetViewportRequested();
     void viewportYawDeltaRequested(double delta);
@@ -148,6 +158,14 @@ private:
     QPushButton *m_pauseRenderButton = nullptr;
     QPushButton *m_stopRenderButton = nullptr;
     QLabel *m_playbackPositionLabel = nullptr;
+
+    // Objective 19: source-media playback controls.
+    QPushButton *m_playSourceButton = nullptr;
+    QPushButton *m_pauseSourceButton = nullptr;
+    QPushButton *m_stopSourceButton = nullptr;
+    QPushButton *m_seekSourceButton = nullptr;
+    QDoubleSpinBox *m_sourceSeekSeconds = nullptr;
+    QLabel *m_sourcePlaybackLabel = nullptr;
 
     ViewerWidget *m_viewerWidget = nullptr;
 

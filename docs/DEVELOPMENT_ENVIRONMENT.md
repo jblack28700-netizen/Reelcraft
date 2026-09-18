@@ -305,3 +305,23 @@ The real target-detection and appearance helpers are optional and external; the 
 - **User-command integration output (optional):** `REELCRAFT_COMMAND_OUTPUT` selects the output path for `realUserCommandIntegration`; when unset, a temporary file is used.
 - **The speaker integration test requires an audio-bearing clip.** `realDetectorIntegration` reads both video and audio through `REELCRAFT_TARGET_CLIP`. The Objective 5 detector proxy `~/.cache/reelcraft/media/proxy_t115_12s.mp4` was created with `-an` (video only); with it the speaker helper correctly reports "no decodable audio stream" and the speaker assertions fail. For any run that exercises the speaker block, point `REELCRAFT_TARGET_CLIP` at the audio+video proxy `~/.cache/reelcraft/media/proxy_t115_12s_av.mp4` (H.264 + AAC mono). The original `360_TEST_4K.mp4` is never modified.
 
+## 360 Source Playback — Proxy Media for Validation (2026-09-18)
+
+Real 360 footage is expensive to decode on the development device: a single native
+4K frame decode measured ~2.6 s. A validation run of the Objective 19 source-playback
+path against the 779 MB 4K original (~/360_TEST_4K.mp4) took **~518 s for one test**,
+almost entirely decode time. That is an environment cost, not a code defect.
+
+Validation therefore uses a short proxy extracted once from the same real footage. The
+original is never modified:
+
+    ffmpeg -ss 115 -t 12 -i ~/360_TEST_4K.mp4 -vf scale=1280:640 \
+      -c:v libx264 -pix_fmt yuv420p -an -y \
+      ~/.cache/reelcraft/media/proxy_360_12s.mp4
+
+Result: 1280x640 (2:1), ~29.97 fps, 12 s, 614 KB. The same test completes in **~73 s**.
+Point REELCRAFT_TARGET_CLIP at the proxy to run realSourcePlaybackIntegration.
+
+This is also why source playback streams a bounded 2:1 proxy rather than the native
+resolution (Decision 036): per-frame cost must not scale with the source resolution.
+

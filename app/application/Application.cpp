@@ -25,11 +25,19 @@ Application::Application(QObject *parent)
     resetReframeReplayRenderer();
     resetReframePreviewDecoder();
     resetPlaybackSourceFactory();
+    resetSourcePlaybackSourceFactory();
 
     // The Application owns the playback event-loop driver; the Player does not.
+    // One timer drives whichever pipeline is active: the rendered-result path
+    // (Objective 13) or source-media playback (Objective 19).
     m_playbackTimer = new QTimer(this);
-    connect(m_playbackTimer, &QTimer::timeout, this,
-            &Application::tickReframeOutputPlayback);
+    connect(m_playbackTimer, &QTimer::timeout, this, [this]() {
+        if (m_playbackPlayer) {
+            tickReframeOutputPlayback();
+        } else if (m_sourcePlaybackPlayer) {
+            tickSourcePlayback();
+        }
+    });
 }
 
 Application::~Application()
@@ -96,6 +104,7 @@ const MediaItem *Application::activeMediaItem() const
 void Application::newProject()
 {
     stopReframeOutputPlayback();
+    stopSourcePlayback();
     m_currentProject = Project();
     m_hasProject = true;
     const bool hadActiveMedia = !m_activeMediaId.isEmpty();
@@ -162,6 +171,7 @@ bool Application::openProject(const QString &filePath)
         emit creatorSelectionChanged(false);
     }
     stopReframeOutputPlayback();
+    stopSourcePlayback();
     m_currentProject = loaded;
     m_hasProject = true;
     resetViewport();
@@ -1259,6 +1269,8 @@ bool Application::startReframeOutputPlayback(int index)
     }
 
     stopReframeOutputPlayback();
+    // One playback pipeline at a time (Objective 19).
+    stopSourcePlayback();
 
     QString error;
     std::unique_ptr<FrameSource> source = m_playbackSourceFactory(record, &error);
@@ -1431,3 +1443,280 @@ void Application::setPlaybackPacing(PacingPolicy *pacing)
 {
     m_playbackPacing = pacing;
 }
+
+namespace {
+
+// Objective 19 source-playback proxy geometry. Equirectangular preview needs
+// only a small proxy, and a 2:1 proxy preserves declared-equirect geometry while
+// keeping per-frame cost bounded and independent of the source resolution. The
+// original media is never modified.
+constexpr int kSourcePlaybackProxyWidth = 1024;
+constexpr int kSourcePlaybackProxyHeight = 512;
+// Presentation pacing used when the source frame rate cannot be probed. This is
+// a playback pacing parameter, never media metadata written anywhere.
+constexpr qint64 kSourcePlaybackFallbackIntervalMs = 40;
+
+} // namespace
+
+void Application::setSourcePlaybackSourceFactory(
+    const SourcePlaybackSourceFactory &factory)
+{
+    if (factory) {
+        m_sourcePlaybackFactory = factory;
+    }
+}
+
+void Application::resetSourcePlaybackSourceFactory()
+{
+    m_sourcePlaybackFactory =
+        [](const QString &path, int proxyWidth, int proxyHeight, qint64 startMs,
+           QString *error) -> std::unique_ptr<FrameSource> {
+        std::unique_ptr<FfmpegFrameSource> source =
+            std::make_unique<FfmpegFrameSource>();
+        // preserveAspectRatio: the proxy must keep the equirect geometry, so a
+        // source whose aspect does not match the 2:1 proxy is letterboxed rather
+        // than stretched, which would corrupt the 360 projection.
+        if (!source->open(path, proxyWidth, proxyHeight, startMs, true)) {
+            if (error) {
+                *error = source->errorString();
+            }
+            return nullptr;
+        }
+        return source;
+    };
+}
+
+void Application::teardownSourcePlayback()
+{
+    const bool wasActive = m_sourcePlaybackActive;
+    if (m_sourcePlaybackPlayer) {
+        disconnect(m_sourcePlaybackPlayer.get(), nullptr, this, nullptr);
+        m_sourcePlaybackPlayer->stop();
+        m_sourcePlaybackPlayer.reset();
+    }
+    m_sourcePlaybackPump.reset();
+    if (m_sourcePlaybackSource) {
+        m_sourcePlaybackSource->close();
+        m_sourcePlaybackSource.reset();
+    }
+    m_sourcePlaybackActive = false;
+    m_sourcePlaybackOffsetMs = 0;
+    m_sourcePlaybackDurationMs = 0;
+    if (wasActive) {
+        emit sourcePlaybackStateChanged(false);
+    }
+}
+
+bool Application::openSourcePlaybackAt(qint64 positionMs, bool play)
+{
+    teardownSourcePlayback();
+
+    if (!m_hasProject) {
+        emit backgroundCompleted(
+            QStringLiteral("Open or create a project before playing source media."));
+        return false;
+    }
+    const MediaItem *media = activeMediaItem();
+    if (!media) {
+        emit backgroundCompleted(
+            QStringLiteral("Select an active media item before playing source media."));
+        return false;
+    }
+    if (!media->referenceExists()) {
+        emit backgroundCompleted(
+            QStringLiteral("The active media file is unavailable: %1")
+                .arg(media->path()));
+        return false;
+    }
+
+    const qint64 target = qMax<qint64>(0, positionMs);
+
+    // Duration and frame rate are probed ONCE per open, never per frame. Absence
+    // of either is honest and non-fatal: a duration of 0 means unknown, and an
+    // unknown frame rate falls back to the default presentation pacing.
+    qint64 durationMs = 0;
+    if (m_durationProbe) {
+        QString probeError;
+        if (!m_durationProbe->durationMs(media->path(), &durationMs, &probeError)) {
+            durationMs = 0;
+        }
+    }
+    qint64 intervalMs = kSourcePlaybackFallbackIntervalMs;
+    if (m_durationProbe) {
+        double fps = 0.0;
+        QString rateError;
+        if (m_durationProbe->frameRate(media->path(), &fps, &rateError)
+            && fps > 0.0) {
+            intervalMs = qBound<qint64>(
+                qint64(10), static_cast<qint64>(qRound64(1000.0 / fps)),
+                qint64(1000));
+        }
+    }
+
+    // ONE persistent decoding process for the whole playback session; the frames
+    // arrive continuously and are never produced by a per-frame process.
+    QString error;
+    std::unique_ptr<FrameSource> source = m_sourcePlaybackFactory(
+        media->path(), kSourcePlaybackProxyWidth, kSourcePlaybackProxyHeight,
+        target, &error);
+    if (!source || !source->isOpen()) {
+        emit backgroundCompleted(
+            QStringLiteral("Could not open the source for playback: %1")
+                .arg(error.isEmpty() ? QStringLiteral("source unavailable")
+                                     : error));
+        return false;
+    }
+
+    m_sourcePlaybackSource = std::move(source);
+    m_sourcePlaybackPump = std::make_unique<FramePump>();
+    m_sourcePlaybackPump->setSource(m_sourcePlaybackSource.get());
+    m_sourcePlaybackPlayer = std::make_unique<Player>(
+        m_sourcePlaybackPump.get(), m_playbackClock, m_playbackPacing);
+    m_sourcePlaybackOffsetMs = target;
+    m_sourcePlaybackDurationMs = durationMs;
+    m_sourcePlaybackFrameIntervalMs = intervalMs;
+    m_sourcePlaybackActive = true;
+
+    connect(m_sourcePlaybackPlayer.get(), &Player::framePresented, this,
+            [this](const QImage &image, qint64, qint64) {
+                emit sourcePlaybackFrameReady(image);
+            });
+    connect(m_sourcePlaybackPlayer.get(), &Player::stateChanged, this,
+            [this](Player::State state) {
+                if (state != Player::State::Playing && m_playbackTimer) {
+                    m_playbackTimer->stop();
+                }
+                emit sourcePlaybackStateChanged(state == Player::State::Playing);
+            });
+    connect(m_sourcePlaybackPlayer.get(), &Player::positionChanged, this,
+            [this](qint64, qint64 positionMs) {
+                emit sourcePlaybackPositionChanged(m_sourcePlaybackOffsetMs
+                                                   + positionMs);
+            });
+    connect(m_sourcePlaybackPlayer.get(), &Player::playbackEnded, this, [this]() {
+        if (m_playbackTimer) {
+            m_playbackTimer->stop();
+        }
+        emit sourcePlaybackEnded();
+    });
+    connect(m_sourcePlaybackPlayer.get(), &Player::errorOccurred, this,
+            [this](const QString &message) {
+                if (m_playbackTimer) {
+                    m_playbackTimer->stop();
+                }
+                emit backgroundCompleted(
+                    QStringLiteral("Source playback failed: %1").arg(message));
+            });
+
+    m_sourcePlaybackPlayer->setFrameIntervalMs(intervalMs);
+    // Always enter the Playing state so the player can afterwards be paused and
+    // resumed coherently: an open that must not run (a seek performed while
+    // paused) is paused again immediately, which leaves the stream positioned
+    // and resumable rather than idling in the Stopped state.
+    m_sourcePlaybackPlayer->play();
+    if (play) {
+        if (m_playbackTimer) {
+            m_playbackTimer->start(qBound(10, static_cast<int>(intervalMs), 100));
+        }
+    } else {
+        m_sourcePlaybackPlayer->pause();
+    }
+    emit sourcePlaybackPositionChanged(target);
+    return true;
+}
+
+bool Application::startSourcePlayback()
+{
+    // One playback pipeline at a time.
+    stopReframeOutputPlayback();
+    return openSourcePlaybackAt(0, true);
+}
+
+bool Application::pauseSourcePlayback()
+{
+    if (!m_sourcePlaybackPlayer || !m_sourcePlaybackPlayer->isPlaying()) {
+        return false;
+    }
+    if (m_playbackTimer) {
+        m_playbackTimer->stop();
+    }
+    m_sourcePlaybackPlayer->pause();
+    return true;
+}
+
+bool Application::resumeSourcePlayback()
+{
+    if (!m_sourcePlaybackPlayer || !m_sourcePlaybackPlayer->isPaused()) {
+        return false;
+    }
+    m_sourcePlaybackPlayer->play();
+    if (m_playbackTimer) {
+        m_playbackTimer->start(
+            qBound(10, static_cast<int>(m_sourcePlaybackFrameIntervalMs), 100));
+    }
+    return true;
+}
+
+void Application::stopSourcePlayback()
+{
+    if (!m_sourcePlaybackActive && !m_sourcePlaybackPlayer) {
+        return;
+    }
+    if (m_playbackTimer) {
+        m_playbackTimer->stop();
+    }
+    teardownSourcePlayback();
+}
+
+bool Application::seekSourcePlayback(qint64 positionMs)
+{
+    if (!m_sourcePlaybackActive) {
+        return false;
+    }
+    const bool wasPlaying =
+        m_sourcePlaybackPlayer && m_sourcePlaybackPlayer->isPlaying();
+    qint64 target = qMax<qint64>(0, positionMs);
+    if (m_sourcePlaybackDurationMs > 0 && target >= m_sourcePlaybackDurationMs) {
+        // Clamp inside the media so the reopen yields frames rather than
+        // immediately reporting end of stream.
+        target = qMax<qint64>(0, m_sourcePlaybackDurationMs - 1);
+    }
+    return openSourcePlaybackAt(target, wasPlaying);
+}
+
+int Application::tickSourcePlayback()
+{
+    if (!m_sourcePlaybackPlayer) {
+        return 0;
+    }
+    return m_sourcePlaybackPlayer->tick();
+}
+
+bool Application::isSourcePlaybackActive() const
+{
+    return m_sourcePlaybackActive;
+}
+
+bool Application::isSourcePlaybackPlaying() const
+{
+    return m_sourcePlaybackPlayer && m_sourcePlaybackPlayer->isPlaying();
+}
+
+qint64 Application::sourcePlaybackPositionMs() const
+{
+    if (!m_sourcePlaybackPlayer) {
+        return m_sourcePlaybackActive ? m_sourcePlaybackOffsetMs : 0;
+    }
+    return m_sourcePlaybackOffsetMs + m_sourcePlaybackPlayer->positionMs();
+}
+
+qint64 Application::sourcePlaybackDurationMs() const
+{
+    return m_sourcePlaybackDurationMs;
+}
+
+qint64 Application::sourcePlaybackFrameIntervalMs() const
+{
+    return m_sourcePlaybackFrameIntervalMs;
+}
+

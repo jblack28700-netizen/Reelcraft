@@ -2,6 +2,7 @@
 
 #include <QElapsedTimer>
 #include <QFileInfo>
+#include <QStringList>
 
 #include "FrameExtractor.h"
 
@@ -15,7 +16,15 @@ FfmpegFrameSource::~FfmpegFrameSource()
     close();
 }
 
-bool FfmpegFrameSource::open(const QString &filePath, int frameWidth, int frameHeight)
+bool FfmpegFrameSource::open(const QString &filePath, int frameWidth,
+                             int frameHeight)
+{
+    return open(filePath, frameWidth, frameHeight, 0, false);
+}
+
+bool FfmpegFrameSource::open(const QString &filePath, int frameWidth,
+                             int frameHeight, qint64 startMs,
+                             bool preserveAspectRatio)
 {
     close();
     m_error.clear();
@@ -47,19 +56,28 @@ bool FfmpegFrameSource::open(const QString &filePath, int frameWidth, int frameH
     }
 
     // Scale to the exact caller-supplied geometry so each raw rgb24 frame is
-    // exactly frameWidth*frameHeight*3 bytes.
-    m_process.start(executable,
-                    {
-                        QStringLiteral("-v"), QStringLiteral("error"),
-                        QStringLiteral("-nostdin"),
-                        QStringLiteral("-i"), filePath,
-                        QStringLiteral("-vf"),
-                        QStringLiteral("scale=%1:%2").arg(frameWidth).arg(frameHeight),
-                        QStringLiteral("-an"),
-                        QStringLiteral("-f"), QStringLiteral("rawvideo"),
-                        QStringLiteral("-pix_fmt"), QStringLiteral("rgb24"),
-                        QStringLiteral("-")
-                    });
+    // exactly frameWidth*frameHeight*3 bytes. The two Objective 19 options keep
+    // the original argument list byte-for-byte when they are not requested.
+    QString scaleFilter =
+        QStringLiteral("scale=%1:%2").arg(frameWidth).arg(frameHeight);
+    if (preserveAspectRatio) {
+        scaleFilter +=
+            QStringLiteral(":force_original_aspect_ratio=decrease,pad=%1:%2:"
+                           "(ow-iw)/2:(oh-ih)/2")
+                .arg(frameWidth)
+                .arg(frameHeight);
+    }
+    QStringList arguments{ QStringLiteral("-v"), QStringLiteral("error"),
+                           QStringLiteral("-nostdin") };
+    if (startMs > 0) {
+        arguments << QStringLiteral("-ss")
+                  << QString::number(static_cast<double>(startMs) / 1000.0, 'f', 6);
+    }
+    arguments << QStringLiteral("-i") << filePath << QStringLiteral("-vf")
+              << scaleFilter << QStringLiteral("-an") << QStringLiteral("-f")
+              << QStringLiteral("rawvideo") << QStringLiteral("-pix_fmt")
+              << QStringLiteral("rgb24") << QStringLiteral("-");
+    m_process.start(executable, arguments);
     if (!m_process.waitForStarted(10000)) {
         setError(QStringLiteral("FFmpeg process could not start."));
         return false;

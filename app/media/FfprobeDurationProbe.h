@@ -17,6 +17,9 @@ public:
 
     QString name() const override { return QStringLiteral("ffprobe"); }
 
+    bool frameRate(const QString &filePath, double *outFps,
+                   QString *error = nullptr) override;
+
     bool durationMs(const QString &filePath, qint64 *outDurationMs,
                     QString *error = nullptr) override;
 

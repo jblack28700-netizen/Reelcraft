@@ -1166,3 +1166,20 @@ Status: Complete (2026-09-18). Human-authorized scope (Decision 035).
 - **Recorded limitation:** the three rules are satisfied by construction on both paths today, so no reachable input can produce a violation — the checker is an executable contract guarding against future divergence. The FATAL wiring is covered by rule-level tests plus inspection, not by an end-to-end integration test, because triggering it would require a plan the current planners cannot produce.
 - No schema bump, no persisted checker result, no new dependency, no change to `ReframeIntent`, `ReframePlan`, `CameraKeyframe`, `EditDecision`, the parser, the renderer or playback.
 
+
+## Phase 4 Objective 19 — Real 360 Source Playback — Complete
+
+Status: Complete (2026-09-18). Decision 036.
+
+- Real equirectangular 360 footage can now be **continuously viewed** in Reelcraft: play, pause, seek, look around, resume and clean end-of-media handling, on the ACTIVE media.
+- `Application::startSourcePlayback()` / `pauseSourcePlayback()` / `resumeSourcePlayback()` / `stopSourcePlayback()` / `seekSourcePlayback(positionMs)` / `tickSourcePlayback()`, with `isSourcePlaybackActive()`, `isSourcePlaybackPlaying()`, `sourcePlaybackPositionMs()`, `sourcePlaybackDurationMs()` and `sourcePlaybackFrameIntervalMs()`. Signals: `sourcePlaybackFrameReady`, `sourcePlaybackStateChanged`, `sourcePlaybackPositionChanged`, `sourcePlaybackEnded`.
+- **Continuous decoding through the existing persistent-subprocess seam** (`FfmpegFrameSource` + `FramePump` + `Player`). Playback never decodes one frame per process. Source playback owns its own pipeline and shares the single event-loop timer with rendered-result playback; the two are mutually exclusive.
+- **Bounded 2:1 proxy stream (1024x512)** decoded and scaled inside FFmpeg, so per-frame cost is independent of the source resolution. The original media is read-only. Aspect is preserved (letterboxed) when the media aspect differs from the proxy.
+- **Seeking** reopens the stream with an input `-ss`; the application carries the offset so the position is absolute source time, and a seek preserves the playing/paused state.
+- **Frame rate** is read once per open through the existing ffprobe seam (`MediaDurationProbe::frameRate()`, defaulted to *unknown*; `FfprobeDurationProbe` overrides). Playback is paced at the source rate when known, otherwise at a documented default of 40 ms.
+- **Presentation reuses the existing projection-routed preview path**, so 360 footage uses the equirectangular camera and the live `ViewportState` keeps working during playback (yaw/pitch/FOV interaction unchanged).
+- Minimal UI: Play Source / Pause Source / Stop Source, a seek position control, and a source position readout.
+- **Audio is not implemented** — deliberately deferred (Decision 036): no audio output exists, `QtMultimedia` was deferred by Decision 017, and an audio subsystem would be a disproportionate expansion. The smallest viable follow-up (an injectable audio-output seam driven by the same position/seek model) is recorded and is its own objective.
+- **Verification:** 9 new model-free tests; targeted regression 44 passed / 0 failed / 0 skipped; real-media validation on a real 360 clip passes (import, equirect use, continuous play, pause, seek, viewpoint change, resume, end of media).
+- Known limitations: playback is silent; an unknown source frame rate falls back to default pacing; the 1024x512 viewing proxy may be too small for the future perception stage.
+

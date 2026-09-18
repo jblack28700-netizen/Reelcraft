@@ -39,6 +39,15 @@ using ReframePreviewDecoder =
 using PlaybackSourceFactory = std::function<std::unique_ptr<FrameSource>(
     const ReframeCommandOutcome &record, QString *error)>;
 
+// Builds the continuous decode source for SOURCE-media playback (Objective 19).
+// The default opens an FfmpegFrameSource at the requested proxy geometry and
+// start offset, so playback uses one persistent decoding process and never a
+// process per displayed frame. Tests inject an in-memory source so source
+// playback orchestration stays model-free.
+using SourcePlaybackSourceFactory = std::function<std::unique_ptr<FrameSource>(
+    const QString &path, int proxyWidth, int proxyHeight, qint64 startMs,
+    QString *error)>;
+
 // The application-level replay renderer. It defaults to
 // ReframePipeline::renderPlan, which needs only a validated plan and a source
 // path: replay uses no detector, no frame provider and no parser. Tests inject a
@@ -339,6 +348,44 @@ public slots:
     void setPlaybackClock(Clock *clock);
     void setPlaybackPacing(PacingPolicy *pacing);
 
+    // --- source-media 360 playback (Objective 19) ---------------------------
+    // Continuous playback of the ACTIVE media through the persistent streaming
+    // decode path, so a creator can watch 360 footage and keep looking around
+    // while it plays. Frames are emitted through sourcePlaybackFrameReady() and
+    // presented through the EXISTING equirectangular viewer path, so the current
+    // ViewportState (yaw/pitch/roll/FOV) keeps working during playback. The
+    // original media is only ever read.
+    //
+    // play/pause/seek/stop are deterministic; seeking reopens the continuous
+    // stream at the requested absolute source position and preserves whether
+    // playback was running. End of media stops cleanly and emits
+    // sourcePlaybackEnded().
+    bool startSourcePlayback();
+    bool pauseSourcePlayback();
+    bool resumeSourcePlayback();
+    void stopSourcePlayback();
+    bool seekSourcePlayback(qint64 positionMs);
+
+    // Event-loop driver entry point. Normally invoked by the owned timer;
+    // exposed so tests can drive source playback deterministically. Returns the
+    // number of frames presented.
+    int tickSourcePlayback();
+
+    bool isSourcePlaybackActive() const;
+    bool isSourcePlaybackPlaying() const;
+    // Absolute source position: the seek offset plus the frames presented since
+    // the last open.
+    qint64 sourcePlaybackPositionMs() const;
+    // Probed source duration, or 0 when unknown.
+    qint64 sourcePlaybackDurationMs() const;
+    // Presentation frame interval in use for source playback
+    // (1000/fps when the source rate is known, otherwise the default).
+    qint64 sourcePlaybackFrameIntervalMs() const;
+
+    // Test/DI seam (non-owning).
+    void setSourcePlaybackSourceFactory(const SourcePlaybackSourceFactory &factory);
+    void resetSourcePlaybackSourceFactory();
+
 signals:
     void projectChanged(const Project &project);
     void backgroundCompleted(const QString &message);
@@ -383,6 +430,13 @@ signals:
 
     // Emitted when a rendered result reaches its end.
     void reframePlaybackEnded();
+
+    // Objective 19: emitted for each presented SOURCE frame (equirectangular,
+    // presented through the viewer existing 360 camera path).
+    void sourcePlaybackFrameReady(const QImage &image);
+    void sourcePlaybackStateChanged(bool playing);
+    void sourcePlaybackPositionChanged(qint64 positionMs);
+    void sourcePlaybackEnded();
 
 private:
     bool decodePreviewFrameAt(double targetSeconds);
@@ -447,5 +501,24 @@ private:
     std::unique_ptr<Player> m_playbackPlayer;
     int m_playbackRecordIndex = -1;
 
+    // Objective 19: source-media playback. Deliberately SEPARATE from the
+    // rendered-result playback objects so the tested Objective 13 path is not
+    // perturbed; the two share the single event-loop timer and are mutually
+    // exclusive.
+    SourcePlaybackSourceFactory m_sourcePlaybackFactory;
+    std::unique_ptr<FrameSource> m_sourcePlaybackSource;
+    std::unique_ptr<FramePump> m_sourcePlaybackPump;
+    std::unique_ptr<Player> m_sourcePlaybackPlayer;
+    bool m_sourcePlaybackActive = false;
+    qint64 m_sourcePlaybackOffsetMs = 0;
+    qint64 m_sourcePlaybackDurationMs = 0;
+    qint64 m_sourcePlaybackFrameIntervalMs = 40;
+
     int playbackIntervalMsForFps(double fps) const;
+
+    // Objective 19. Opens the continuous source stream at an absolute source
+    // position, optionally starting playback, tearing down any previous source
+    // stream first. Never touches the rendered-result playback objects.
+    bool openSourcePlaybackAt(qint64 positionMs, bool play);
+    void teardownSourcePlayback();
 };

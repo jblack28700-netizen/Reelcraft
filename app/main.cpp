@@ -85,6 +85,28 @@ int main(int argc, char *argv[])
                          window.showStatus(
                              QStringLiteral("Render playback ended."));
                      });
+    // Objective 19: source-media playback. Frames are presented through the
+    // existing projection-routed preview path, so 360 footage keeps using the
+    // equirectangular viewer path and the live ViewportState.
+    QObject::connect(&window, &MainWindow::playSourceRequested, &application,
+                     &Application::startSourcePlayback);
+    QObject::connect(&window, &MainWindow::pauseSourceRequested, &application,
+                     &Application::pauseSourcePlayback);
+    QObject::connect(&window, &MainWindow::stopSourceRequested, &application,
+                     &Application::stopSourcePlayback);
+    QObject::connect(&window, &MainWindow::seekSourceRequested, &application,
+                     &Application::seekSourcePlayback);
+    QObject::connect(&application, &Application::sourcePlaybackFrameReady,
+                     &window, &MainWindow::showFramePreview);
+    QObject::connect(&application, &Application::sourcePlaybackStateChanged,
+                     &window, &MainWindow::showSourcePlaybackState);
+    QObject::connect(&application, &Application::sourcePlaybackPositionChanged,
+                     &window, &MainWindow::showSourcePlaybackPosition);
+    QObject::connect(&application, &Application::sourcePlaybackEnded,
+                     &window, [&window]() {
+                         window.showSourcePlaybackState(false);
+                         window.showStatus(QStringLiteral("Source playback ended."));
+                     });
     QObject::connect(&application, &Application::mediaListChanged,
                      &window, &MainWindow::showMediaList);
     QObject::connect(&application, &Application::activeMediaChanged,

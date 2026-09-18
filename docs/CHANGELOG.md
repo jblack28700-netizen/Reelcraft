@@ -728,3 +728,16 @@ Date: 2026-09-18
 - Failures name the rule and both observed values (for example, the requested and actual output specification), so a mismatch is diagnosable without re-running the command.
 - No behaviour change for valid requests: every existing command path, including temporal edits, compound commands and speaker-following, produces plans that satisfy the contract. The checker exists to catch future regressions, and it deliberately does not attempt to judge semantic understanding of the request.
 
+
+## v0.2.57 — Real 360 Source Playback
+
+Date: 2026-09-18
+
+- Real 360 footage can now be watched inside Reelcraft. The active media plays continuously rather than one frame at a time, and the creator can look around while it plays: the 360 viewpoint controls keep working during playback.
+- Playback controls: play, pause, seek to a position, resume and stop, with a source position readout. Reaching the end of the media stops cleanly.
+- Playback uses one persistent decoding process for the whole session instead of spawning a decoder per displayed frame, and decodes a bounded 2:1 proxy so viewing cost does not scale with the source resolution. The original footage is only ever read.
+- Seeking re-opens the stream at the requested position and keeps whether playback was running. Playback speed follows the source frame rate when it can be determined, and falls back to a documented default otherwise.
+- Rendered-result playback is unchanged, and the two playback modes are mutually exclusive: starting one stops the other.
+- **Known limitation:** source playback is silent. Reelcraft still has no audio output, and adding one is a separate objective; source playback was kept extensible for it rather than expanding this one. Rendered output remains silent as before.
+- 9 new tests; targeted regression 44 passed / 0 failed / 0 skipped; real-media validation passed on a real 360 clip. Decision 036 records the architecture.
+

@@ -293,6 +293,9 @@ a loaded decision must **retain the schema version it was loaded with** rather t
 upgraded in place. Replay must never re-stamp `origin`. Enforced by
 `editDecisionV1CompatibilityRetainsVersionAndHash` and `replayPreservesDecisionOrigin`.
 
+
+**Objective 19 (Decision 036):** source-media playback exists and is **video-only**. `Application` owns a separate source-playback pipeline (own `FrameSource`/`FramePump`/`Player`) that shares the single event-loop timer with the rendered-result path; the two are mutually exclusive and the rendered path must not be unified with it casually. Playback decodes a bounded 2:1 proxy (1024x512) through `FfmpegFrameSource`, so per-frame cost is independent of source resolution and the original media is never modified. Audio is deliberately absent with a recorded follow-up — do not add an audio output subsystem as a side effect of another objective.
+
 Never silently overwrite architectural history.
 
 ---
