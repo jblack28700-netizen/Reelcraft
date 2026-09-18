@@ -1152,3 +1152,15 @@ Status: Complete (2026-09-18). Human-locked scope (Decision 034): persisted `Edi
 
 Next: target-identity/creator-selection persistence, the deterministic intent->plan completeness checker, and decision retention remain candidates; each needs its own scoped objective.
 
+
+## Objective 18 — Deterministic Intent -> Plan Contract Checker — Scoped (not implemented)
+
+Status: Scoped 2026-09-18 (Decision 035). **No implementation is authorized and no code exists.**
+
+- Bounded to three path-independent predicates over the final `(ReframeIntent, ReframePlan)` pair: **IPC-1** output specification fidelity, **IPC-2** requested time-range containment, **IPC-3** temporal edit materialisation. Each is FATAL on violation.
+- The checker is a pure two-argument function: no I/O, no global state, no dependency, no persistence, no mutation, no planner-provenance input.
+- It will be invoked at both existing final-plan points in `ReframeCommandRunner::prepare()` after `applyTemporal` (main and speaker paths), without a convergence refactor.
+- Rule families that are **not** decidable from the pair are excluded and recorded with reasons: keyframe-count <-> move-count and per-move direction correspondence (the speaker planner owns its keyframes), target identity (coordinates only are retained), media identity (supplied by `ReframeCommandRequest`), and anything `ReframePlan::isValid()` or preparation already guarantees.
+- The seven intentional exceptions are recorded so they cannot become violations: temporal range widening, the empty-moves synthesized centered-forward keyframe, default output, default range, resolved-and-discarded target references, descriptive labels/notes, and planner-owned speaker keyframes.
+- No schema bump and no stored checker result are authorized. `EditDecision` immutability and single-parent revision lineage are unaffected.
+

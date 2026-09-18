@@ -439,11 +439,32 @@ Human-locked scope (Decision 034): give persisted `EditDecision` artifacts prove
 
 - 9 focused tests; targeted regression of affected areas: 31 passed / 0 failed / 0 skipped.
 
-## Next Objective — NOT SCOPED
+## 360 Reframing Objective 18 — Deterministic Intent -> Plan Contract Checker — SCOPED (NOT IMPLEMENTED)
 
-The leading candidates are: persisting the creator target selection / target identity (explicitly excluded from Objective 17), the deterministic intent -> plan completeness and consistency checker (excluded from Objective 16 and 17), and a retention/compaction policy for accumulating decisions (`KNOWN_ISSUES.md`).
+Status: **Scoped and formally recorded (Decision 035) — implementation NOT authorized, no code written.**
 
-**Carried-forward constraint (Decision 033 / 034, binding):** persisted decisions are **immutable**. A revision is expressed as a **new decision referencing the prior one through a single parent hash**, never as a mutation. Any future design that edits a stored decision in place contradicts these decisions and must be rejected.
+### Objective
 
-Requires its own scoped objective; do not begin automatically.
+Add a deterministic, pure contract checker that verifies that the final executable `ReframePlan` honours the specific portions of `ReframeIntent` that the existing architecture defines as executable requirements. It is **not** an AI auditor and does not attempt semantic understanding of user intent.
+
+### Scope (recorded, not implemented)
+
+- **IPC-1 — Output specification fidelity.** If `intent.hasOutput`, `plan.output()` must exactly equal `{intent.outputWidth, intent.outputHeight, intent.outputFps}`. Otherwise NotApplicable (caller default). FATAL.
+- **IPC-2 — Requested time-range containment.** If `intent.hasTimeRange`: without a temporal request `plan.sourceRange()` must equal the requested range; with one it must contain it. Otherwise NotApplicable (caller default). FATAL.
+- **IPC-3 — Temporal edit materialisation.** If `intent.hasTemporalRequest` and `intent.temporalError` is empty, the plan must retain at least one segment. FATAL.
+- Pure function over `(const ReframeIntent &, const ReframePlan &)`; deterministic structured report with verdict, stable rule IDs and human-readable detail. No I/O, global state, dependencies, persistence or mutation.
+- Invoked at **both** existing final-plan points in `ReframeCommandRunner::prepare()` after `applyTemporal` (main path, speaker path). No convergence refactor.
+- Violations fatal through the existing preparation error mechanism; nothing persisted for a rejected plan.
+
+### Explicitly excluded
+
+Parser changes; changes to `ReframeIntent`, `ReframePlan`, `CameraKeyframe` or `EditDecision`; schema changes; target identity; media identity; keyframe-count <-> move-count; per-move direction correspondence; labels/notes; validation already provided by `ReframePlan::isValid()` or by preparation; target-selection persistence; Accept/Reject persistence; report persistence; telemetry; UI; playback; renderer/executor redesign; LLM auditor; new dependencies; command-runner convergence refactor; timeline/editor work.
+
+### Decisions and constraints
+
+- **Decision 035** records the full scope, the exact predicates, fatal semantics, the seven intentional exceptions, the excluded rules with reasons, both integration points, and the 12-point implementation definition of done.
+- No schema bump and no stored checker result are authorized. Persisted `EditDecision` records remain immutable and revision remains new-decision-with-single-parent-lineage.
+- The IPC-3 premise was verified before recording: an empty temporal resolution is already a hard error in preparation, so IPC-3 is a contract assertion at the checker boundary rather than new coverage.
+
+Requires explicit implementation authorization; do not begin automatically.
 

@@ -1641,3 +1641,33 @@ Human-locked scope (Decision 034): give persisted `EditDecision` artifacts prove
 
 - Decision 034 recorded. Decisions 017-033 preserved.
 
+
+## 2026-09-18 — Objective 18 Scoping: Deterministic Intent -> Plan Contract Checker
+
+### Objective
+
+Formal scoping only (Decision 035). No implementation, no build, no tests, no source changes.
+
+### Work completed
+
+- Read-only architectural discovery of the intent -> plan mapping: `ReframePlanBuilder::build()` (output/range selection at `:32-41`, empty-moves synthesis at `:42-51`, keyframe construction at `:84-101`), the second transform `applyTemporal` (`ReframeCommandRunner.cpp:125-148`, applied at `:340` and `:419`), and every validation layer from parser reporting through `ReframePlan::isValid()` and `ReframePipeline::renderPlan`.
+- Established the information-preservation table: which intent fields map directly (`hasOutput`, range), which are transformed (`moves[].yaw/pitch` via normalise/clamp; `temporalEdit` -> `segments`), which are discarded (`targetRef`, `label`, `notes`, `unresolvedTargets`), and which have no downstream representation (`recognized`, `hasCompoundEdit()`).
+- Identified two false-positive hazards that constrain the rule set: after a temporal edit `plan.sourceRange()` is intentionally widened beyond the requested range, and an empty `moves` list intentionally yields one synthesized keyframe (so a move-count <-> keyframe-count rule is unsound).
+- Determined the decisive boundary: the speaker path applies the **same** output rule (`:289-294`) and both paths call `setSourceRange`/`setOutput`, so output and range rules are path-independent; but the speaker planner is documented as owning its keyframes (`:308`), so any keyframe-count or direction rule would false-positive there.
+- Verified the IPC-3 premise before recording the rule. `TemporalEditPlan::resolve()` can return an empty list, but `prepare` converts an empty resolution into a hard error (`:113-121`) before any plan is built, and `applyTemporal` copies every resolved segment (`:126-133`). The premise holds, and IPC-3 is recorded as a contract assertion rather than as new coverage.
+
+### Verification
+
+- Read-only inspection only. No build, no tests, no source or `.pro` modification, no dependency change, no commit.
+- Working tree contains documentation edits only.
+
+### Boundary notes / not implemented
+
+- Excluded from Objective 18 and recorded with reasons: keyframe-count <-> move-count, per-move direction correspondence, target identity, media identity, labels/notes, and anything `ReframePlan::isValid()` or preparation already guarantees.
+- No schema bump, no stored checker result, no command-runner convergence refactor, no parser/renderer change, no LLM.
+- Retained candidates for later objectives: creator target-selection persistence and the decision retention/compaction policy.
+
+### Decisions
+
+- Decision 035 recorded (scoped, not implemented). Decisions 017-034 preserved unchanged.
+

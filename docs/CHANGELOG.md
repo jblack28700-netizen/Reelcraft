@@ -707,3 +707,14 @@ Date: 2026-09-18
 - Added structured decision-lifecycle logging (created / loaded / refused / revised) using Qt logging categories, with no new dependency.
 - 9 new tests; targeted regression 31 passed / 0 failed / 0 skipped. Decision 034 records the scope, the version-retention and omission rules, and the out-of-scope list.
 
+
+## v0.2.55 — Objective 18 Scoped: Deterministic Intent -> Plan Contract Checker
+
+Date: 2026-09-18
+
+- Objective 18 was formally scoped in Decision 035. It is a **documentation-only** entry: no code, schema, dependency or behaviour changed, and implementation is not authorized.
+- The objective is a deterministic, pure contract checker over the final `(ReframeIntent, ReframePlan)` pair, bounded to three rules: output specification fidelity, requested time-range containment, and temporal edit materialisation. Each is fatal on violation.
+- Rule families that cannot be decided from the pair are explicitly excluded, with reasons recorded: keyframe-count <-> move-count and per-move direction correspondence (the speaker planner owns its keyframes), target identity, media identity, and anything already guaranteed by `ReframePlan::isValid()` or by command preparation.
+- Seven intentional behaviours are recorded as exceptions that must never be reported as violations: temporal edits may widen the final source range; empty camera instructions may synthesize a centered-forward keyframe; missing output and time range use caller defaults; target references are resolved into camera coordinates and not retained; labels and notes are descriptive only; speaker-path keyframes are planner-owned.
+- No persisted schema change and no stored checker result are authorized; persisted edit decisions remain immutable.
+

@@ -1148,3 +1148,135 @@ Target-identity persistence (`TargetIdentityRegistry`, `CreatorTargetSelection`)
 - Known limitation: an **unparseable render record** is now reported but is still discarded — unlike an unreadable decision, it is not preserved verbatim. Recorded in `KNOWN_ISSUES.md`.
 - Decisions 017-033 are preserved. No new database, ORM, storage format, renderer, parser or parallel pipeline was introduced.
 
+
+---
+
+# Decision 035 — Objective 18 Scope: Deterministic Intent -> Plan Contract Checker
+
+**Status:** Scoped — NOT implemented (2026-09-18; human-authorized formal scoping)
+
+## Context
+
+The 360 command path turns a natural-language instruction into a structured `ReframeIntent`, then into a validated `ReframePlan`, then into a render. Every stage validates its own invariants, and Objective 14/15 added temporal composition. What no stage does is verify, after the fact, that the **final** executable plan still honours the specific portions of the intent that the architecture defines as executable requirements.
+
+This gap is not hypothetical: Objective 15 existed precisely because a compound command silently lost its camera half. Nothing structural would have caught that; a test did. Objectives 16 and 17 considered a completeness checker and deferred it both times, on the grounds that its rule set needed to be defined against the actual intent->plan mapping rather than against a plausible-sounding idea of one.
+
+Architectural discovery (read-only, recorded in `DEVELOPMENT_LOG.md`) established the mapping, the false-positive hazards, and the one boundary that decides which rules are safe. This decision formally scopes the objective. **It authorizes no implementation.**
+
+## Objective
+
+Add a deterministic, pure contract checker that verifies that the final executable `ReframePlan` honours the specific portions of `ReframeIntent` that the existing architecture defines as executable requirements.
+
+The checker is **not** an AI auditor and does **not** attempt to determine semantic understanding of user intent. It performs no inference, calls no model, and reads no media.
+
+## In-scope rules
+
+### IPC-1 — Output specification fidelity
+
+- **Predicate:** if `intent.hasOutput` is true, `plan.output()` must exactly equal `{intent.outputWidth, intent.outputHeight, intent.outputFps}`.
+- **Intent fields:** `hasOutput`, `outputWidth`, `outputHeight`, `outputFps`. **Plan fields:** `output()`.
+- **Checkability:** directly checkable (exact comparison, no transformation).
+- **NotApplicable:** when `intent.hasOutput` is false, because the caller's default output is intentionally used.
+- **Severity:** FATAL.
+- **Existing guarantee:** both planners apply the same rule (`ReframePlanBuilder.cpp:32-41`; `ReframeCommandRunner.cpp:289-294` for the speaker path) and `OutputSpec::isValid()` bounds the values, but nothing compares the plan's output back to the intent. `ReframePlan::isValid()` checks bounds only, so this is not a duplicate of it.
+
+### IPC-2 — Requested time-range containment
+
+- **Predicate:** if `intent.hasTimeRange` is true, then without a temporal request `plan.sourceRange()` must **equal** the requested range, and with a temporal request `plan.sourceRange()` must **contain** the requested range.
+- **Intent fields:** `hasTimeRange`, `startMs`, `endMs`, `hasTemporalRequest`. **Plan fields:** `sourceRange()`.
+- **Checkability:** directly checkable in both forms (the containment form is an inequality over two existing fields; it does not re-derive `applyTemporal`'s arithmetic).
+- **NotApplicable:** when `intent.hasTimeRange` is false, because the caller's default range is intentionally used.
+- **Severity:** FATAL. A plan narrower than requested silently omits footage the creator asked for.
+- **Existing guarantee:** none. `ReframePlan::isValid()` guarantees keyframes and segments lie *within* `sourceRange`, and that segments are ordered and non-overlapping — it never checks that the *requested* range is contained.
+
+### IPC-3 — Temporal edit materialisation
+
+- **Predicate:** if `intent.hasTemporalRequest` is true **and** `intent.temporalError` is empty, the final plan must contain at least one retained segment (`!plan.segments().isEmpty()`).
+- **Intent fields:** `hasTemporalRequest`, `temporalError`. **Plan fields:** `segments()`.
+- **Checkability:** directly checkable.
+- **Severity:** FATAL.
+- **Premise verified before recording this scope.** The required verification was carried out: `TemporalEditPlan::resolve()` *can* return an empty list, but `ReframeCommandRunner::prepare()` converts an empty resolution into a hard error (`:113-121`) before any plan is built, and `applyTemporal` copies **every** resolved segment into `plan.segments()` (`:126-133`). A plan reaching the seam with `hasTemporalRequest` therefore always carries at least one segment. The premise holds and the rule is sound.
+- **Recorded honestly:** IPC-3 is consequently **already guaranteed by preparation**, not only by `ReframePlan::isValid()`. It is recorded as a **contract assertion at the checker boundary** — guarding against future divergence in `applyTemporal` or a future planner that bypasses temporal resolution — and **not** as new coverage. This is stated so the rule is not later mistaken for closing a gap that already exists.
+
+## Checker contract
+
+The checker must conceptually be a pure function over `(const ReframeIntent &, const ReframePlan &)` returning a deterministic structured report containing an overall verdict, stable rule ID(s), and human-readable violation detail.
+
+No I/O. No global state. No dependencies. No persistence. No mutation. No planner provenance input.
+
+## Integration boundary
+
+The checker will eventually be invoked at **both** existing final-plan points in `ReframeCommandRunner::prepare()`:
+
+1. main path, after `applyTemporal` (`:419`);
+2. speaker path, after `applyTemporal` (`:340`).
+
+The command runner must **not** be refactored merely to create a shared convergence point: the surviving rules are path-independent (verified — both paths apply the identical output rule and both call `setSourceRange`/`setOutput`), so a convergence refactor would restructure a tested composition boundary (Decision 025) for no additional coverage. Two call sites are accepted, with the drift risk mitigated by a test that exercises both paths.
+
+## Fatal semantics
+
+A violation is eventually fatal through the **existing** preparation error path: `result.ok == false`, a non-empty `result.error`, no executable plan returned, and nothing persisted. It must never be a silent skip, and it must not introduce a new error channel.
+
+## Intentional exceptions (must never become violations)
+
+1. Temporal edits can intentionally **expand** the final source range (`ReframeCommandRunner.cpp:139-148`).
+2. Empty `moves` can intentionally produce a **synthesized centered-forward keyframe** (`ReframePlanBuilder.cpp:42-51`).
+3. Missing output intentionally uses the **caller-provided default**.
+4. Missing time range intentionally uses the **caller-provided default**.
+5. Target references are intentionally **resolved into camera coordinates and not retained** in the executable plan.
+6. **Labels and notes are descriptive information**, not executable requirements.
+7. **Speaker-path keyframes are planner-owned** (`ReframeCommandRunner.cpp:308`) and therefore cannot be validated against `intent.moves`.
+
+## Excluded rules and why they cannot safely be checked
+
+- **Keyframe-count <-> move-count.** Not decidable from `(intent, plan)`: the speaker planner derives keyframes from speaker-change cuts, so a count rule would false-positive on the speaker path. Checking it would require planner provenance, an input the pair does not carry.
+- **Per-move direction correspondence.** Same planner problem, plus moves carrying a `targetRef` have no knowable direction in the pair, because the reference is resolved and discarded. It would also freeze the builder's even time distribution as a contract.
+- **Target identity / subject correctness.** The plan stores yaw/pitch only; which target produced a keyframe is not recorded. Not provable from the pair; already governed by the precedence in Decisions 021/022.
+- **Media identity.** `ReframeIntent` has no media field; `plan.sourceMediaId` is set from `ReframeCommandRequest` (`:420`). Not a property of the pair.
+- **Validation already provided by `ReframePlan::isValid()`:** keyframes within range, segment ordering and non-overlap, bounded and finite camera values, output bounds, minimum frame count. Including any of these would duplicate an existing authoritative validator.
+- **Unresolved-target checking.** Already handled by preparation, which makes a non-empty unresolved set a hard error (`:398-401`).
+- **Labels and notes.** Descriptive metadata; `label` is never read by planning and `notes` are copied to `ReframeBuildResult.notes` only.
+- **"Exactly one keyframe when `moves` is empty".** Over-specification of documented behaviour; asserting it would freeze an implementation detail.
+
+## Explicit exclusions
+
+The following are **not** Objective 18: parser changes; changes to `ReframeIntent`, `ReframePlan`, `CameraKeyframe` or `EditDecision`; persisted schema changes; target identity verification; media identity verification; keyframe-count <-> move-count verification; per-move direction correspondence; labels or notes; unresolved-target checking already handled by preparation; validation already provided by `ReframePlan::isValid()`; parser redesign; target-selection persistence; Accept/Reject persistence; report persistence; telemetry; UI; playback; renderer/executor redesign; LLM/AI auditor; new dependencies; command-runner convergence refactor; timeline/editor functionality.
+
+## Relationship to existing decisions
+
+- **Decision 018** (structured plan boundary, deterministic renderer): the checker consumes that boundary's outputs and changes neither side.
+- **Decision 025** (end-to-end command execution boundary): the checker is invoked inside that composition boundary without restructuring it.
+- **Decision 031** (temporal editing): the source of the intentional range widening that IPC-2 must permit.
+- **Decision 032** (compound commands): the regression that motivates a structural completeness check.
+- **Decision 033** (persisted decisions immutable): unchanged; no rule requires touching the artifact.
+- **Decision 034** (provenance and immutable revision): unchanged; the checker result is **not** persisted and adds no field to the decision.
+
+## Constraints
+
+- No schema bump is authorized for Objective 18.
+- No stored checker result is authorized.
+- Persisted `EditDecision` records remain immutable; revision remains new-decision-with-single-parent-lineage.
+- Existing validators remain authoritative for the invariants they already enforce; the checker duplicates none of them.
+
+## Implementation definition of done (for when implementation is authorized)
+
+1. IPC-1, IPC-2 and IPC-3 implemented with stable IDs.
+2. Pure deterministic checker with no I/O, global state or dependencies.
+3. Invoked after final temporal application on **both** the main and speaker paths.
+4. Violations are fatal through the existing preparation error mechanism.
+5. No persistence occurs for rejected plans.
+6. Positive tests cover each rule.
+7. Anti-false-positive tests cover: temporal range widening; the empty-moves synthesized keyframe; default output; default range; normal builder plans; the main command path; the speaker path.
+8. Determinism is tested.
+9. Existing relevant regression tests remain green.
+10. The full model-free test suite is run once at the final checkpoint.
+11. Documentation is updated consistently.
+12. No parser, plan schema, `EditDecision` schema, renderer, playback or dependency changes occur.
+
+## Consequences
+
+- Objective 18 is formally bounded to three path-independent predicates, a pure two-argument function, two call sites, and zero schema, persistence or dependency change.
+- The two false-positive hazards (temporal widening; empty-moves synthesis) and the excluded rule families are recorded here so they are not rediscovered later as additions.
+- IPC-3 is recorded as a contract assertion whose premise was verified, with its existing coverage stated plainly rather than overstated.
+- No implementation is authorized by this decision. Decisions 017-034 are preserved unchanged.
+
