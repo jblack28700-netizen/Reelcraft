@@ -1671,3 +1671,37 @@ Formal scoping only (Decision 035). No implementation, no build, no tests, no so
 
 - Decision 035 recorded (scoped, not implemented). Decisions 017-034 preserved unchanged.
 
+
+## 2026-09-18 — Objective 18 Implementation: Deterministic Intent -> Plan Contract Checker
+
+### Objective
+
+Implement the scope recorded in Decision 035: a pure deterministic contract checker over the final `(ReframeIntent, ReframePlan)` pair, invoked at both final-plan points. No scope expansion.
+
+### Work completed
+
+- Inspected both integration points and the error convention before changing anything: the speaker path (`result.plan = speakerPlan; applyTemporal(...);`) and the main path (`result.plan = built.plan; applyTemporal(...);`) both set `result.error` and return before `result.ok` is set.
+- Added `app/reframe/ReframeContract.{h,cpp}`: `ContractViolation`, `ContractReport`, and `ReframeContract::check()` implementing IPC-1, IPC-2 and IPC-3 in a fixed order. Rule ids are exposed via `outputFidelityRuleId()`, `timeRangeRuleId()` and `temporalMaterialisationRuleId()`; numbers are formatted with `QString::number(value, 'g', 10)` for locale independence.
+- Registered the new source and header in both `.pro` files and re-ran qmake (required because sources were added; no flag, dependency or configuration change).
+- Inserted the checker at both call sites immediately after `applyTemporal`, each as a four-line guard using the existing error path. No convergence refactor.
+- Added 6 tests. The speaker-path anti-false-positive test was initially inserted before its helper declarations and failed to compile; it was relocated after `SpeakerScriptProvider`/`speakerInterval`, which is the same ordering the existing speaker command test relies on.
+
+### Verification
+
+- Focused run of the 6 new tests: `Totals: 8 passed, 0 failed, 0 skipped` (1.57 s).
+- Targeted regression across the affected area (runner, builder, intent, plan, temporal, speaker, pipeline, application command paths, plus the new tests): `Totals: 55 passed, 0 failed, 0 skipped` (21.3 s).
+- Incremental `-j1` build only; no clean checkout, no cold build, no dependency change.
+
+### Recorded finding (honesty note)
+
+All three rules hold by construction on both paths today: both planners derive output and range from the same intent-or-default rule, `applyTemporal` only ever widens the range, and preparation already refuses an empty temporal resolution. **No reachable input can currently violate the contract.** The checker's value is as an executable contract against future divergence, and the FATAL wiring is therefore covered by rule-level tests plus inspection of the two call sites rather than by an end-to-end integration test.
+
+### Boundary notes / not implemented
+
+- Excluded per Decision 035: keyframe-count <-> move-count, per-move direction correspondence, target identity, media identity, labels/notes, and anything `ReframePlan::isValid()` or preparation already guarantees.
+- No schema bump, no persisted checker result, no parser/plan/`EditDecision`/renderer/playback change, no LLM, no convergence refactor.
+
+### Decisions
+
+- Decision 035 updated with an implementation-outcome section; its scope text is unchanged. Decisions 017-034 preserved.
+

@@ -718,3 +718,13 @@ Date: 2026-09-18
 - Seven intentional behaviours are recorded as exceptions that must never be reported as violations: temporal edits may widen the final source range; empty camera instructions may synthesize a centered-forward keyframe; missing output and time range use caller defaults; target references are resolved into camera coordinates and not retained; labels and notes are descriptive only; speaker-path keyframes are planner-owned.
 - No persisted schema change and no stored checker result are authorized; persisted edit decisions remain immutable.
 
+
+## v0.2.56 — Deterministic Intent -> Plan Contract Checker
+
+Date: 2026-09-18
+
+- Added a deterministic contract checker that verifies a generated reframe plan against the request it was built from, so a plan that would not honour the request is refused instead of silently executed.
+- Three checks run on every command, on both the ordinary and the speaker code paths: the output specification must match what was asked for; the requested time range must be covered (allowing the intentional widening that temporal edits perform); and a requested cut must actually retain at least one segment. Each check is skipped where the caller's default legitimately supplies the value, and each is fatal on failure — the command fails with a clear message and nothing is rendered or persisted.
+- Failures name the rule and both observed values (for example, the requested and actual output specification), so a mismatch is diagnosable without re-running the command.
+- No behaviour change for valid requests: every existing command path, including temporal edits, compound commands and speaker-following, produces plans that satisfy the contract. The checker exists to catch future regressions, and it deliberately does not attempt to judge semantic understanding of the request.
+

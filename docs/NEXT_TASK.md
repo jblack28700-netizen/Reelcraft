@@ -439,32 +439,31 @@ Human-locked scope (Decision 034): give persisted `EditDecision` artifacts prove
 
 - 9 focused tests; targeted regression of affected areas: 31 passed / 0 failed / 0 skipped.
 
-## 360 Reframing Objective 18 — Deterministic Intent -> Plan Contract Checker — SCOPED (NOT IMPLEMENTED)
+## 360 Reframing Objective 18 — Deterministic Intent -> Plan Contract Checker — Complete
 
-Status: **Scoped and formally recorded (Decision 035) — implementation NOT authorized, no code written.**
+Status: **Complete — implemented and verified (2026-09-18).**
 
 ### Objective
 
-Add a deterministic, pure contract checker that verifies that the final executable `ReframePlan` honours the specific portions of `ReframeIntent` that the existing architecture defines as executable requirements. It is **not** an AI auditor and does not attempt semantic understanding of user intent.
+Human-authorized scope (Decision 035): a deterministic, pure contract checker over the final `(ReframeIntent, ReframePlan)` pair, verifying that the executable plan honours the portions of the intent the architecture defines as executable requirements. Not an AI auditor and not a semantic-understanding component.
 
-### Scope (recorded, not implemented)
+### Scope (implemented)
 
-- **IPC-1 — Output specification fidelity.** If `intent.hasOutput`, `plan.output()` must exactly equal `{intent.outputWidth, intent.outputHeight, intent.outputFps}`. Otherwise NotApplicable (caller default). FATAL.
-- **IPC-2 — Requested time-range containment.** If `intent.hasTimeRange`: without a temporal request `plan.sourceRange()` must equal the requested range; with one it must contain it. Otherwise NotApplicable (caller default). FATAL.
-- **IPC-3 — Temporal edit materialisation.** If `intent.hasTemporalRequest` and `intent.temporalError` is empty, the plan must retain at least one segment. FATAL.
-- Pure function over `(const ReframeIntent &, const ReframePlan &)`; deterministic structured report with verdict, stable rule IDs and human-readable detail. No I/O, global state, dependencies, persistence or mutation.
-- Invoked at **both** existing final-plan points in `ReframeCommandRunner::prepare()` after `applyTemporal` (main path, speaker path). No convergence refactor.
-- Violations fatal through the existing preparation error mechanism; nothing persisted for a rejected plan.
+- `app/reframe/ReframeContract.{h,cpp}`: pure `ReframeContract::check(intent, plan)` returning a deterministic `ContractReport` with stable rule ids and human-readable details.
+- **IPC-1** output specification fidelity; **IPC-2** requested time-range containment (equality without a temporal edit, containment with one); **IPC-3** temporal edit materialisation. Each NotApplicable where a caller default legitimately applies; each FATAL on violation.
+- Invoked immediately after `applyTemporal` on both the speaker path and the main path in `ReframeCommandRunner::prepare()`, through the existing preparation error mechanism. No convergence refactor; nothing persisted.
+- No new dependency, no schema change, no change to `ReframeIntent`, `ReframePlan`, `CameraKeyframe` or `EditDecision`.
 
-### Explicitly excluded
+### Verification
 
-Parser changes; changes to `ReframeIntent`, `ReframePlan`, `CameraKeyframe` or `EditDecision`; schema changes; target identity; media identity; keyframe-count <-> move-count; per-move direction correspondence; labels/notes; validation already provided by `ReframePlan::isValid()` or by preparation; target-selection persistence; Accept/Reject persistence; report persistence; telemetry; UI; playback; renderer/executor redesign; LLM auditor; new dependencies; command-runner convergence refactor; timeline/editor work.
+- 6 new tests; focused run 8 passed / 0 failed / 0 skipped; targeted regression 55 passed / 0 failed / 0 skipped.
+- Full model-free suite run at the checkpoint.
 
-### Decisions and constraints
+## Next Objective — NOT SCOPED
 
-- **Decision 035** records the full scope, the exact predicates, fatal semantics, the seven intentional exceptions, the excluded rules with reasons, both integration points, and the 12-point implementation definition of done.
-- No schema bump and no stored checker result are authorized. Persisted `EditDecision` records remain immutable and revision remains new-decision-with-single-parent-lineage.
-- The IPC-3 premise was verified before recording: an empty temporal resolution is already a hard error in preparation, so IPC-3 is a contract assertion at the checker boundary rather than new coverage.
+The leading candidates are: persisting the creator target selection / target identity (explicitly excluded from Objectives 17 and 18), and a retention/compaction policy for accumulating decisions (`KNOWN_ISSUES.md`).
 
-Requires explicit implementation authorization; do not begin automatically.
+**Carried-forward constraint (Decisions 033 / 034, binding):** persisted decisions are **immutable**. A revision is expressed as a **new decision referencing the prior one through a single parent hash**, never as a mutation. Any future design that edits a stored decision in place contradicts these decisions and must be rejected.
+
+Requires its own scoped objective; do not begin automatically.
 

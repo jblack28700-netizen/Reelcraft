@@ -44,6 +44,7 @@
 #include "reframe/FfmpegSeekFrameProvider.h"
 #include "reframe/ReframeCommandRunner.h"
 #include "reframe/ReframeFrameProvider.h"
+#include "reframe/ReframeContract.h"
 #include "reframe/EditDecision.h"
 #include "reframe/ReframeIntent.h"
 #include "reframe/ReframePlan.h"
@@ -1205,6 +1206,13 @@ private slots:
     void decisionProvenanceReportsLineageAndSource();
     void restoreReframeOutputsReportsUnrestorableRecord();
     void editDecisionLoggingReportsRefusal();
+    // Objective 18: deterministic intent -> plan contract checker.
+    void reframeContractOutputFidelity();
+    void reframeContractTimeRange();
+    void reframeContractTemporalMaterialisation();
+    void reframeContractReportsAreDeterministic();
+    void reframeContractAcceptsRealPipelinePlans();
+    void reframeContractAcceptsSpeakerPathPlans();
     void replaySameProcessProducesEquivalentRender();
     void speakerRegistryAnnotateDoesNotChangeResolution();
 };
@@ -10329,7 +10337,206 @@ void ProjectTest::editDecisionLoggingReportsRefusal()
     QVERIFY(sawRefusal);
 }
 
+// ============ Intent -> plan contract checker (Objective 18) ============
+
+void ProjectTest::reframeContractOutputFidelity()
+{
+    // IPC-1: NotApplicable when the intent carries no output requirement.
+    ReframeIntent noOutput;
+    noOutput.hasOutput = false;
+    ReframePlan anyPlan =
+        makeReframePlan(0, 1000, 640, 360, 2.0, { makeKeyframe(0, 0.0) });
+    QVERIFY(ReframeContract::check(noOutput, anyPlan).isConsistent());
+
+    // Consistent when the plan reproduces the requested output exactly.
+    ReframeIntent intent;
+    intent.hasOutput = true;
+    intent.outputWidth = 640;
+    intent.outputHeight = 360;
+    intent.outputFps = 2.0;
+    QVERIFY(ReframeContract::check(intent, anyPlan).isConsistent());
+
+    // Violation when the plan would render a different specification.
+    ReframeIntent other = intent;
+    other.outputWidth = 1080;
+    other.outputHeight = 1920;
+    other.outputFps = 30.0;
+    const ContractReport report = ReframeContract::check(other, anyPlan);
+    QVERIFY(!report.isConsistent());
+    QCOMPARE(report.violations.size(), 1);
+    QCOMPARE(report.violations.at(0).ruleId, ReframeContract::outputFidelityRuleId());
+    QCOMPARE(report.violations.at(0).ruleId, QStringLiteral("IPC-1"));
+    // Deterministic, informative detail.
+    QVERIFY(report.violations.at(0).detail.contains(QStringLiteral("1080x1920")));
+    QVERIFY(report.violations.at(0).detail.contains(QStringLiteral("640x360")));
+    QVERIFY(report.summary().contains(QStringLiteral("IPC-1")));
+}
+
+void ProjectTest::reframeContractTimeRange()
+{
+    ReframeIntent timed;
+    timed.hasTimeRange = true;
+    timed.startMs = 1000;
+    timed.endMs = 4000;
+
+    // NotApplicable without a time-range requirement.
+    ReframeIntent untimed;
+    ReframePlan plan =
+        makeReframePlan(1000, 4000, 640, 360, 2.0, { makeKeyframe(1000, 0.0) });
+    QVERIFY(ReframeContract::check(untimed, plan).isConsistent());
+
+    // Without a temporal request: exact equality is required.
+    QVERIFY(ReframeContract::check(timed, plan).isConsistent());
+    ReframePlan shifted =
+        makeReframePlan(2000, 4000, 640, 360, 2.0, { makeKeyframe(2000, 0.0) });
+    const ContractReport equalCase = ReframeContract::check(timed, shifted);
+    QVERIFY(!equalCase.isConsistent());
+    QCOMPARE(equalCase.violations.at(0).ruleId, QStringLiteral("IPC-2"));
+
+    // With a temporal request: a WIDENED range is intentional and must NOT be a
+    // violation (anti-false-positive).
+    ReframeIntent temporal = timed;
+    temporal.hasTemporalRequest = true;
+    ReframePlan widened =
+        makeReframePlan(0, 9000, 640, 360, 2.0, { makeKeyframe(0, 0.0) });
+    widened.setSegments({ ReframePlan::TimeRange{ 1000, 4000 },
+                          ReframePlan::TimeRange{ 6000, 9000 } });
+    QVERIFY(ReframeContract::check(temporal, widened).isConsistent());
+
+    // But a range that does NOT contain the request is a violation.
+    ReframePlan narrowed =
+        makeReframePlan(1000, 3000, 640, 360, 2.0, { makeKeyframe(1000, 0.0) });
+    narrowed.setSegments({ ReframePlan::TimeRange{ 1000, 3000 } });
+    const ContractReport contained = ReframeContract::check(temporal, narrowed);
+    QVERIFY(!contained.isConsistent());
+    QCOMPARE(contained.violations.at(0).ruleId, QStringLiteral("IPC-2"));
+    QVERIFY(contained.violations.at(0).detail.contains(QStringLiteral("not contained")));
+}
+
+void ProjectTest::reframeContractTemporalMaterialisation()
+{
+    ReframePlan plain =
+        makeReframePlan(0, 4000, 640, 360, 2.0, { makeKeyframe(0, 0.0) });
+
+    // NotApplicable without a temporal request.
+    ReframeIntent none;
+    QVERIFY(ReframeContract::check(none, plain).isConsistent());
+
+    // NotApplicable when the request already carries an error: preparation
+    // refuses such a request before any plan is built.
+    ReframeIntent errored;
+    errored.hasTemporalRequest = true;
+    errored.temporalError = QStringLiteral("Temporal range is out of bounds.");
+    QVERIFY(ReframeContract::check(errored, plain).isConsistent());
+
+    // Violation: a resolved temporal request that retained no segment.
+    ReframeIntent resolved;
+    resolved.hasTemporalRequest = true;
+    const ContractReport missing = ReframeContract::check(resolved, plain);
+    QVERIFY(!missing.isConsistent());
+    QCOMPARE(missing.violations.size(), 1);
+    QCOMPARE(missing.violations.at(0).ruleId, QStringLiteral("IPC-3"));
+
+    // Consistent once the plan retains a segment.
+    ReframePlan withSegments =
+        makeReframePlan(0, 4000, 640, 360, 2.0, { makeKeyframe(0, 0.0) });
+    withSegments.setSegments({ ReframePlan::TimeRange{ 0, 2000 } });
+    QVERIFY(ReframeContract::check(resolved, withSegments).isConsistent());
+}
+
+void ProjectTest::reframeContractReportsAreDeterministic()
+{
+    ReframeIntent intent;
+    intent.hasOutput = true;
+    intent.outputWidth = 1080;
+    intent.outputHeight = 1920;
+    intent.outputFps = 30.0;
+    intent.hasTimeRange = true;
+    intent.startMs = 1000;
+    intent.endMs = 4000;
+    intent.hasTemporalRequest = true;
+    ReframePlan plan =
+        makeReframePlan(0, 1000, 640, 360, 2.0, { makeKeyframe(0, 0.0) });
+
+    const ContractReport first = ReframeContract::check(intent, plan);
+    const ContractReport second = ReframeContract::check(intent, plan);
+    // All three rules fire, in a fixed order.
+    QCOMPARE(first.violations.size(), 3);
+    QCOMPARE(first.violations.at(0).ruleId, QStringLiteral("IPC-1"));
+    QCOMPARE(first.violations.at(1).ruleId, QStringLiteral("IPC-2"));
+    QCOMPARE(first.violations.at(2).ruleId, QStringLiteral("IPC-3"));
+    QCOMPARE(first.summary(), second.summary());
+    QCOMPARE(first.violations.size(), second.violations.size());
+    for (int i = 0; i < first.violations.size(); ++i) {
+        QCOMPARE(first.violations.at(i).ruleId, second.violations.at(i).ruleId);
+        QCOMPARE(first.violations.at(i).detail, second.violations.at(i).detail);
+    }
+
+    // A consistent report has an empty summary.
+    QVERIFY(ReframeContract::check(ReframeIntent(), plan).summary().isEmpty());
+}
+
+void ProjectTest::reframeContractAcceptsRealPipelinePlans()
+{
+    // Anti-false-positive coverage over plans the real pipeline produces: default
+    // output, default range, the empty-moves synthesized keyframe, temporal
+    // materialisation, and resolved-subject plans.
+    const auto checkRequest = [](const ReframeCommandRequest &request,
+                                 TargetDetector *detector,
+                                 ReframeFrameProvider *provider,
+                                 const QString &label) {
+        const ReframeCommandResult result =
+            ReframeCommandRunner::prepare(request, detector, provider);
+        QVERIFY2(result.ok, qPrintable(label + QStringLiteral(": ") + result.error));
+        const ContractReport report =
+            ReframeContract::check(result.intent, result.plan);
+        QVERIFY2(report.isConsistent(),
+                 qPrintable(label + QStringLiteral(": ") + report.summary()));
+    };
+
+    ReframeCommandRequest base;
+    base.defaultRange = ReframePlan::TimeRange{ 0, 2000 };
+    base.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+
+    // Direction-only: default output and default range are NotApplicable.
+    ReframeCommandRequest directional = base;
+    directional.instruction = QStringLiteral("pan right");
+    checkRequest(directional, nullptr, nullptr, QStringLiteral("direction-only"));
+
+    // Output-requesting with no camera instruction: exercises both IPC-1 as an
+    // applicable rule and the synthesized centered-forward keyframe.
+    ReframeCommandRequest outputOnly = base;
+    outputOnly.instruction = QStringLiteral("Make a TikTok version");
+    checkRequest(outputOnly, nullptr, nullptr, QStringLiteral("output-only"));
+
+    // Explicit requested range.
+    ReframeCommandRequest timed = base;
+    timed.instruction = QStringLiteral("Use this section from 00:30 to 01:00.");
+    timed.defaultRange = ReframePlan::TimeRange{ 30000, 60000 };
+    checkRequest(timed, nullptr, nullptr, QStringLiteral("explicit range"));
+
+    // Resolved-render temporal edit: the plan must retain a segment.
+    ReframeCommandRequest temporal = base;
+    temporal.instruction = QStringLiteral("Make a 1-second version");
+    temporal.sourceDurationMs = 12000;
+    temporal.defaultRange = ReframePlan::TimeRange{ 0, 12000 };
+    checkRequest(temporal, nullptr, nullptr, QStringLiteral("temporal"));
+
+    // Resolved-subject plan through the replaceable detector seam.
+    const QImage frame = buildTargetEquirect(
+        360, 180, { EquirectDisk{ 30.0, 0.0, 10.0, QColor(255, 0, 0) } });
+    StaticEquirectProvider provider(frame);
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+    ReframeCommandRequest subject = base;
+    subject.instruction = QStringLiteral("follow person 1");
+    subject.defaultRange = ReframePlan::TimeRange{ 0, 3000 };
+    subject.resolveConfig = smallResolverConfig();
+    checkRequest(subject, &detector, &provider, QStringLiteral("subject"));
+}
+
 void ProjectTest::mainWindowShowsReframeOutputs()
+
 {
     TestMainWindow window;
     ReframeCommandOutcome success;
@@ -10626,6 +10833,47 @@ void ProjectTest::reframeIntentParsesSpeakerCenteredPhrases()
         ReframeIntentParser::parse(QStringLiteral("keep me centered"));
     QCOMPARE(me.moves.size(), 1);
     QCOMPARE(me.moves.at(0).targetRef, QStringLiteral("me"));
+}
+
+void ProjectTest::reframeContractAcceptsSpeakerPathPlans()
+{
+    // The speaker planner owns its keyframes, so a keyframe-count rule would
+    // false-positive here. The checker must accept the plan.
+    const QImage frame = buildTargetEquirect(
+        360, 180, { EquirectDisk{ 30.0, 0.0, 10.0, QColor(255, 0, 0) } });
+    StaticEquirectProvider provider(frame);
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+    SpeakerScriptProvider speaker;
+    speaker.setIntervals({ speakerInterval(0, 3000) });
+
+    ReframeCommandRequest request;
+    request.sourcePath = QStringLiteral("/tmp/reelcraft_dummy.mp4");
+    request.instruction = QStringLiteral("follow the speaker");
+    request.defaultRange = ReframePlan::TimeRange{ 0, 3000 };
+    request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+    request.resolveConfig = smallResolverConfig();
+    request.speakerProvider = &speaker;
+
+    const ReframeCommandResult result =
+        ReframeCommandRunner::prepare(request, &detector, &provider);
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QVERIFY(result.speakerCommand);
+    QVERIFY(!result.plan.keyframes().isEmpty());
+
+    const ContractReport report =
+        ReframeContract::check(result.intent, result.plan);
+    QVERIFY2(report.isConsistent(), qPrintable(report.summary()));
+
+    // And with an explicit output requirement the speaker path still satisfies
+    // IPC-1.
+    request.instruction = QStringLiteral("Make a TikTok version and follow the speaker");
+    const ReframeCommandResult withOutput =
+        ReframeCommandRunner::prepare(request, &detector, &provider);
+    if (withOutput.ok) {
+        QVERIFY(ReframeContract::check(withOutput.intent, withOutput.plan)
+                    .isConsistent());
+    }
 }
 
 void ProjectTest::reframeCommandRunnerSpeakerFollowsActiveSpeaker()

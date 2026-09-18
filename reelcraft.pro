@@ -29,6 +29,7 @@ SOURCES += \
     app/reframe/EditDecision.cpp \
     app/reframe/FfmpegSeekFrameProvider.cpp \
     app/reframe/ReframeCommandRunner.cpp \
+    app/reframe/ReframeContract.cpp \
     app/reframe/ReframeIntent.cpp \
     app/reframe/ReframePlan.cpp \
     app/reframe/ReframePlanBuilder.cpp \
@@ -83,6 +84,7 @@ HEADERS += \
     app/reframe/EditDecision.h \
     app/reframe/FfmpegSeekFrameProvider.h \
     app/reframe/ReframeCommandRunner.h \
+    app/reframe/ReframeContract.h \
     app/reframe/ReframeFrameProvider.h \
     app/reframe/ReframeIntent.h \
     app/reframe/ReframeMath.h \

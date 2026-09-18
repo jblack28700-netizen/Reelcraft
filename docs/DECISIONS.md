@@ -1153,7 +1153,7 @@ Target-identity persistence (`TargetIdentityRegistry`, `CreatorTargetSelection`)
 
 # Decision 035 — Objective 18 Scope: Deterministic Intent -> Plan Contract Checker
 
-**Status:** Scoped — NOT implemented (2026-09-18; human-authorized formal scoping)
+**Status:** Implemented (2026-09-18). Scoped by human authorization and implemented within the same objective; the scope text below is unchanged.
 
 ## Context
 
@@ -1279,4 +1279,37 @@ The following are **not** Objective 18: parser changes; changes to `ReframeInten
 - The two false-positive hazards (temporal widening; empty-moves synthesis) and the excluded rule families are recorded here so they are not rediscovered later as additions.
 - IPC-3 is recorded as a contract assertion whose premise was verified, with its existing coverage stated plainly rather than overstated.
 - No implementation is authorized by this decision. Decisions 017-034 are preserved unchanged.
+
+
+## Implementation outcome (2026-09-18)
+
+**Status: implemented and verified.** The scope above is unchanged; this section records what was built against it.
+
+### What was added
+
+- `app/reframe/ReframeContract.{h,cpp}` (new): `ContractViolation` (stable rule id + deterministic detail), `ContractReport` (`isConsistent()`, `summary()`), and `ReframeContract::check(const ReframeIntent &, const ReframePlan &)`.
+- Both `.pro` files gained the new source and header. No dependency, flag or configuration change.
+- Two integration call sites in `ReframeCommandRunner::prepare()`, each immediately after `applyTemporal`: the speaker path and the main path. Both use the existing error mechanism: `result.error = contract.summary(); return result;` before `result.ok` is set and before any plan is returned. No convergence refactor was performed.
+
+### Verified behaviour
+
+- **IPC-1** applies only when `intent.hasOutput` is true; compares width, height and fps exactly; NotApplicable otherwise.
+- **IPC-2** requires exact equality without a temporal request, and containment with one, so the intentional widening by `applyTemporal` cannot false-positive. NotApplicable without `hasTimeRange`.
+- **IPC-3** fires only for a request that is present and error-free with an empty `plan.segments()`; NotApplicable otherwise, including when `temporalError` is non-empty.
+- Violations are appended in fixed rule order (IPC-1, IPC-2, IPC-3) so the report and its summary are deterministic; numbers are formatted with `QString::number(value, 'g', 10)` for locale independence.
+
+### Tests
+
+- 6 new tests: `reframeContractOutputFidelity`, `reframeContractTimeRange`, `reframeContractTemporalMaterialisation`, `reframeContractReportsAreDeterministic`, `reframeContractAcceptsRealPipelinePlans`, `reframeContractAcceptsSpeakerPathPlans`.
+- Focused run: 8 passed / 0 failed / 0 skipped (6 new plus init/cleanup).
+- Targeted regression across the affected area (runner, builder, intent, plan, temporal, speaker, pipeline and application command paths, plus the new tests): **55 passed / 0 failed / 0 skipped**.
+- Anti-false-positive coverage exercises the real pipeline: direction-only (default output and range), output-requesting with the synthesized centered-forward keyframe, an explicit requested range, a resolved temporal edit, a resolved-subject plan, and the speaker path with planner-owned keyframes.
+
+### Recorded limitation (honest)
+
+The rules are currently satisfied **by construction** on both paths: the builder and the speaker planner both derive output and range from the same intent-or-default rule, `applyTemporal` only ever widens, and preparation already refuses an empty temporal resolution. **No reachable input today can produce a violation**, which is precisely why the checker exists: it is an executable contract that fails loudly if those properties are broken by a future change. Consequently the FATAL wiring is verified by the rule-level tests plus inspection of the two call sites, and is **not** covered by an end-to-end integration test — triggering it would require injecting a plan that the current planners cannot produce, which would mean adding a seam outside this objective's scope.
+
+### Constraints honoured
+
+No parser, `ReframeIntent`, `ReframePlan`, `CameraKeyframe` or `EditDecision` change; no schema bump; no persisted checker result; no persistence on rejection; no new dependency; no LLM; no renderer or playback change; no convergence refactor. Decisions 017-034 are preserved.
 

@@ -6,6 +6,7 @@
 #include <memory>
 
 #include "media/FrameExtractor.h"
+#include "reframe/ReframeContract.h"
 #include "reframe/FfmpegSeekFrameProvider.h"
 #include "reframe/ReframePipeline.h"
 #include "reframe/ReframePlanBuilder.h"
@@ -338,6 +339,14 @@ ReframeCommandResult ReframeCommandRunner::prepare(
         result.intent.unresolvedTargets.clear();
         result.plan = speakerPlan;
         applyTemporal(&result.plan);
+        // Objective 18 (Decision 035): the final plan must honour the executable
+        // requirements of the intent it was built from.
+        const ContractReport contract =
+            ReframeContract::check(result.intent, result.plan);
+        if (!contract.isConsistent()) {
+            result.error = contract.summary();
+            return result;
+        }
         result.plan.setSourceMediaId(request.sourceMediaId);
         result.ok = true;
         return result;
@@ -417,6 +426,14 @@ ReframeCommandResult ReframeCommandRunner::prepare(
 
     result.plan = built.plan;
     applyTemporal(&result.plan);
+    // Objective 18 (Decision 035): the final plan must honour the executable
+    // requirements of the intent it was built from.
+    const ContractReport contract =
+        ReframeContract::check(result.intent, result.plan);
+    if (!contract.isConsistent()) {
+        result.error = contract.summary();
+        return result;
+    }
     result.plan.setSourceMediaId(request.sourceMediaId);
     result.ok = true;
     return result;
