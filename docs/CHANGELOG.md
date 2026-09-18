@@ -767,3 +767,14 @@ Date: 2026-09-18
 - **No new intelligence was added.** There is still no transcription, no scene understanding, no shot or B-roll reasoning, no language model and no creator-preference learning; those remain future work. This release adds the place where such capabilities will be recorded.
 - Existing behaviour is unchanged: renders and replays produce byte-identical results whether analysis is present, absent, stale or unreadable. 15 new tests; targeted regression 31 passed / 0 failed / 0 skipped. Decisions 038-042 record the design.
 
+
+## v0.2.60 — Following a subject now actually follows
+
+Date: 2026-09-18
+
+- Asking Reelcraft to **follow** someone now produces a camera that moves with that person over time. Previously a follow instruction — "follow me", "keep me centered" — resolved the subject's position and then held the camera still there for the whole clip, which is not what following means.
+- Instructions that ask to **aim** at something stay exactly as before: "look at the car" points the camera at the car and holds it. The difference is now explicit in how the instruction is understood.
+- When the subject cannot be tracked continuously across the requested range, the command falls back to the previous fixed-camera behaviour and says why, rather than failing or inventing a camera move.
+- Nothing else changed: rendering, playback, replay and saved decisions behave exactly as before, and renders remain reproducible.
+- 4 new tests cover the behaviour, including an end-to-end run on real 360 footage in which the subject walks across the sphere; the rendered result is decoded back to confirm it is a valid video. Targeted regression 45 passed / 0 failed / 0 skipped.
+

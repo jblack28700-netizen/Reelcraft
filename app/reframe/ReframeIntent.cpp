@@ -137,7 +137,23 @@ QString cleanSubject(QString subject)
     return subject.trimmed();
 }
 
-QString subjectFromClause(const QString &clause)
+// Which subject patterns ask for CONTINUOUS framing rather than a one-shot aim.
+// "follow X", "keep me centered" and "keep X centered" all describe a behaviour
+// that has to hold over the whole instruction range, so they are executed as a
+// camera path through the subject's track. "look at X", "move to X",
+// "centered on X" and "center X" describe a single direction.
+const bool kFollowPatterns[] = {
+    true,  // follow(ing) <subject>
+    false, // look at <subject>
+    false, // move/pan/turn/point/aim to <subject>
+    false, // towards/to <subject>
+    true,  // keep me centered
+    false, // centered on <subject>
+    true,  // keep <subject> centered
+    false, // center <subject>
+};
+
+QString subjectFromClause(const QString &clause, bool *outFollow = nullptr)
 {
     static const QRegularExpression patterns[] = {
         QRegularExpression(QStringLiteral(
@@ -164,6 +180,9 @@ QString subjectFromClause(const QString &clause)
         const QRegularExpressionMatch match = patterns[i].match(clause);
         if (!match.hasMatch()) {
             continue;
+        }
+        if (outFollow) {
+            *outFollow = kFollowPatterns[i];
         }
         if (i == 4) {
             return QStringLiteral("me");
@@ -712,12 +731,14 @@ ReframeIntent ReframeIntentParser::parse(const QString &text)
             move.yawDeg = yaw;
             move.pitchDeg = pitch;
         } else {
-            QString subject = subjectFromClause(cameraText);
+            bool follow = false;
+            QString subject = subjectFromClause(cameraText, &follow);
             if (temporal) {
                 subject = stripTrailingTemporalFiller(subject);
             }
             if (!subject.isEmpty()) {
                 move.targetRef = subject;
+                move.followSubject = follow;
                 if (!intent.unresolvedTargets.contains(subject)) {
                     intent.unresolvedTargets.append(subject);
                 }

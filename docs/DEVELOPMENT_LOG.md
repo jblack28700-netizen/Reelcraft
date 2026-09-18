@@ -1838,3 +1838,47 @@ Two compile failures occurred and were fixed: a missing `m_config` member on the
 
 - Decisions 038-042 recorded (persistent layered artifact; analysis is evidence not decision; analysis is never on the replay path; coverage-aware independently-available layers; one decode pass at a recorded perception resolution). Decision 043 (Creator Memory) is deliberately NOT recorded: Creator Memory remains a future architectural topic.
 
+
+## 2026-09-18 — Phase 4 Objective 23: Subject-Follow Camera Paths
+
+### Objective
+
+Resume the primary product objective — 360 footage plus an English instruction to a deterministic rendered result — by finding and closing the next genuinely missing link in the pipeline, from repository evidence rather than assumption.
+
+### What inspection found
+
+Every stage existed and was tested. The parser produced a `ReframeIntent`; the command runner resolved subjects through the replaceable detector/tracker; `ReframePlanBuilder` produced a validated `ReframePlan`; `ReframePipeline` rendered it deterministically. But the **subject trajectory never reached the camera path**: `ReframePlanBuilder` emits exactly one keyframe per camera move from a single resolved direction, so the flagship instruction class — "follow me", "keep me centered" — rendered a locked-off shot. `TargetTrackPlanner::planTrack()`, which converts a track's time-ordered observations into camera keyframes, was implemented and unit-tested and was **called by no production code**.
+
+### What was built
+
+- `ReframeCameraMove` gained `followSubject`, an in-memory flag distinguishing continuous framing from a one-shot aim. `ReframeIntent` is not persisted, so there is no schema or compatibility impact.
+- `ReframeIntentParser` sets the flag from the same pattern table that extracts the subject, so classification and subject extraction can never disagree: follow-class patterns are flagged, aim-class patterns are not.
+- `ReframeCommandRunner::prepare()` resolves the subject's track id during identity selection and, for a single target-referencing follow move, builds the plan with the existing `TargetTrackPlanner` in place of the builder's single-direction plan. The builder still runs first and unchanged, so it remains the validity gate and the fallback; an unusable track degrades to exactly the previous behaviour with a note explaining why.
+- Nothing else changed: no new seam, type, dependency, schema, or renderer/camera-path/playback/replay behaviour.
+
+### Failure recovery (and a genuine finding)
+
+The new real-media test failed three times before the actual cause was established, and each wrong hypothesis was eliminated with evidence rather than by adjusting the test:
+
+1. First failure: the command reported the subject unresolved. A fixture sanity check (decode one frame from the encoded clip and resolve it directly) was added and **passed**, proving decoding and detection were fine and moving the investigation into the command path.
+2. The failure message was then made to report the runner's own state, which showed **two tracks** and an honest "'person' is ambiguous across 2 candidate(s)" refusal — not a detection failure at all.
+3. A per-frame diagnostic showed the real mechanism: at one sample the same subject yielded **two observations 9.6 degrees apart**, one from each of two overlapping cover views, which exceeds the tracker's default 8-degree merge distance, so two parallel identities were kept and the reference legitimately became ambiguous.
+
+The fixture's subject was also reduced from an 18-degree to a 12-degree cap, because a subject that large straddles cover-view boundaries and widens the two centroids further. Widening `mergeDistanceDeg` for the fixture (its subject is deliberately far larger than a person) restored one identity and the test passes. The perception behaviour itself was **deliberately not changed**: tuning the merge distance for real person-sized targets is Decision 019 territory and needs its own evidence.
+
+### Verification
+
+- 4 new tests: intent follow/aim classification; a model-free moving-subject command producing a monotonic multi-keyframe follow path whose endpoints track the subject, paired with an aim control that stays at one keyframe; an honest fallback when the resolved track has no usable observation inside the range; and a real 360 media end-to-end test (an encoded equirect clip in which the subject walks across the sphere) that runs resolution, planning and the deterministic renderer and decodes the resulting MP4.
+- Targeted regression across the affected area (parser, builder, command runner, contract checker, tracker/planner, application command path, and the existing real-video render test): **45 passed / 0 failed / 0 skipped**.
+- Full model-free suite run at the checkpoint.
+
+### Boundary notes / not implemented
+
+- Only a single target-referencing follow move takes the new path. Multi-move camera paths, explicit directions, speaker commands and direction-only commands are unchanged, and aim instructions deliberately remain a single fixed direction.
+- Recorded limitation: a follow path has at most as many keyframes as the resolver samples (five by default). Smoother following needs denser resolution sampling, which is already a caller/config concern and was not changed here.
+- No UI work, no new AI feature, no architecture redesign, no dependency change.
+
+### Decisions
+
+- Decision 043 recorded (follow instructions execute as a camera path through the resolved track; aim instructions stay a static direction; the builder remains the gate and fallback). Decisions 017-042 preserved.
+

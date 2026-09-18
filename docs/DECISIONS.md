@@ -1500,3 +1500,34 @@ A single 4K frame decode costs seconds on the development device, so whole-video
 - Suite cost is recorded honestly: the real-media analysis tests add roughly 100 s on this device.
 - Sampling precision is a recorded limitation: observations on a 1 s grid cannot justify frame-accurate edits. Fine-grained placement requires targeted re-analysis, which the layer spec and coverage model make decidable.
 
+
+---
+
+# Decision 043 — Subject-Follow Instructions Execute as a Camera Path Through the Resolved Track
+
+**Status:** Accepted (2026-09-18, 360 Reframing Objective 23)
+
+## Context
+
+By Objective 21 the pipeline could already carry a natural-language instruction to a deterministic render: the parser produced a `ReframeIntent`, `ReframeCommandRunner::prepare()` resolved subject references through the replaceable detector/tracker, `ReframePlanBuilder` produced a validated `ReframePlan`, and `ReframePipeline` rendered it. What it could not do was *follow*.
+
+`ReframePlanBuilder` emits exactly one keyframe per camera move, using a single resolved direction per subject. A follow instruction ("follow me", "keep me centered") is one move, so it produced **one keyframe** — a locked-off shot aimed at wherever the subject happened to be, for the whole range. The flagship instruction class therefore rendered as a static camera.
+
+Meanwhile `TargetTrackPlanner::planTrack()` — which converts a resolved track's time-ordered observations into up to 40 camera keyframes, and is unit-tested — was **never reached by any production code path**. The trajectory existed; nothing consumed it.
+
+## Decision
+
+- **The intent records whether a clause asks for continuous framing or a one-shot aim.** `ReframeCameraMove` gains an in-memory `followSubject` flag. The parser sets it for follow-class clauses ("follow X", "keep me centered", "keep X centered") and leaves it clear for aim-class clauses ("look at X", "move to X", "centered on X", "center X") and for explicit directions. `ReframeIntent` is never persisted (EditDecision stores the resolved plan), so this carries no schema or compatibility impact.
+- **A follow instruction is executed as a camera path through the resolved track.** For a single target-referencing follow move, `ReframeCommandRunner::prepare()` builds the plan with the existing `TargetTrackPlanner` from the subject's track and uses it in place of the builder's single-direction plan.
+- **Scope is narrow by construction.** Only a single target-referencing follow move takes this path. Explicit directions, multi-move camera paths, speaker commands, direction-only commands and every existing test keep the previous behaviour. Aim instructions deliberately remain a single fixed direction.
+- **The existing builder stays the validity gate and the fallback.** It runs first and unchanged; the follow plan replaces it only when the track has usable observations inside the range. Otherwise the command degrades to exactly the previous fixed camera and adds a note saying why, rather than failing.
+- **No new seam, no new type, no new dependency.** The plan, camera path, renderer, playback, replay and persisted-decision semantics are untouched, so determinism, immutability and replay isolation are unaffected.
+
+## Consequences
+
+- "Follow me while I'm walking" and "keep me centered" now render a real tracking camera instead of a locked-off shot, demonstrated end to end on a real encoded 360 equirect clip (raw footage → English instruction → validated plan → rendered MP4).
+- The trajectory-to-camera-path stage listed as a next candidate in `NEXT_TASK.md` has its first step done: the resolved trajectory reaches the camera path. What remains of that candidate is *quality* — denser tracking and a smoothing/framing layer — not connectivity.
+- **Recorded limitation:** the follow path is only as good as the sampling. The resolver samples the instruction range (five timestamps by default), so a follow path has at most that many keyframes; smoother following needs denser resolution sampling, which is already a caller/config concern (`resolveTimestamps`, `maxResolveSamples`) and was deliberately not changed here.
+- **Recorded finding (not changed):** on real footage the covering-view detector can report the same subject from two overlapping cover views with centroids further apart than the tracker's default 8-degree merge distance. Observed at 9.6 degrees for a synthetic subject much larger than a person; the tracker then keeps two identities and the command honestly refuses as *ambiguous* rather than guessing. A fixture-sized subject needed a wider `mergeDistanceDeg` to keep one identity. This is a perception-tuning question in Decision 019 territory, deliberately left alone, and is the natural next quality item for follow accuracy.
+- Creator Memory remains an unrecorded future topic; the number 043 was previously referenced prospectively for it in the Objective 21 development log, but no decision was ever recorded under it.
+

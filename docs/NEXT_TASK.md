@@ -119,6 +119,30 @@ Introduce the deterministic player/timing foundation above the `FramePump`, defi
 - Full regression 154 passed / 0 failed / 0 skipped; official `scripts/build_and_test.sh` re-run green.
 - Offscreen smoke SMOKE_EXIT=124.
 
+
+## 360 Reframing Objective 23 — Subject-Follow Camera Paths — Complete
+
+Status: **Complete — implemented and verified (2026-09-18).**
+
+### Objective
+
+The pipeline ran end to end but a follow instruction produced a locked-off shot. Make the resolved subject trajectory reach the camera path, using only what already existed.
+
+### Scope (implemented)
+
+- `ReframeCameraMove::followSubject` (in-memory intent only; `ReframeIntent` is not persisted).
+- `ReframeIntentParser` classifies follow-class clauses ("follow X", "keep me centered", "keep X centered") apart from aim-class clauses ("look at X", "move to X", "centered on X", "center X").
+- `ReframeCommandRunner::prepare()` builds a camera path through the resolved track via the existing `TargetTrackPlanner` for a single target-referencing follow move.
+- The ordinary builder remains the validity gate and the fallback; an unusable track degrades to the previous behaviour with an honest note.
+- No change to explicit directions, multi-move paths, speaker commands, the plan model, the renderer, replay or persistence.
+
+### Verification
+
+- 4 new tests: intent classification; model-free moving-subject follow path (multi-keyframe, monotonic, endpoint-accurate) with a paired aim control; honest fallback on an unusable track; real 360 media end-to-end render that decodes to a valid MP4.
+- Targeted regression across the affected area: **45 passed / 0 failed / 0 skipped**.
+
+---
+
 ## Next Objective (Phase 3, Objective 5) — NOT STARTED (deferred behind the 360 priority)
 
 Application-level player lifecycle orchestration: have `Application` own/create/replace/dispose the media source, frame pump, and player in step with the active-media contract, and define how an event-loop driver (not the `Player`) invokes `tick()`. Preserve the Objective 10 preview-time contract and keep the viewer presentation-only. UI playback controls, duration/ffprobe, audio, and timeline remain deferred. Requires its own scoped objective before implementation. Do not begin automatically while the 360 reframing priority is active.
@@ -544,7 +568,7 @@ The established product direction is that Reelcraft must first become a working 
 
 - **the Analysis -> Reasoning boundary** (editorial reasoning over persisted analysis evidence), which is the stage Decision 039 defines as producing only the existing validated ReframePlan;
 - **audio in the rendered output** (renders are still silent; Objective 20 removed the per-frame decoder process but added no audio);
-- **the trajectory-to-camera-path stage** (dense tracking plus a deterministic smoothing/framing layer), which is where reframing quality is actually won;
+- **follow quality** (denser tracking plus a deterministic smoothing/framing layer): Objective 23 connected the resolved trajectory to the camera path, so this is now about smoothing and sampling density rather than connectivity. It also inherits the recorded covering-view merge-distance finding;
 - **creator review and revision surface** over persisted decisions (`decisionProvenance()` and `reviseEditDecision()` exist as APIs with no UI);
 - **speaker/dialogue capability**, which first needs a licensing-and-capability evaluation before any engineering.
 

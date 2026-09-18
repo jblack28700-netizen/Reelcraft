@@ -14,6 +14,7 @@
 #include "target/SpeakerReframePlanner.h"
 #include "target/SpeakerTargetAssociator.h"
 #include "target/TargetSelector.h"
+#include "target/TargetTrackPlanner.h"
 
 namespace {
 
@@ -160,6 +161,21 @@ ReframeCommandResult ReframeCommandRunner::prepare(
             otherReferences.append(move.targetRef);
         }
     }
+
+    // Objective 23: a FOLLOW instruction ("follow me", "keep me centered") asks
+    // the camera to keep the subject framed over time, so it is executed as a
+    // camera path through that subject's resolved track. The track id is
+    // captured during resolution below. Only a single target-referencing follow
+    // move qualifies; everything else keeps the existing behaviour.
+    QString followReference;
+    if (result.intent.moves.size() == 1) {
+        const ReframeCameraMove &move = result.intent.moves.first();
+        if (move.followSubject && !move.hasDirection
+            && !move.targetRef.isEmpty() && !isSpeakerReference(move.targetRef)) {
+            followReference = move.targetRef;
+        }
+    }
+    QString followTrackId;
 
     const bool wantsSpeaker = !speakerReferences.isEmpty();
     if (wantsSpeaker) {
@@ -374,6 +390,9 @@ ReframeCommandResult ReframeCommandRunner::prepare(
                 // selection.target.id is the normalized reference, which the
                 // ReframePlanBuilder matches case-insensitively.
                 resolved.append(selection.target);
+                if (!followReference.isEmpty() && reference == followReference) {
+                    followTrackId = selection.targetId;
+                }
                 result.notes.append(QStringLiteral(
                     "Resolved '%1' to %2 (%3).")
                                         .arg(reference, selection.targetId,
@@ -425,6 +444,53 @@ ReframeCommandResult ReframeCommandRunner::prepare(
     }
 
     result.plan = built.plan;
+
+    // Objective 23: when the instruction FOLLOWS a subject, replace the single
+    // fixed direction the builder produced with a camera path through that
+    // subject's resolved track. TargetTrackPlanner already turns a track's
+    // time-ordered observations into the keyframes the deterministic renderer
+    // understands; it was implemented and tested but never reached by the
+    // command path, so "follow me while I'm walking" rendered a locked-off shot.
+    //
+    // The builder above still runs, so it remains the validity gate and the
+    // fallback: if the track has no usable observation inside the range, the
+    // command degrades to the previous behaviour and says so instead of failing.
+    // Explicit directions, multi-move camera paths and speaker commands never
+    // take this path.
+    if (!followTrackId.isEmpty()) {
+        for (const TargetTrack &track : tracks) {
+            if (track.id() != followTrackId) {
+                continue;
+            }
+            const ReframePlan::OutputSpec followOutput =
+                result.intent.hasOutput
+                    ? ReframePlan::OutputSpec{ result.intent.outputWidth,
+                                               result.intent.outputHeight,
+                                               result.intent.outputFps }
+                    : request.defaultOutput;
+            TargetTrackPlanner::Config followConfig;
+            followConfig.minConfidence = request.resolveConfig.minConfidence;
+            ReframePlan followPlan;
+            QString followError;
+            if (TargetTrackPlanner::planTrack(track, range, followOutput,
+                                              followConfig, &followPlan,
+                                              &followError)) {
+                result.plan = followPlan;
+                result.notes.append(
+                    QStringLiteral("Following %1 through %2 camera keyframe(s).")
+                        .arg(followTrackId)
+                        .arg(followPlan.keyframes().size()));
+            } else {
+                result.notes.append(
+                    QStringLiteral("The subject was resolved but could not be "
+                                   "followed continuously (%1); using a fixed "
+                                   "camera instead.")
+                        .arg(followError));
+            }
+            break;
+        }
+    }
+
     applyTemporal(&result.plan);
     // Objective 18 (Decision 035): the final plan must honour the executable
     // requirements of the intent it was built from.

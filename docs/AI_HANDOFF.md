@@ -98,6 +98,14 @@ Also note: the source-reference vocabulary is **shared** -- `core/MediaSourceRef
 
 
 
+Subject-**follow** instructions now produce a real camera path (Decision 043, Objective 23). `ReframeCameraMove::followSubject` is set by `ReframeIntentParser` for follow-class clauses ("follow X", "keep me centered", "keep X centered") and left clear for aim-class clauses ("look at X", "move to X", "centered on X", "center X"); `ReframeCommandRunner::prepare()` then builds the plan with the existing `TargetTrackPlanner::planTrack()` from the subject's resolved track instead of the single direction `ReframePlanBuilder` derives. `ReframeIntent` is **not persisted**, so this flag carries no schema impact.
+
+Rules to preserve: only a **single target-referencing follow move** takes the track path; explicit directions, multi-move camera paths, speaker commands and direction-only commands must keep their existing behaviour; **aim instructions must stay a single fixed direction** (locked by `reframeCommandRunnerResolvesSubjectAndBuildsPlan` asserting exactly one keyframe); and the ordinary builder must keep running first, because it is both the validity gate and the fallback — an unusable track degrades to the old fixed camera with an honest note, never to a fabricated path.
+
+Two recorded limitations, neither fixed here. First, a follow path has at most as many keyframes as the resolver has samples (five by default), so "smoother following" means denser resolution sampling — a caller/config concern (`resolveTimestamps`, `maxResolveSamples`), which is the next quality step for the documented trajectory-to-camera-path candidate. Second, and worth knowing before touching perception: on real footage the covering-view detector can report **one subject from two overlapping cover views** whose spherical centroids are further apart than the tracker's default 8-degree `mergeDistanceDeg` (measured at 9.6 degrees for a synthetic subject much larger than a person). The tracker then keeps two identities and subject references honestly resolve as *ambiguous* rather than guessing. Tuning that threshold for real person-sized targets is Decision 019 territory and needs its own evidence; do not change it as a side effect.
+
+
+
 ---
 
 # 4. Current Development Camera

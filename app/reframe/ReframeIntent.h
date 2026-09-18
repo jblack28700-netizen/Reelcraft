@@ -25,6 +25,13 @@ struct ReframeCameraMove
     bool hasDirection = false;
     double yawDeg = 0.0;
     double pitchDeg = 0.0;
+    // True when the clause asks the camera to KEEP a subject framed over time
+    // ("follow me", "keep me centered") rather than to aim at it once
+    // ("look at the car"). A follow move is executed as a camera path through
+    // the subject's resolved track; an aim move stays a single fixed direction.
+    // This is an in-memory intent field only: ReframeIntent is never persisted
+    // (EditDecision stores the resolved plan), so it carries no schema impact.
+    bool followSubject = false;
 };
 
 // Structured interpretation of a natural-language reframing request. This is

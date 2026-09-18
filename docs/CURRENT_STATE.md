@@ -2,7 +2,7 @@
 
 ## Current Version
 
-0.2.59
+0.2.60
 
 ## Current Branch
 
@@ -81,7 +81,7 @@ Status: Partially implemented — deterministic reframing vertical slice complet
 
 Status: Implemented and continuously verified.
 
-A Qt Test suite covers project state, viewer/media, the media-source seam and frame pump, player/timing, the 360 reframing engine (plan validation/round-trip, camera interpolation, rendering determinism, intent parsing, plan building, and a real FFmpeg end-to-end render), and target resolution (equirect/view geometry, seam and pitch boundaries, view coverage, deterministic tracking, resolver behavior, the subprocess detector protocol, the track planner, and a model-free detection -> plan -> render path). Current result: 446 passed, 0 failed, 9 skipped (~688 s; the real-FFmpeg render, decode and analysis tests dominate). Eight skips are environment-gated real-media/model integrations (real detector, speaker, appearance, real 360 clip, rendered playback, source playback, compound command, application/user command) that run only when the corresponding helper, model and clip variables are configured; the ninth is the child-only slot driven by the fresh-process replay test. The normal suite stays model-free.
+A Qt Test suite covers project state, viewer/media, the media-source seam and frame pump, player/timing, the 360 reframing engine (plan validation/round-trip, camera interpolation, rendering determinism, intent parsing, plan building, and a real FFmpeg end-to-end render), and target resolution (equirect/view geometry, seam and pitch boundaries, view coverage, deterministic tracking, resolver behavior, the subprocess detector protocol, the track planner, and a model-free detection -> plan -> render path). Current result: 450 passed, 0 failed, 9 skipped (~671 s; the real-FFmpeg render, decode and analysis tests dominate). Eight skips are environment-gated real-media/model integrations (real detector, speaker, appearance, real 360 clip, rendered playback, source playback, compound command, application/user command) that run only when the corresponding helper, model and clip variables are configured; the ninth is the child-only slot driven by the fresh-process replay test. The normal suite stays model-free.
 
 ## Technology Direction
 
@@ -1222,4 +1222,21 @@ Status: Complete (2026-09-18). Human-authorized scope (Decision 038). This close
 - Architecture decisions: 038, 039, 040, 041, 042.
 
 Next: the **Analysis -> Reasoning boundary** (editorial reasoning over persisted evidence) is the natural successor and is explicitly a separate checkpoint. Creator Memory remains a future architectural topic with no decision recorded.
+
+
+## Phase 4 Objective 23 — Subject-Follow Camera Paths — Complete
+
+Status: Complete (2026-09-18). Human-authorized increment toward the working 360 pipeline (Decision 043).
+
+- **What was missing (found from repository evidence, not assumption).** Every stage of the pipeline existed and was tested — parser, intent, resolver, tracker, planner, plan, renderer — but the **trajectory never reached the camera path**. `ReframePlanBuilder` emits one keyframe per camera move from a single resolved direction, so `"follow me"` and `"keep me centered"` produced **one keyframe**: a locked-off shot for the whole clip. `TargetTrackPlanner::planTrack()`, which turns a track's time-ordered observations into camera keyframes, was implemented and unit-tested but **called by no production code**.
+- `ReframeCameraMove` gained an in-memory `followSubject` flag. `ReframeIntentParser` sets it for follow-class clauses ("follow X", "keep me centered", "keep X centered") and leaves it clear for aim-class clauses ("look at X", "move to X", "centered on X", "center X") and explicit directions. `ReframeIntent` is never persisted, so there is no schema impact.
+- `ReframeCommandRunner::prepare()` now builds a **camera path through the resolved track** for a single target-referencing follow move, using the existing `TargetTrackPlanner`. The ordinary builder still runs first and remains the validity gate and the fallback: if the track has no usable observation in range, the command degrades to the previous fixed camera and says so in a note rather than failing.
+- Deliberately unchanged: explicit directions, multi-move camera paths, speaker commands, direction-only commands, and aim instructions (which stay one fixed direction, locked by the existing `reframeCommandRunnerResolvesSubjectAndBuildsPlan` assertion of exactly one keyframe).
+- **No architecture change:** no new seam, type, dependency or persisted schema; the plan, camera path, renderer, playback, replay and `EditDecision` semantics are untouched, and replay remains perception-free.
+- **Verification:** 4 new tests — intent follow/aim classification; a model-free moving-subject command producing a monotonic multi-keyframe follow path while the same subject under `"look at"` stays one keyframe; an honest fallback when the resolved track has no usable observation in range; and a **real 360 media end-to-end** test (an encoded equirect clip in which the subject walks across the sphere) that runs the command through resolution, planning and the deterministic renderer and decodes the resulting MP4. Targeted regression across the affected area: **45 passed / 0 failed / 0 skipped**.
+- **Recorded limitation:** the follow path has at most as many keyframes as the resolver has samples (five by default). Smoother following needs denser resolution sampling — a caller/config concern, not changed here.
+- **Recorded finding (not changed):** on real footage the covering-view detector can report one subject from two overlapping views with centroids more than the default 8-degree merge distance apart (measured at 9.6 degrees for a synthetic subject far larger than a person). The tracker then keeps two identities and the command honestly reports the reference as ambiguous instead of guessing. Perception tuning, left alone deliberately.
+- Architecture decision: Decision 043.
+
+Next: the rest of the documented trajectory-to-camera-path candidate (denser tracking plus a deterministic smoothing/framing layer), which is now about follow *quality* rather than connectivity.
 

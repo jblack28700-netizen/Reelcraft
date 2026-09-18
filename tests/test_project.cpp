@@ -1082,6 +1082,10 @@ private slots:
     void projectAnalysisRefsPersistWithoutSchemaBump();
     void mediaAnalysisMissingStaleAndInvalidAreNonFatal();
     void replayIsIndependentOfMediaAnalysis();
+    void reframeIntentMarksFollowInstructions();
+    void reframeCommandRunnerFollowBuildsCameraPath();
+    void reframeCommandRunnerFollowFallsBackWhenTrackUnusable();
+    void reframePipelineFollowsMovingSubjectOnRealMedia();
     void realSourcePlaybackIntegration();
     void mainWindowPlaybackButtonsEmitRequests();
     void mainWindowShowsPlaybackStateAndPosition();
@@ -16530,6 +16534,345 @@ void ProjectTest::replayIsIndependentOfMediaAnalysis()
     const ReplayResult afterDelete = app.replayEditDecision(0, afterDeleteOutput);
     QVERIFY2(afterDelete.ok, qPrintable(afterDelete.error));
     QCOMPARE(decodeAllFramesRaw(afterDeleteOutput), baseline);
+}
+
+
+
+// ===========================================================================
+// Subject-follow camera paths (Objective 23)
+// ===========================================================================
+
+namespace {
+
+// An equirect source whose subject walks from startYaw to endYaw across the
+// instruction range, so a follow instruction has a real trajectory to track.
+class MovingTargetEquirectProvider : public ReframeFrameProvider
+{
+public:
+    MovingTargetEquirectProvider(int width, int height, double startYaw,
+                                 double endYaw, qint64 durationMs)
+        : m_width(width), m_height(height), m_startYaw(startYaw),
+          m_endYaw(endYaw), m_durationMs(durationMs)
+    {
+    }
+
+    bool frameAt(qint64 timeMs, QImage *outFrame, QString *error) override
+    {
+        if (error) {
+            error->clear();
+        }
+        if (!outFrame) {
+            return false;
+        }
+        double t = 0.0;
+        if (m_durationMs > 0) {
+            t = static_cast<double>(timeMs) / static_cast<double>(m_durationMs);
+        }
+        t = qBound(0.0, t, 1.0);
+        const double yaw = m_startYaw + (m_endYaw - m_startYaw) * t;
+        *outFrame = buildTargetEquirect(
+            m_width, m_height,
+            { EquirectDisk{ yaw, 0.0, 10.0, QColor(255, 0, 0) } });
+        return true;
+    }
+
+private:
+    int m_width;
+    int m_height;
+    double m_startYaw;
+    double m_endYaw;
+    qint64 m_durationMs;
+};
+
+// Encodes a real 360 equirect clip in which the subject walks across the sphere.
+bool createMovingTargetEquirectClip(const QString &directory,
+                                    const QString &ffmpegPath, int frameCount,
+                                    int fps, QString *outPath)
+{
+    if (ffmpegPath.isEmpty() || frameCount <= 1 || fps <= 0) {
+        return false;
+    }
+    for (int i = 0; i < frameCount; ++i) {
+        const double t =
+            static_cast<double>(i) / static_cast<double>(frameCount - 1);
+        const double yaw = -40.0 + 80.0 * t;
+        const QString name =
+            QStringLiteral("/m_%1.png").arg(i, 3, 10, QLatin1Char('0'));
+        if (!buildTargetEquirect(
+                 360, 180, { EquirectDisk{ yaw, 0.0, 12.0, QColor(255, 0, 0) } })
+                 .save(directory + name, "PNG")) {
+            return false;
+        }
+    }
+    const QString videoPath =
+        directory + QStringLiteral("/moving_target_360.mp4");
+    QProcess process;
+    process.start(ffmpegPath,
+                  { QStringLiteral("-y"), QStringLiteral("-v"),
+                    QStringLiteral("error"), QStringLiteral("-framerate"),
+                    QString::number(fps), QStringLiteral("-i"),
+                    directory + QStringLiteral("/m_%03d.png"),
+                    QStringLiteral("-c:v"), QStringLiteral("libx264"),
+                    QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"),
+                    QStringLiteral("-g"), QStringLiteral("1"),
+                    QStringLiteral("-r"), QString::number(fps), videoPath });
+    if (!process.waitForStarted(15000)) {
+        return false;
+    }
+    process.waitForFinished(60000);
+    for (int i = 0; i < frameCount; ++i) {
+        QFile::remove(directory
+                      + QStringLiteral("/m_%1.png")
+                            .arg(i, 3, 10, QLatin1Char('0')));
+    }
+    if (outPath) {
+        *outPath = videoPath;
+    }
+    return QFileInfo::exists(videoPath) && QFileInfo(videoPath).size() > 0;
+}
+
+} // namespace
+
+void ProjectTest::reframeIntentMarksFollowInstructions()
+{
+    // Follow-class instructions ask for framing that holds over the whole range.
+    const ReframeIntent follow =
+        ReframeIntentParser::parse(QStringLiteral("follow the person"));
+    QCOMPARE(follow.moves.size(), 1);
+    QCOMPARE(follow.moves.at(0).targetRef, QStringLiteral("person"));
+    QVERIFY(follow.moves.at(0).followSubject);
+
+    const ReframeIntent keep =
+        ReframeIntentParser::parse(QStringLiteral("keep me centered"));
+    QCOMPARE(keep.moves.size(), 1);
+    QCOMPARE(keep.moves.at(0).targetRef, QStringLiteral("me"));
+    QVERIFY(keep.moves.at(0).followSubject);
+
+    const ReframeIntent keepNamed =
+        ReframeIntentParser::parse(QStringLiteral("keep the person centered"));
+    QCOMPARE(keepNamed.moves.size(), 1);
+    QVERIFY(keepNamed.moves.at(0).followSubject);
+
+    // Aim-class instructions describe one direction, not a behaviour.
+    const ReframeIntent look =
+        ReframeIntentParser::parse(QStringLiteral("look at the car"));
+    QCOMPARE(look.moves.size(), 1);
+    QCOMPARE(look.moves.at(0).targetRef, QStringLiteral("car"));
+    QVERIFY(!look.moves.at(0).followSubject);
+
+    const ReframeIntent moved =
+        ReframeIntentParser::parse(QStringLiteral("move to the car"));
+    QCOMPARE(moved.moves.size(), 1);
+    QVERIFY(!moved.moves.at(0).followSubject);
+
+    const ReframeIntent centeredOn =
+        ReframeIntentParser::parse(QStringLiteral("centered on the car"));
+    QCOMPARE(centeredOn.moves.size(), 1);
+    QVERIFY(!centeredOn.moves.at(0).followSubject);
+
+    // An explicit direction is never a follow.
+    const ReframeIntent pan =
+        ReframeIntentParser::parse(QStringLiteral("pan right"));
+    QCOMPARE(pan.moves.size(), 1);
+    QVERIFY(pan.moves.at(0).hasDirection);
+    QVERIFY(!pan.moves.at(0).followSubject);
+}
+
+void ProjectTest::reframeCommandRunnerFollowBuildsCameraPath()
+{
+    // The subject walks from -40 to +40 degrees across the range.
+    MovingTargetEquirectProvider provider(360, 180, -40.0, 40.0, 4000);
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+
+    ReframeCommandRequest base;
+    base.defaultRange = ReframePlan::TimeRange{ 0, 4000 };
+    base.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+    base.resolveConfig = smallResolverConfig();
+
+    // FOLLOW: a camera path through the resolved track, not a single direction.
+    ReframeCommandRequest follow = base;
+    follow.instruction = QStringLiteral("follow the person");
+    const ReframeCommandResult followResult =
+        ReframeCommandRunner::prepare(follow, &detector, &provider);
+    QVERIFY2(followResult.ok, qPrintable(followResult.error));
+    QCOMPARE(followResult.resolvedTargets.size(), 1);
+
+    const QList<CameraKeyframe> keyframes = followResult.plan.keyframes();
+    QVERIFY2(keyframes.size() >= 3,
+             qPrintable(QStringLiteral("follow produced %1 keyframe(s)")
+                            .arg(keyframes.size())));
+    for (int i = 1; i < keyframes.size(); ++i) {
+        QVERIFY(keyframes.at(i).timeMs > keyframes.at(i - 1).timeMs);
+        QVERIFY(keyframes.at(i).yawDeg > keyframes.at(i - 1).yawDeg);
+    }
+    // The camera actually swept across the sphere with the subject; a static
+    // camera would have a zero-degree span.
+    const double span = keyframes.last().yawDeg - keyframes.first().yawDeg;
+    QVERIFY2(span > 40.0,
+             qPrintable(QStringLiteral("camera yaw span was only %1 deg")
+                            .arg(span)));
+    QVERIFY(keyframes.first().yawDeg < -15.0);
+    QVERIFY(keyframes.last().yawDeg > 15.0);
+    QVERIFY(qAbs(CameraPath::stateAt(followResult.plan, 0).yawDeg + 40.0) < 10.0);
+    QVERIFY(qAbs(CameraPath::stateAt(followResult.plan, 4000).yawDeg - 40.0) < 10.0);
+
+    // AIM: deliberately unchanged - one fixed direction for the whole range.
+    ReframeCommandRequest aim = base;
+    aim.instruction = QStringLiteral("look at the person");
+    const ReframeCommandResult aimResult =
+        ReframeCommandRunner::prepare(aim, &detector, &provider);
+    QVERIFY2(aimResult.ok, qPrintable(aimResult.error));
+    QCOMPARE(aimResult.plan.keyframes().size(), 1);
+}
+
+void ProjectTest::reframeCommandRunnerFollowFallsBackWhenTrackUnusable()
+{
+    // A resolved subject whose only observation lies OUTSIDE the requested range:
+    // no camera path can be built, so the command must degrade to the previous
+    // fixed camera and say why rather than failing.
+    TargetTrack track(QStringLiteral("person-1"), QStringLiteral("person"));
+    TargetObservation observation;
+    observation.timeMs = 9000;
+    observation.targetId = QStringLiteral("person-1");
+    observation.label = QStringLiteral("person");
+    observation.confidence = 0.9;
+    observation.yawDeg = 30.0;
+    observation.pitchDeg = 0.0;
+    observation.yawRadiusDeg = 5.0;
+    observation.pitchRadiusDeg = 5.0;
+    QVERIFY(observation.isValid());
+    track.append(observation);
+
+    ReframeCommandRequest request;
+    request.instruction = QStringLiteral("follow the person");
+    request.defaultRange = ReframePlan::TimeRange{ 0, 2000 };
+    request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+    request.resolvedTracks.append(track);
+
+    const ReframeCommandResult result =
+        ReframeCommandRunner::prepare(request, nullptr, nullptr);
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QCOMPARE(result.resolvedTargets.size(), 1);
+    QCOMPARE(result.plan.keyframes().size(), 1);
+    QVERIFY2(result.notes.join(QStringLiteral("\n"))
+                 .contains(QStringLiteral("could not be followed continuously")),
+             qPrintable(result.notes.join(QStringLiteral(" | "))));
+}
+
+void ProjectTest::reframePipelineFollowsMovingSubjectOnRealMedia()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable in this environment");
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString sourcePath;
+    QVERIFY(createMovingTargetEquirectClip(
+        directory.path(), FrameExtractor::defaultExecutablePath(), 8, 2,
+        &sourcePath));
+
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+
+    // Fixture sanity: the encoded clip must still expose the subject to the
+    // detector on a decoded frame, otherwise a later failure would be blamed on
+    // the follow logic instead of on the fixture.
+    QImage decoded;
+    QString decodeError;
+    QVERIFY2(FrameExtractor::extractFrameAt(
+                 sourcePath, FrameExtractor::defaultExecutablePath(), 0.0,
+                 &decoded, &decodeError),
+             qPrintable(decodeError));
+    QCOMPARE(decoded.size(), QSize(360, 180));
+    {
+        TargetResolver sanityResolver(smallResolverConfig());
+        const TargetQuery sanityQuery{ QStringLiteral("person"), QString(), 0.35 };
+        QList<TargetObservation> sanityObservations;
+        QString sanityError;
+        QVERIFY2(sanityResolver.resolveFrame(decoded, 0, sanityQuery, &detector,
+                                            &sanityObservations, &sanityError),
+                 qPrintable(sanityError));
+        QVERIFY2(!sanityObservations.isEmpty(),
+                 qPrintable(QStringLiteral("the encoded fixture exposes no "
+                                           "detectable subject; resolver notes: %1")
+                                .arg(sanityResolver.notes().join(
+                                    QStringLiteral(" | ")))));
+    }
+
+    // Raw 360 equirect footage + an English instruction, all the way through
+    // resolution, the structured decision and the deterministic renderer.
+    ReframeCommandRequest request;
+    request.sourcePath = sourcePath;
+    request.sourceMediaId = QStringLiteral("moving-360-source");
+    request.instruction = QStringLiteral("follow the person");
+    request.outputPath = directory.filePath(QStringLiteral("follow.mp4"));
+    request.defaultRange = ReframePlan::TimeRange{ 0, 3500 };
+    request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+    request.sourceDurationMs = 4000;
+    request.resolveConfig = smallResolverConfig();
+    // The fixture's subject is a 24-degree-wide synthetic cap, far larger than a
+    // person. The same cap is visible in two overlapping cover views, and the two
+    // spherical centroids of a target that large sit further apart than the
+    // tracker's person-tuned 8-degree merge distance, which leaves two parallel
+    // tracks and makes the reference honestly ambiguous. Widening the merge
+    // distance for this fixture keeps one identity for one subject.
+    request.resolveConfig.tracker.mergeDistanceDeg = 24.0;
+
+    const ReframeCommandResult result =
+        ReframeCommandRunner::run(request, &detector, nullptr);
+    if (!result.ok) {
+        // Diagnosed only on failure: five extra frame decodes are not worth
+        // paying on every run, and the per-frame view is what tells a fixture
+        // problem apart from a resolution problem.
+        QString perFrame;
+        {
+            FfmpegSeekFrameProvider diagProvider(
+                sourcePath, FrameExtractor::defaultExecutablePath());
+            TargetResolver diagResolver(request.resolveConfig);
+            const TargetQuery diagQuery{ QStringLiteral("person"), QString(), 0.35 };
+            for (const qint64 t : { 0, 875, 1750, 2625, 3500 }) {
+                QImage frame;
+                QString frameError;
+                if (!diagProvider.frameAt(t, &frame, &frameError)) {
+                    perFrame += QStringLiteral("t=%1 decode-fail; ").arg(t);
+                    continue;
+                }
+                QList<TargetObservation> observations;
+                QString resolveError;
+                if (!diagResolver.resolveFrame(frame, t, diagQuery, &detector,
+                                               &observations, &resolveError)) {
+                    perFrame += QStringLiteral("t=%1 resolve-fail; ").arg(t);
+                    continue;
+                }
+                perFrame += QStringLiteral("t=%1 obs=%2[").arg(t).arg(observations.size());
+                for (const TargetObservation &o : observations) {
+                    perFrame += QStringLiteral("%1 ").arg(o.yawDeg, 0, 'f', 1);
+                }
+                perFrame += QStringLiteral("]; ");
+            }
+            perFrame += QStringLiteral("tracks=%1").arg(diagResolver.tracks().size());
+        }
+        qWarning() << "O25 follow diagnostic" << perFrame
+                   << "| error:" << result.error << "| tracks:"
+                   << result.tracks.size() << "| notes:"
+                   << result.notes.join(QStringLiteral(" | "));
+    }
+    QVERIFY2(result.ok, qPrintable(result.error));
+
+    // The decision is a real follow path, not a locked-off shot.
+    QVERIFY2(result.plan.keyframes().size() >= 3,
+             qPrintable(QStringLiteral("follow produced %1 keyframe(s)")
+                            .arg(result.plan.keyframes().size())));
+    const QList<CameraKeyframe> keyframes = result.plan.keyframes();
+    QVERIFY(keyframes.last().yawDeg - keyframes.first().yawDeg > 40.0);
+
+    // And it rendered to a real, decodable video.
+    QVERIFY(QFileInfo::exists(result.outputPath));
+    QVERIFY(QFileInfo(result.outputPath).size() > 0);
+    const QByteArray frames = decodeAllFramesRaw(result.outputPath);
+    QVERIFY(!frames.isEmpty());
+    QVERIFY(result.frameCount > 1);
 }
 
 
