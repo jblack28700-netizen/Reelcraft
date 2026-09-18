@@ -8,6 +8,7 @@
 #include <QString>
 #include <QStringList>
 
+#include "reframe/EditDecision.h"
 #include "reframe/ReframeIntent.h" // ReframeTarget
 
 // ReframeCommandOutcome is the application-visible, structured result of one 360
@@ -17,9 +18,11 @@
 // the application/UI can present and log a command without reaching into the
 // deterministic engine or the perception layers.
 //
-// It is a plain QtCore value type (headless-testable). Generated renders are
-// session state for now and are NOT persisted in the project schema (see
-// docs/DECISIONS.md Decision 026).
+// It is a plain QtCore value type (headless-testable). Records are persisted
+// additively in the project (Decision 027). Since Objective 16 a record also
+// carries the resolved EditDecision that produced it, so the render can be
+// reproduced without re-parsing the instruction and without any perception
+// provider (Decision 033).
 struct ReframeCommandOutcome
 {
     bool ok = false;
@@ -43,6 +46,48 @@ struct ReframeCommandOutcome
 
     bool hasRange() const { return endMs > startMs && startMs >= 0; }
     bool hasTemporalSegments() const { return !temporalSegments.isEmpty(); }
+
+    // --- Objective 16: the reproducible decision behind this render ---------
+    // True only when the record carries a decision that loaded AND validated.
+    // A record may legitimately have no decision (every record written before
+    // Objective 16, and any command that never reached an output target).
+    bool hasEditDecision() const { return m_hasEditDecision; }
+    EditDecision editDecision() const { return m_editDecision; }
+
+    // Non-empty only when the record DID carry an editDecision that could not be
+    // loaded. Empty means "no decision", which is not an error. The distinction
+    // matters: absent is normal, unreadable is a reportable failure.
+    QString editDecisionError() const { return m_editDecisionError; }
+
+    // Attaches the decision that produced this render. An invalid decision is
+    // not attached (hasEditDecision() stays false); instead the refusal is
+    // recorded in editDecisionError() with the validation reason, so a rejected
+    // decision is never a silent skip.
+    void setEditDecision(const EditDecision &decision)
+    {
+        m_rawEditDecision = QJsonValue(QJsonValue::Undefined);
+        m_editDecisionError.clear();
+        QString validationError;
+        if (decision.isValid(&validationError)) {
+            m_editDecision = decision;
+            m_hasEditDecision = true;
+        } else {
+            m_editDecision = EditDecision();
+            m_hasEditDecision = false;
+            m_editDecisionError = validationError;
+        }
+    }
+
+    // Records that this render deliberately carries no decision, and why. Used
+    // when the decision stage produced no valid plan: the absence is explained
+    // rather than being indistinguishable from "this record predates decisions".
+    void setEditDecisionUnavailable(const QString &reason)
+    {
+        m_editDecision = EditDecision();
+        m_hasEditDecision = false;
+        m_rawEditDecision = QJsonValue(QJsonValue::Undefined);
+        m_editDecisionError = reason;
+    }
 
     QJsonObject toJsonObject() const
     {
@@ -91,6 +136,15 @@ struct ReframeCommandOutcome
                 segmentArray.append(entry);
             }
             object.insert(QStringLiteral("temporalSegments"), segmentArray);
+        }
+        // Objective 16. A decision that failed to load is re-emitted verbatim so
+        // that opening and re-saving a project can never destroy data this build
+        // cannot interpret (lenient-record policy, Decision 033).
+        if (m_hasEditDecision) {
+            object.insert(QStringLiteral("editDecision"),
+                          m_editDecision.toJsonObject());
+        } else if (!m_rawEditDecision.isUndefined()) {
+            object.insert(QStringLiteral("editDecision"), m_rawEditDecision);
         }
         return object;
     }
@@ -185,6 +239,30 @@ struct ReframeCommandOutcome
             }
         }
 
+        // Objective 16. Lenient-record policy (Decision 033): an unreadable
+        // decision never fails the whole record, because the record is a
+        // historical fact about a render that really happened. The decision is
+        // refused (never guessed), flagged with its reason, and preserved
+        // verbatim for re-serialization.
+        const QJsonValue decisionValue =
+            object.value(QStringLiteral("editDecision"));
+        if (!decisionValue.isUndefined() && !decisionValue.isNull()) {
+            EditDecision decision;
+            QString decisionError;
+            if (decisionValue.isObject()
+                && EditDecision::readFromJsonObject(decisionValue.toObject(),
+                                                   &decision, &decisionError)) {
+                outcome.m_hasEditDecision = true;
+                outcome.m_editDecision = decision;
+            } else {
+                outcome.m_hasEditDecision = false;
+                outcome.m_editDecisionError = decisionError.isEmpty()
+                    ? QStringLiteral("Edit decision entry is not an object.")
+                    : decisionError;
+                outcome.m_rawEditDecision = decisionValue;
+            }
+        }
+
         if (outcome.outputPath.isEmpty()) {
             if (error) {
                 *error = QStringLiteral(
@@ -195,6 +273,17 @@ struct ReframeCommandOutcome
         *out = outcome;
         return true;
     }
+
+private:
+    // Objective 16 (Decision 033). m_rawEditDecision holds an editDecision that
+    // could not be loaded, byte-for-byte as it was persisted.
+    bool m_hasEditDecision = false;
+    EditDecision m_editDecision;
+    QString m_editDecisionError;
+    // NOTE: Qt's default-constructed QJsonValue is Null, not Undefined, so this
+    // is initialized explicitly. Getting it wrong silently emits
+    // "editDecision": null for every record that has no decision.
+    QJsonValue m_rawEditDecision = QJsonValue(QJsonValue::Undefined);
 };
 
 Q_DECLARE_METATYPE(ReframeCommandOutcome)

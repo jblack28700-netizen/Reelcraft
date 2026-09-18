@@ -156,6 +156,8 @@ Before modifying an existing file:
 
 Never overwrite existing work based solely on assumptions.
 
+**Environment constraint (2026-09-17, aarch64 Termux/proot device):** the workspace filesystem denies `link()`, so any file tool that writes through an atomic temp-file + hard-link strategy fails with `EACCES` even though the directory is writable; write files with shell redirection (`cat > file <<'EOF'`) or an in-place editor (`python3`, `sed -i`) instead. `write`/`edit`-style tools are unusable on this host; see `KNOWN_ISSUES.md`.
+
 ---
 
 # 9. Scope Protection
@@ -268,6 +270,14 @@ If implementation reveals that the architecture needs to change:
 7. Test affected functionality when implementation exists.
 8. Record the change in project history.
 9. Create a Git checkpoint.
+
+**Load-bearing invariant (Objective 16, Decision 033):** the replay path must remain
+**perception-free**. `EditDecision` and the `ReframePipeline::renderPlan` call graph must
+not acquire `ReframeIntentParser`, `TargetDetector`, or any perception-provider symbol: a
+persisted decision plus its source path is sufficient to reproduce a render, and that is
+the property the artifact exists to guarantee. Verify at **object-code level** (`nm` /
+`objdump` on the relevant objects), not by source grep alone — a provider symbol appearing
+in that call graph is a design regression, not a test detail.
 
 Never silently overwrite architectural history.
 

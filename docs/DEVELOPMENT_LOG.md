@@ -1564,3 +1564,42 @@ Human-selected scope (Decision 032): a single natural-language command combining
 ### Decisions
 
 - Decision 032 recorded. Decisions 017-031 preserved unchanged.
+
+## 2026-09-17 — 360 Reframing Objective 16: Persisted, Reproducible Edit Decisions
+
+### Objective
+
+Human-selected scope (Decision 033): a persisted, versioned `EditDecision` artifact sufficient to reproduce a render without re-parsing the natural-language command and without requiring a perception provider. Original media must remain untouched; the artifact must carry `schemaVersion` from day one with a loader that refuses to silently mis-parse; serialization must be deterministic; the existing persistence mechanism and renderer must be reused with no parallel pipeline, database or ORM.
+
+### Work completed
+
+- `app/reframe/EditDecision.{h,cpp}` (new): versioned artifact holding the resolved `ReframePlan` verbatim, a source reference (mediaId, path, sizeBytes, lastModifiedUtc, optional contentSha256), the instruction as provenance, `createdUtc`, and `decisionHash`. `payloadWithoutHash()` excludes only the digest; `decisionHash()` is SHA-256 over its compact JSON. Strict `readFromJsonObject`/`load`, `save`, `checkSource` returning a `SourceStatus` enum (`Matches`/`FileMissing`/`FingerprintMismatch`), and `isValid`.
+- `ReframeCommandOutcome` gained `hasEditDecision()`, `editDecision()`, `editDecisionError()`, `setEditDecision()` (refuses an invalid decision *with its reason*) and `setEditDecisionUnavailable()`; the decision is serialized into and read from the existing record.
+- `Application::runReframeCommandTo()` takes a by-value `MediaItem` snapshot at validation time and attaches the decision in the single `finish` path whenever `result.plan.isValid()`. `Application::appendReframeOutput()` became the single append/emit path shared with replay. `Application::restoreReframeOutputsFromJson()` surfaces unreadable decisions through `backgroundCompleted`.
+- `Application::replayEditDecision(int, const QString&)` returns `ReplayResult { ok, newRecordIndex, error }`; validation completes before any render (index, decision, source status, empty path, source-equal path, existing path), then renders via `ReframePipeline::renderPlan` and appends a new record. `ReframeReplayRenderer` is an injectable seam defaulting to `renderPlan`.
+- 19 new tests: 7 artifact unit tests, 3 record-integration/back-compat tests, 3 decision-attachment tests, 5 replay tests including a fresh-process child driven by re-invoking the test binary with a single QtTest function name plus `REELCRAFT_TEST_REPLAY_*` variables.
+
+### Verification
+
+- Full model-free suite: **401 passed / 0 failed / 8 skipped** (the 8th skip is the child-only slot `replayFreshProcessChild`, which skips by design when run standalone).
+- Replay equivalence verified twice: same-process and fresh-process, each asserting decoded-frame SHA-256 equality (primary) and byte-identical containers (secondary, environment-specific).
+- Perception-absence verified at object-code level: `EditDecision.o`'s external surface is Qt plus `ReframePlan::readFromJsonObject`; the disassembled call graph of `ReframePipeline::renderPlan` and of the fresh-process child contains no `ReframeIntentParser`, `TargetDetector` or provider symbol.
+- Measured cost of the by-value `MediaItem` snapshot: ~209 ns per command (2M-iteration benchmark against the real object), against a command that performs file-system checks and a render measured in hundreds of milliseconds.
+
+### Environment correction (supersedes the initial working hypothesis)
+
+- During this objective the real-render tests failed intermittently (0, 12, and 14 failures across identical runs). The initial attribution was environmental intermittency; that attribution was **wrong** and is superseded by the diagnosis below.
+- Cause: a specific, diagnosable **FFmpeg PATH leak**. Inside `proot-distro login ubuntu`, `PATH` ends with `/data/data/com.termux/files/usr/bin`, and Debian had no `ffmpeg` of its own, so `ffmpeg` resolved to the Termux Android/bionic build loaded against Debian glibc (`/lib/aarch64-linux-gnu/libm.so: invalid ELF header`). A single seek+decode measured **14,607 / 15,570 / 15,939 ms** against `FrameExtractor`'s fixed `kProcessTimeoutMs = 15000` budget, so runs passed or failed by a few hundred milliseconds.
+- Fix: `apt-get install -y ffmpeg` inside the container (Debian 8.0.1-3ubuntu2). `which ffmpeg` is now `/usr/bin/ffmpeg`, `ldd` is clean, a seek+decode measures **2,590-2,640 ms**, the suite runs in **221-241 s** instead of 850-1,021 s, and every previously failing real-render test passes.
+- Consequence: `scripts/build_and_test.sh` runs the suite under `timeout 240`; with the leaked Termux ffmpeg it could never have completed inside that ceiling. This was the first time the documented verification workflow was actually viable on this device. Recorded in `DEVELOPMENT_ENVIRONMENT.md` (as REQUIRED setup) and `KNOWN_ISSUES.md`.
+
+### Boundary notes / not implemented
+
+- Decisions are persisted only when a command reaches a non-empty output path; early application-state and validation failures produce no record and therefore no decision.
+- No sidecar decision files, no project schema bump (stays 3), no `allowOverwrite` override (recorded as a forward extension in Decision 033), no decision mutation/editing, and no retention policy for accumulating decisions (recorded in `KNOWN_ISSUES.md`).
+- Creator-facing inspection and revision of decisions is Objective 17 and was not started.
+
+### Decisions
+
+- Decision 033 recorded: the artifact, embedding in the existing record, schema 3 with per-artifact versioning, timestamp quantization (record/load/compare), lenient-record/strict-decision, absent-hash tolerance, the reproducibility claim, the known outputPath limitation, the Obj17 immutability/lineage constraint, the `allowOverwrite` forward extension, and the enforced output-path refusals. Decisions 017-032 preserved.
+

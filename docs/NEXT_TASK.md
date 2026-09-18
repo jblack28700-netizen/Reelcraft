@@ -392,8 +392,34 @@ Human-selected scope (Decision 032): a single natural-language command that carr
 - 2 new model-free tests plus an env-gated `realCompoundCommandIntegration`; full model-free suite 381 passed / 0 failed / 7 skipped.
 - Architecture decision: Decision 032.
 
-## Next Objective — GPU Optimization, Creator-Selection Persistence, or General Playback — NOT STARTED
+## 360 Reframing Objective 16 — Persisted, Reproducible Edit Decisions — Complete
 
-The remaining leading candidates are GPU optimization of the ML helpers (behind the existing replaceable seams), persisting the creator "me" selection in the project, and extending playback beyond rendered results to active-media/general playback. Requires its own scoped objective; do not begin automatically.
+Status: **Complete — implemented and verified (2026-09-17).**
 
+### Objective
+
+Human-selected scope (Decision 033): a persisted, versioned `EditDecision` artifact that is sufficient on its own to reproduce a render, without re-parsing the natural-language command and without requiring a perception provider.
+
+### Scope (implemented)
+
+- `app/reframe/EditDecision.{h,cpp}`: versioned (`schemaVersion` 1), deterministic artifact holding the resolved `ReframePlan`, the source reference (id/path/fingerprint), the originating instruction as provenance, and a SHA-256 `decisionHash` over the compact payload with the `decisionHash` key excluded and `createdUtc` included.
+- Strict loader that refuses missing/unknown/future versions, malformed source references, invalid plans, and mismatched digests — never silently mis-parsing.
+- Embedded additively in the existing `reframeOutputs` record; `Project::CurrentSchemaVersion` stays 3.
+- Lenient-record / strict-decision policy, with the unreadable decision preserved verbatim and the failure surfaced through `backgroundCompleted`.
+- Decision attachment in the single command `finish` path whenever `result.plan.isValid()`, including failed renders, from a by-value `MediaItem` snapshot.
+- `Application::replayEditDecision()` with full pre-render validation, refusal on an existing output path and on a source-equal output path, and a new appended record that carries the same decision; the original record is never mutated.
+- No new database, ORM, storage format, renderer, parser, or parallel pipeline.
+
+### Verification
+
+- 19 new tests (artifact unit, record integration + back-compat, decision attachment, replay).
+- Full model-free suite: **401 passed / 0 failed / 8 skipped**.
+- Replay equivalence verified in the same process and in a genuinely fresh OS process (decoded-frame SHA-256 equality).
+- Perception-free replay path verified at object-code level.
+
+## Next Objective (360 Reframing Objective 17) — Creator Decision Control — NOT SCOPED
+
+Objective 17 is **Creator Decision Control**: letting the creator inspect, choose among, and revise persisted edit decisions in the application. It is named here as the next objective and is deliberately **not** scoped in detail — detailed scoping is a separate step after the Objective 16 commit, and must not begin automatically.
+
+**Carried-forward constraint (Decision 033, binding on Obj17):** persisted decisions are **immutable**. A revision is expressed as a **new decision that references the prior one (lineage)**, never as a mutation of a stored artifact. Any Obj17 design that edits a stored decision in place contradicts Decision 033 and must be rejected.
 

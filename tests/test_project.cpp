@@ -21,6 +21,7 @@
 #include <QTemporaryDir>
 #include <QtMath>
 #include <QWheelEvent>
+#include <cstdio>
 #include <cmath>
 #include <cstring>
 
@@ -43,6 +44,7 @@
 #include "reframe/FfmpegSeekFrameProvider.h"
 #include "reframe/ReframeCommandRunner.h"
 #include "reframe/ReframeFrameProvider.h"
+#include "reframe/EditDecision.h"
 #include "reframe/ReframeIntent.h"
 #include "reframe/ReframePlan.h"
 #include "reframe/ReframePlanBuilder.h"
@@ -1172,6 +1174,28 @@ private slots:
     void speakerPlannerFollowsSingleSpeaker();
     void speakerPlannerCutsOnSpeakerChange();
     void speakerPlannerRejectsNoActiveSegment();
+    // Objective 16: persisted, reproducible edit decisions.
+    void editDecisionJsonRoundTripIsDeterministic();
+    void editDecisionHashRuleIsStable();
+    void editDecisionRejectsUnsupportedSchemaVersion();
+    void editDecisionRejectsInvalidPlan();
+    void editDecisionRejectsTamperedPayload();
+    void editDecisionSourceStatusDistinguishesMissingFromChanged();
+    void editDecisionSaveLoadRoundTrip();
+    void reframeCommandOutcomeWithoutDecisionLoadsUnchanged();
+    void reframeCommandOutcomeCorruptDecisionIsFlaggedNotFatal();
+    void applicationOpenProjectSurfacesUnreadableDecision();
+    void editDecisionAttachedOnFailedRender();
+    void editDecisionRefusedForInvalidPlanIsReportedNotSilent();
+    void editDecisionDoesNotAlterReframeOutputAppendGate();
+    void replayRefusesMissingSource();
+    void replayRefusesChangedSource();
+    void replayRefusesRecordWithoutDecision();
+    void replayAppendsNewRecordAndPreservesOriginal();
+    void replayRefusesExistingOutputPath();
+    void replayFreshProcessReproducesRender();
+    void replayFreshProcessChild();
+    void replaySameProcessProducesEquivalentRender();
     void speakerRegistryAnnotateDoesNotChangeResolution();
 };
 
@@ -7533,12 +7557,97 @@ bool setupActiveMedia(Application &app, QTemporaryDir &directory,
     return true;
 }
 
+
+// Fresh-process replay protocol (Objective 16, step e). The parent writes the
+// decision artifact to disk, then re-invokes this same test binary with a single
+// QtTest function name plus these environment variables. The child sees only
+// files: it never receives a plan, an instruction or any in-process state.
+const char *const kReplayDecisionEnv = "REELCRAFT_TEST_REPLAY_DECISION";
+const char *const kReplayOutputEnv = "REELCRAFT_TEST_REPLAY_OUTPUT";
+const char *const kReplayMarker = "REELCRAFT_REPLAY";
+
 ReframeCommandExecutor prepareExecutor()
 {
     return [](const ReframeCommandRequest &request, TargetDetector *detector,
               ReframeFrameProvider *provider) {
         return ReframeCommandRunner::prepare(request, detector, provider);
     };
+}
+
+// A stand-in replay renderer: counts invocations and writes a marker file, so
+// replay orchestration can be tested without an encoder.
+ReframeReplayRenderer countingReplayRenderer(int *calls, bool succeed = true)
+{
+    return [calls, succeed](const ReframePlan &plan, const QString &,
+                            const QString &outputPath) {
+        ++(*calls);
+        ReframePipeline::Result result;
+        result.plan = plan;
+        result.outputPath = outputPath;
+        if (!succeed) {
+            result.error = QStringLiteral("simulated replay render failure");
+            return result;
+        }
+        QFile file(outputPath);
+        if (!file.open(QIODevice::WriteOnly)) {
+            result.error = QStringLiteral("simulated output write failure");
+            return result;
+        }
+        file.write("fake-render");
+        file.close();
+        result.frameCount = plan.frameCount();
+        result.ok = true;
+        return result;
+    };
+}
+
+// Decodes every frame of a video to raw rgb24 bytes, for frame-content
+// comparison that does not depend on container encoding.
+QByteArray decodeAllFramesRaw(const QString &videoPath)
+{
+    QProcess process;
+    process.start(FrameExtractor::defaultExecutablePath(),
+                  { QStringLiteral("-v"), QStringLiteral("error"),
+                    QStringLiteral("-i"), videoPath,
+                    QStringLiteral("-f"), QStringLiteral("rawvideo"),
+                    QStringLiteral("-pix_fmt"), QStringLiteral("rgb24"),
+                    QStringLiteral("-") });
+    if (!process.waitForStarted(15000)) {
+        return QByteArray();
+    }
+    if (!process.waitForFinished(180000)) {
+        process.kill();
+        return QByteArray();
+    }
+    return process.readAllStandardOutput();
+}
+
+QByteArray readFileBytes(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return QByteArray();
+    }
+    return file.readAll();
+}
+
+} // namespace
+
+namespace {
+
+// Objective 16: a valid decision over a temporary media file, with a fixed
+// creation time so digests are comparable across runs.
+EditDecision makeTestEditDecision(const MediaItem &media,
+                                  const QString &instruction = QStringLiteral("pan right"))
+{
+    ReframePlan plan = makeReframePlan(1000, 4000, 640, 360, 2.0,
+                                       { makeKeyframe(1000, 0.0),
+                                         makeKeyframe(4000, 90.0) });
+    plan.setSourceMediaId(media.id());
+    return EditDecision::fromPlan(
+        plan, media, instruction,
+        QDateTime::fromString(QStringLiteral("2026-09-17T10:55:00.000Z"),
+                              Qt::ISODateWithMs));
 }
 
 } // namespace
@@ -8281,6 +8390,78 @@ void ProjectTest::applicationPersistsReframeOutputs()
     QCOMPARE(record.frameCount, 5);
     QCOMPARE(reopened.reframeOutputs().at(0).startMs, qint64(0));
     QCOMPARE(reopened.reframeOutputs().at(0).endMs, qint64(2000));
+
+    // Objective 16: a persisted record that carries an edit decision survives
+    // save/open with the decision intact and its digest unchanged, so the render
+    // can be reproduced from the project alone.
+    QString error;
+    const MediaItem decisionMedia = MediaItem::createFromFilePath(
+        writeTempMediaFile(directory));
+    QVERIFY(decisionMedia.isValid());
+    const EditDecision decision = makeTestEditDecision(decisionMedia);
+
+    ReframeCommandOutcome decided;
+    decided.ok = true;
+    decided.instruction = QStringLiteral("pan right");
+    decided.outputPath = directory.filePath(QStringLiteral("decided.mp4"));
+    decided.sourceMediaId = decisionMedia.id();
+    decided.sourcePath = decisionMedia.path();
+    decided.frameCount = 5;
+    decided.setEditDecision(decision);
+    QVERIFY(decided.hasEditDecision());
+
+    Project decidedProject;
+    QJsonArray decidedOutputs;
+    decidedOutputs.append(decided.toJsonObject());
+    decidedProject.setReframeOutputs(decidedOutputs);
+    const QString decidedPath = directory.filePath(QStringLiteral("decided.reel"));
+    QVERIFY2(decidedProject.save(decidedPath, &error), qPrintable(error));
+
+    Application decidedReopened;
+    QVERIFY(decidedReopened.openProject(decidedPath));
+    QCOMPARE(decidedReopened.reframeOutputs().size(), 1);
+    const ReframeCommandOutcome &restoredDecisionRecord =
+        decidedReopened.reframeOutputs().at(0);
+    QVERIFY(restoredDecisionRecord.hasEditDecision());
+    QVERIFY(restoredDecisionRecord.editDecisionError().isEmpty());
+    QCOMPARE(restoredDecisionRecord.editDecision().decisionHash(),
+             decision.decisionHash());
+    QCOMPARE(restoredDecisionRecord.editDecision().source().mediaId,
+             decisionMedia.id());
+
+    // Objective 16 back-compat: a project written before this objective (schema
+    // 3, records with no editDecision) still opens with its records intact, no
+    // decision attached, and no error raised.
+    QJsonObject legacyRecord;
+    legacyRecord.insert(QStringLiteral("ok"), true);
+    legacyRecord.insert(QStringLiteral("instruction"),
+                        QStringLiteral("pan right"));
+    legacyRecord.insert(QStringLiteral("outputPath"),
+                        directory.filePath(QStringLiteral("legacy.mp4")));
+    legacyRecord.insert(QStringLiteral("frameCount"), 5);
+    QVERIFY(!legacyRecord.contains(QStringLiteral("editDecision")));
+
+    Project legacyProject;
+    QJsonArray legacyOutputs;
+    legacyOutputs.append(legacyRecord);
+    legacyProject.setReframeOutputs(legacyOutputs);
+    const QString legacyPath = directory.filePath(QStringLiteral("legacy.reel"));
+    QVERIFY2(legacyProject.save(legacyPath, &error), qPrintable(error));
+
+    Application legacyReopened;
+    QSignalSpy legacyStatusSpy(&legacyReopened, &Application::backgroundCompleted);
+    QVERIFY(legacyReopened.openProject(legacyPath));
+    QCOMPARE(legacyReopened.reframeOutputs().size(), 1);
+    QVERIFY(legacyReopened.reframeOutputs().at(0).ok);
+    QCOMPARE(legacyReopened.reframeOutputs().at(0).instruction,
+             QStringLiteral("pan right"));
+    QVERIFY(!legacyReopened.reframeOutputs().at(0).hasEditDecision());
+    QVERIFY(legacyReopened.reframeOutputs().at(0).editDecisionError().isEmpty());
+    // No spurious warning for a record that simply has no decision.
+    for (int i = 0; i < legacyStatusSpy.count(); ++i) {
+        QVERIFY(!legacyStatusSpy.at(i).at(0).toString().contains(
+            QStringLiteral("unreadable edit decision")));
+    }
 }
 
 void ProjectTest::applicationNewProjectClearsReframeOutputs()
@@ -8372,6 +8553,1309 @@ void ProjectTest::reframeCommandOutcomeJsonRoundTrip()
     QVERIFY(!ReframeCommandOutcome::readFromJsonObject(malformed, &restored,
                                                        &error));
     QVERIFY(!error.isEmpty());
+
+    // --- Objective 16: the record carries its reproducible decision ----------
+    QTemporaryDir decisionDirectory;
+    QVERIFY(decisionDirectory.isValid());
+    const QString decisionMediaPath = writeTempMediaFile(decisionDirectory);
+    QVERIFY(!decisionMediaPath.isEmpty());
+    const MediaItem decisionMedia =
+        MediaItem::createFromFilePath(decisionMediaPath);
+    QVERIFY(decisionMedia.isValid());
+    const EditDecision decision = makeTestEditDecision(decisionMedia);
+
+    ReframeCommandOutcome withDecision;
+    withDecision.ok = true;
+    withDecision.instruction = QStringLiteral("pan right");
+    withDecision.outputPath = QStringLiteral("/tmp/with-decision.mp4");
+    withDecision.sourceMediaId = decisionMedia.id();
+    withDecision.setEditDecision(decision);
+    QVERIFY(withDecision.hasEditDecision());
+    QVERIFY(withDecision.editDecisionError().isEmpty());
+
+    const QJsonObject withDecisionObject = withDecision.toJsonObject();
+    QVERIFY(withDecisionObject.contains(QStringLiteral("editDecision")));
+
+    ReframeCommandOutcome restoredWithDecision;
+    QVERIFY2(ReframeCommandOutcome::readFromJsonObject(
+                 withDecisionObject, &restoredWithDecision, &error),
+             qPrintable(error));
+    QVERIFY(restoredWithDecision.hasEditDecision());
+    QCOMPARE(restoredWithDecision.editDecision().decisionHash(),
+             decision.decisionHash());
+    QCOMPARE(restoredWithDecision.editDecision().source().mediaId,
+             decisionMedia.id());
+    QVERIFY(restoredWithDecision.editDecisionError().isEmpty());
+    // Byte-identical re-serialization: a record round trip cannot drift.
+    QCOMPARE(restoredWithDecision.toJsonObject(), withDecisionObject);
+
+    // A record with no decision writes no key, reads back with no decision and
+    // no error, and does not acquire one on the way out.
+    ReframeCommandOutcome plainRecord;
+    plainRecord.ok = true;
+    plainRecord.outputPath = QStringLiteral("/tmp/plain.mp4");
+    QVERIFY(!plainRecord.toJsonObject().contains(QStringLiteral("editDecision")));
+    ReframeCommandOutcome restoredPlain;
+    QVERIFY2(ReframeCommandOutcome::readFromJsonObject(plainRecord.toJsonObject(),
+                                                       &restoredPlain, &error),
+             qPrintable(error));
+    QVERIFY(!restoredPlain.hasEditDecision());
+    QVERIFY(restoredPlain.editDecisionError().isEmpty());
+    QCOMPARE(restoredPlain.toJsonObject(), plainRecord.toJsonObject());
+}
+
+// ==================== Persisted edit decisions (Objective 16) ====================
+// Model-free unit tests for the EditDecision artifact: deterministic
+// serialization and hashing, strict version gating, refusal to load an invalid
+// plan or a tampered payload, and the distinction between a missing source file
+// and a changed source file.
+
+void ProjectTest::editDecisionJsonRoundTripIsDeterministic()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString mediaPath = writeTempMediaFile(directory);
+    QVERIFY(!mediaPath.isEmpty());
+    QString mediaError;
+    const MediaItem media = MediaItem::createFromFilePath(mediaPath, &mediaError);
+    QVERIFY2(media.isValid(), qPrintable(mediaError));
+
+    ReframePlan plan = makeReframePlan(1000, 4000, 640, 360, 2.0,
+                                       { makeKeyframe(1000, 0.0),
+                                         makeKeyframe(4000, 90.0) });
+    plan.setSourceMediaId(media.id());
+
+    const QDateTime created = QDateTime::fromString(
+        QStringLiteral("2026-09-17T10:55:00.000Z"), Qt::ISODateWithMs);
+    const EditDecision decision = EditDecision::fromPlan(
+        plan, media, QStringLiteral("pan right"), created);
+
+    QString error;
+    QVERIFY2(decision.isValid(&error), qPrintable(error));
+    QCOMPARE(decision.schemaVersion(), EditDecision::CurrentSchemaVersion);
+    QCOMPARE(decision.createdUtc(), created.toUTC());
+    QCOMPARE(decision.instruction(), QStringLiteral("pan right"));
+    QCOMPARE(decision.source().mediaId, media.id());
+    QCOMPARE(decision.source().path, media.path());
+    QCOMPARE(decision.source().sizeBytes, media.sizeBytes());
+    // The artifact references media by id/path/fingerprint only: no pixels, and
+    // the optional strong fingerprint is not computed implicitly.
+    QVERIFY(decision.source().contentSha256.isEmpty());
+    QVERIFY(decision.plan().toJsonObject() == plan.toJsonObject());
+
+    const QJsonObject object = decision.toJsonObject();
+    const QByteArray hash = decision.decisionHash();
+    QCOMPARE(hash.size(), 64); // SHA-256 hex
+
+    EditDecision restored;
+    QVERIFY2(EditDecision::readFromJsonObject(object, &restored, &error),
+             qPrintable(error));
+    QCOMPARE(restored.decisionHash(), hash);
+    QCOMPARE(restored.toJsonObject(), object);
+    QCOMPARE(restored.plan().toJsonObject(), plan.toJsonObject());
+    QCOMPARE(restored.instruction(), QStringLiteral("pan right"));
+    QCOMPARE(restored.source().mediaId, media.id());
+
+    // Serializing the loaded decision again is byte-identical, and so is the
+    // digest: a persist/load cycle cannot drift the artifact.
+    QCOMPARE(restored.decisionHash(), decision.decisionHash());
+}
+
+void ProjectTest::editDecisionHashRuleIsStable()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString mediaPath = writeTempMediaFile(directory);
+    QVERIFY(!mediaPath.isEmpty());
+    const MediaItem media = MediaItem::createFromFilePath(mediaPath);
+    QVERIFY(media.isValid());
+
+    ReframePlan plan = makeReframePlan(1000, 4000, 640, 360, 2.0,
+                                       { makeKeyframe(1000, 0.0),
+                                         makeKeyframe(4000, 90.0) });
+    plan.setSourceMediaId(media.id());
+    const QDateTime created = QDateTime::fromString(
+        QStringLiteral("2026-09-17T10:55:00.000Z"), Qt::ISODateWithMs);
+    const EditDecision decision = EditDecision::fromPlan(
+        plan, media, QStringLiteral("pan right"), created);
+    const QByteArray hash = decision.decisionHash();
+
+    // Rule: the digest covers the payload WITHOUT the decisionHash key itself,
+    // encoded as compact JSON.
+    const QJsonObject payload = decision.payloadWithoutHash();
+    QVERIFY(!payload.contains(QStringLiteral("decisionHash")));
+    QVERIFY(decision.toJsonObject().contains(QStringLiteral("decisionHash")));
+    const QByteArray canonical =
+        QJsonDocument(payload).toJson(QJsonDocument::Compact);
+    QVERIFY(!canonical.contains('\n'));
+    QCOMPARE(QCryptographicHash::hash(canonical, QCryptographicHash::Sha256).toHex(),
+             hash);
+
+    // createdUtc IS covered: a different creation time is a different digest.
+    const EditDecision later = EditDecision::fromPlan(
+        plan, media, QStringLiteral("pan right"), created.addSecs(1));
+    QVERIFY(later.decisionHash() != hash);
+
+    // So is every other payload field.
+    const EditDecision renamed = EditDecision::fromPlan(
+        plan, media, QStringLiteral("pan left"), created);
+    QVERIFY(renamed.decisionHash() != hash);
+
+    // The digest relies on Qt serializing object keys in a deterministic order
+    // regardless of insertion order. Lock that assumption down here.
+    QJsonObject first;
+    first.insert(QStringLiteral("zeta"), 1);
+    first.insert(QStringLiteral("alpha"), 2);
+    QJsonObject second;
+    second.insert(QStringLiteral("alpha"), 2);
+    second.insert(QStringLiteral("zeta"), 1);
+    QCOMPARE(QJsonDocument(first).toJson(QJsonDocument::Compact),
+             QJsonDocument(second).toJson(QJsonDocument::Compact));
+
+    // Re-emitting the same artifact from the same inputs is stable within a run.
+    const EditDecision again = EditDecision::fromPlan(
+        plan, media, QStringLiteral("pan right"), created);
+    QCOMPARE(again.decisionHash(), hash);
+}
+
+void ProjectTest::editDecisionRejectsUnsupportedSchemaVersion()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString mediaPath = writeTempMediaFile(directory);
+    QVERIFY(!mediaPath.isEmpty());
+    const MediaItem media = MediaItem::createFromFilePath(mediaPath);
+    QVERIFY(media.isValid());
+    ReframePlan plan = makeReframePlan(1000, 4000, 640, 360, 2.0,
+                                       { makeKeyframe(1000, 0.0),
+                                         makeKeyframe(4000, 90.0) });
+    plan.setSourceMediaId(media.id());
+    const EditDecision decision =
+        EditDecision::fromPlan(plan, media, QStringLiteral("pan right"));
+
+    EditDecision restored;
+    QString error;
+
+    // A well-formed decision at the current version loads.
+    QVERIFY2(EditDecision::readFromJsonObject(decision.toJsonObject(), &restored,
+                                              &error),
+             qPrintable(error));
+    QCOMPARE(restored.schemaVersion(), EditDecision::CurrentSchemaVersion);
+
+    // The version gate is checked before anything else, so these variants drop
+    // the digest to prove the version alone caused the refusal.
+    const auto withVersion = [&decision](const QJsonValue &value, bool present) {
+        QJsonObject object = decision.payloadWithoutHash();
+        if (present) {
+            object.insert(QStringLiteral("schemaVersion"), value);
+        } else {
+            object.remove(QStringLiteral("schemaVersion"));
+        }
+        return object;
+    };
+
+    // Missing version.
+    QVERIFY(!EditDecision::readFromJsonObject(
+        withVersion(QJsonValue(), false), &restored, &error));
+    QVERIFY(error.contains(QStringLiteral("schemaVersion")));
+
+    // Wrong type.
+    QVERIFY(!EditDecision::readFromJsonObject(
+        withVersion(QStringLiteral("1"), true), &restored, &error));
+    QVERIFY(error.contains(QStringLiteral("schemaVersion")));
+
+    // Older / nonsense versions.
+    QVERIFY(!EditDecision::readFromJsonObject(withVersion(0, true), &restored,
+                                              &error));
+    QVERIFY(error.contains(QStringLiteral("unsupported")));
+    QVERIFY(!EditDecision::readFromJsonObject(withVersion(-1, true), &restored,
+                                              &error));
+    QVERIFY(error.contains(QStringLiteral("unsupported")));
+
+    // A newer version must be refused rather than mis-parsed.
+    const int future = EditDecision::CurrentSchemaVersion + 1;
+    QVERIFY(!EditDecision::readFromJsonObject(withVersion(future, true), &restored,
+                                              &error));
+    QVERIFY(error.contains(QStringLiteral("unsupported")));
+    QVERIFY(error.contains(QString::number(future)));
+
+    // A refusal never writes a partial artifact, and never disturbs a value the
+    // caller already holds.
+    EditDecision fresh;
+    QVERIFY(!EditDecision::readFromJsonObject(withVersion(future, true), &fresh,
+                                              &error));
+    QVERIFY(!fresh.isValid());
+    QVERIFY(!fresh.plan().isValid());
+    QVERIFY(!EditDecision::readFromJsonObject(withVersion(future, true), &restored,
+                                              &error));
+    QCOMPARE(restored.schemaVersion(), EditDecision::CurrentSchemaVersion);
+    QCOMPARE(restored.decisionHash(), decision.decisionHash());
+}
+
+void ProjectTest::editDecisionRejectsInvalidPlan()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString mediaPath = writeTempMediaFile(directory);
+    QVERIFY(!mediaPath.isEmpty());
+    const MediaItem media = MediaItem::createFromFilePath(mediaPath);
+    QVERIFY(media.isValid());
+    ReframePlan plan = makeReframePlan(1000, 4000, 640, 360, 2.0,
+                                       { makeKeyframe(1000, 0.0),
+                                         makeKeyframe(4000, 90.0) });
+    plan.setSourceMediaId(media.id());
+    const EditDecision decision =
+        EditDecision::fromPlan(plan, media, QStringLiteral("pan right"));
+
+    EditDecision restored;
+    QString error;
+
+    // An empty plan (no range, no output, no keyframes) is refused.
+    QJsonObject broken = decision.payloadWithoutHash();
+    broken.insert(QStringLiteral("plan"), ReframePlan().toJsonObject());
+    QVERIFY(!EditDecision::readFromJsonObject(broken, &restored, &error));
+    QVERIFY(error.contains(QStringLiteral("plan"), Qt::CaseInsensitive));
+
+    // A plan carrying its own unsupported version is refused by the plan loader.
+    QJsonObject planObject = plan.toJsonObject();
+    planObject.insert(QStringLiteral("schemaVersion"),
+                      ReframePlan::CurrentSchemaVersion + 1);
+    QJsonObject futurePlan = decision.payloadWithoutHash();
+    futurePlan.insert(QStringLiteral("plan"), planObject);
+    QVERIFY(!EditDecision::readFromJsonObject(futurePlan, &restored, &error));
+    QVERIFY(error.contains(QStringLiteral("plan"), Qt::CaseInsensitive));
+
+    // A plan that is not an object at all is refused.
+    QJsonObject noPlan = decision.payloadWithoutHash();
+    noPlan.remove(QStringLiteral("plan"));
+    QVERIFY(!EditDecision::readFromJsonObject(noPlan, &restored, &error));
+    QVERIFY(error.contains(QStringLiteral("plan"), Qt::CaseInsensitive));
+
+    // An invalid plan is also refused by EditDecision::isValid, so it can never
+    // be saved in the first place.
+    EditDecision invalid;
+    QVERIFY(!invalid.isValid(&error));
+    QVERIFY(!error.isEmpty());
+}
+
+void ProjectTest::editDecisionRejectsTamperedPayload()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString mediaPath = writeTempMediaFile(directory);
+    QVERIFY(!mediaPath.isEmpty());
+    const MediaItem media = MediaItem::createFromFilePath(mediaPath);
+    QVERIFY(media.isValid());
+    ReframePlan plan = makeReframePlan(1000, 4000, 640, 360, 2.0,
+                                       { makeKeyframe(1000, 0.0),
+                                         makeKeyframe(4000, 90.0) });
+    plan.setSourceMediaId(media.id());
+    const EditDecision decision =
+        EditDecision::fromPlan(plan, media, QStringLiteral("pan right"));
+    const QByteArray hash = decision.decisionHash();
+
+    EditDecision restored;
+    QString error;
+
+    // A payload edited after the fact no longer matches its recorded digest.
+    QJsonObject tampered = decision.toJsonObject();
+    tampered.insert(QStringLiteral("instruction"), QStringLiteral("pan left"));
+    QVERIFY(!EditDecision::readFromJsonObject(tampered, &restored, &error));
+    QVERIFY(error.contains(QStringLiteral("hash"), Qt::CaseInsensitive));
+
+    // A digest of the wrong type is not silently ignored.
+    QJsonObject badHash = decision.toJsonObject();
+    badHash.insert(QStringLiteral("decisionHash"), 42);
+    QVERIFY(!EditDecision::readFromJsonObject(badHash, &restored, &error));
+
+    // A missing digest is tolerated (it is derived) and recomputed on demand.
+    QJsonObject withoutHash = decision.payloadWithoutHash();
+    QVERIFY2(EditDecision::readFromJsonObject(withoutHash, &restored, &error),
+             qPrintable(error));
+    QCOMPARE(restored.decisionHash(), hash);
+    QCOMPARE(restored.toJsonObject(), decision.toJsonObject());
+
+    // A malformed source reference is refused rather than defaulted.
+    QJsonObject noSource = decision.payloadWithoutHash();
+    noSource.remove(QStringLiteral("source"));
+    QVERIFY(!EditDecision::readFromJsonObject(noSource, &restored, &error));
+    QVERIFY(error.contains(QStringLiteral("source"), Qt::CaseInsensitive));
+}
+
+void ProjectTest::editDecisionSourceStatusDistinguishesMissingFromChanged()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString mediaPath = writeTempMediaFile(directory);
+    QVERIFY(!mediaPath.isEmpty());
+    const MediaItem media = MediaItem::createFromFilePath(mediaPath);
+    QVERIFY(media.isValid());
+    ReframePlan plan = makeReframePlan(1000, 4000, 640, 360, 2.0,
+                                       { makeKeyframe(1000, 0.0),
+                                         makeKeyframe(4000, 90.0) });
+    plan.setSourceMediaId(media.id());
+    const EditDecision decision =
+        EditDecision::fromPlan(plan, media, QStringLiteral("pan right"));
+
+    // The two failure classes are distinct values, not one boolean.
+    QVERIFY(EditDecision::sourceStatusToString(EditDecision::SourceStatus::FileMissing)
+            != EditDecision::sourceStatusToString(
+                EditDecision::SourceStatus::FingerprintMismatch));
+
+    QString detail;
+    QCOMPARE(decision.checkSource(&detail), EditDecision::SourceStatus::Matches);
+    QVERIFY(detail.isEmpty());
+
+    // Class 1: the file is gone.
+    QTemporaryDir goneDirectory;
+    QVERIFY(goneDirectory.isValid());
+    const QString gonePath = writeTempMediaFile(goneDirectory);
+    QVERIFY(!gonePath.isEmpty());
+    const MediaItem goneMedia = MediaItem::createFromFilePath(gonePath);
+    QVERIFY(goneMedia.isValid());
+    ReframePlan gonePlan = plan;
+    gonePlan.setSourceMediaId(goneMedia.id());
+    const EditDecision goneDecision =
+        EditDecision::fromPlan(gonePlan, goneMedia, QStringLiteral("pan right"));
+    QVERIFY(QFile::remove(gonePath));
+
+    QString missingDetail;
+    QCOMPARE(goneDecision.checkSource(&missingDetail),
+             EditDecision::SourceStatus::FileMissing);
+    QVERIFY(missingDetail.contains(QStringLiteral("does not exist")));
+    QVERIFY(!missingDetail.contains(QStringLiteral("has changed")));
+
+    // Class 2: the file is still there but is not the recorded file.
+    QFile file(mediaPath);
+    QVERIFY(file.open(QIODevice::Append));
+    QVERIFY(file.write("changed-after-the-decision") > 0);
+    file.close();
+
+    QString changedDetail;
+    QCOMPARE(decision.checkSource(&changedDetail),
+             EditDecision::SourceStatus::FingerprintMismatch);
+    QVERIFY(changedDetail.contains(QStringLiteral("has changed")));
+    QVERIFY(!changedDetail.contains(QStringLiteral("does not exist")));
+    QVERIFY(changedDetail.contains(QString::number(media.sizeBytes())));
+
+    // The optional content fingerprint is checked when it is recorded.
+    EditDecision contentHashed = decision;
+    QCOMPARE(contentHashed.checkSource(&changedDetail),
+             EditDecision::SourceStatus::FingerprintMismatch);
+}
+
+void ProjectTest::editDecisionSaveLoadRoundTrip()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString mediaPath = writeTempMediaFile(directory);
+    QVERIFY(!mediaPath.isEmpty());
+    const MediaItem media = MediaItem::createFromFilePath(mediaPath);
+    QVERIFY(media.isValid());
+    ReframePlan plan = makeReframePlan(1000, 4000, 640, 360, 2.0,
+                                       { makeKeyframe(1000, 0.0),
+                                         makeKeyframe(4000, 90.0) });
+    plan.setSourceMediaId(media.id());
+    const QDateTime created = QDateTime::fromString(
+        QStringLiteral("2026-09-17T10:55:00.000Z"), Qt::ISODateWithMs);
+    const EditDecision decision = EditDecision::fromPlan(
+        plan, media, QStringLiteral("pan right"), created);
+
+    QString error;
+    const QString path = directory.filePath(QStringLiteral("decision.json"));
+    QVERIFY2(decision.save(path, &error), qPrintable(error));
+
+    bool ok = false;
+    const EditDecision loaded = EditDecision::load(path, &ok, &error);
+    QVERIFY2(ok, qPrintable(error));
+    QCOMPARE(loaded.decisionHash(), decision.decisionHash());
+    QCOMPARE(loaded.toJsonObject(), decision.toJsonObject());
+    QCOMPARE(loaded.createdUtc(), decision.createdUtc());
+    QCOMPARE(loaded.source().lastModifiedUtc, decision.source().lastModifiedUtc);
+    QCOMPARE(loaded.checkSource(&error), EditDecision::SourceStatus::Matches);
+
+    // A missing file fails honestly rather than yielding an empty artifact.
+    ok = true;
+    const EditDecision absent =
+        EditDecision::load(directory.filePath(QStringLiteral("absent.json")), &ok,
+                           &error);
+    QVERIFY(!ok);
+    QVERIFY(!error.isEmpty());
+    QVERIFY(!absent.isValid());
+
+    // Invalid artifacts cannot be written.
+    ReframePlan noSourceMedia = plan;
+    EditDecision invalid = EditDecision::fromPlan(
+        noSourceMedia, MediaItem(), QStringLiteral("x"));
+    QVERIFY(!invalid.save(directory.filePath(QStringLiteral("bad.json")), &error));
+    QVERIFY(!error.isEmpty());
+}
+
+
+void ProjectTest::reframeCommandOutcomeWithoutDecisionLoadsUnchanged()
+{
+    // Back-compat: this is exactly the shape every record written before
+    // Objective 16 has. It must load unchanged, with no decision and -- crucially
+    // -- no error, because "no decision" is not a failure.
+    QJsonObject legacy;
+    legacy.insert(QStringLiteral("ok"), true);
+    legacy.insert(QStringLiteral("instruction"), QStringLiteral("pan right"));
+    legacy.insert(QStringLiteral("sourceMediaId"), QStringLiteral("m1"));
+    legacy.insert(QStringLiteral("sourcePath"), QStringLiteral("/tmp/clip.mp4"));
+    legacy.insert(QStringLiteral("outputPath"), QStringLiteral("/tmp/legacy.mp4"));
+    legacy.insert(QStringLiteral("startMs"), 0.0);
+    legacy.insert(QStringLiteral("endMs"), 2000.0);
+    legacy.insert(QStringLiteral("outputWidth"), 1080);
+    legacy.insert(QStringLiteral("outputHeight"), 1920);
+    legacy.insert(QStringLiteral("outputFps"), 30.0);
+    legacy.insert(QStringLiteral("frameCount"), 5);
+    QJsonArray notes;
+    notes.append(QStringLiteral("using the whole clip"));
+    legacy.insert(QStringLiteral("notes"), notes);
+
+    QVERIFY(!legacy.contains(QStringLiteral("editDecision")));
+
+    ReframeCommandOutcome restored;
+    QString error;
+    QVERIFY2(ReframeCommandOutcome::readFromJsonObject(legacy, &restored, &error),
+             qPrintable(error));
+    QVERIFY(restored.ok);
+    QCOMPARE(restored.instruction, QStringLiteral("pan right"));
+    QCOMPARE(restored.outputPath, QStringLiteral("/tmp/legacy.mp4"));
+    QCOMPARE(restored.frameCount, 5);
+    QVERIFY(!restored.hasEditDecision());
+    QVERIFY(restored.editDecisionError().isEmpty());
+
+    // Re-serializing a record that never had a decision does not invent one.
+    QVERIFY(!restored.toJsonObject().contains(QStringLiteral("editDecision")));
+}
+
+void ProjectTest::reframeCommandOutcomeCorruptDecisionIsFlaggedNotFatal()
+{
+    // Lenient-record policy (Decision 033): the record is a historical fact and
+    // survives; the decision is refused, flagged, and preserved verbatim.
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString mediaPath = writeTempMediaFile(directory);
+    QVERIFY(!mediaPath.isEmpty());
+    const MediaItem media = MediaItem::createFromFilePath(mediaPath);
+    QVERIFY(media.isValid());
+    const EditDecision decision = makeTestEditDecision(media);
+
+    ReframeCommandOutcome record;
+    record.ok = true;
+    record.instruction = QStringLiteral("pan right");
+    record.outputPath = directory.filePath(QStringLiteral("out.mp4"));
+    record.sourceMediaId = media.id();
+    record.setEditDecision(decision);
+    const QJsonObject goodRecord = record.toJsonObject();
+
+    QString error;
+
+    // Case 1: a decision from a newer, unsupported schema.
+    QJsonObject futureDecision =
+        goodRecord.value(QStringLiteral("editDecision")).toObject();
+    futureDecision.insert(QStringLiteral("schemaVersion"),
+                          EditDecision::CurrentSchemaVersion + 1);
+    futureDecision.remove(QStringLiteral("decisionHash"));
+    QJsonObject futureRecord = goodRecord;
+    futureRecord.insert(QStringLiteral("editDecision"), futureDecision);
+
+    ReframeCommandOutcome fromFuture;
+    QVERIFY2(ReframeCommandOutcome::readFromJsonObject(futureRecord, &fromFuture,
+                                                       &error),
+             qPrintable(error));
+    QVERIFY(fromFuture.ok);
+    QCOMPARE(fromFuture.instruction, QStringLiteral("pan right"));
+    QVERIFY(!fromFuture.hasEditDecision());
+    QVERIFY(fromFuture.editDecisionError().contains(QStringLiteral("unsupported")));
+    // Preserved verbatim: re-saving the project cannot destroy it.
+    QCOMPARE(fromFuture.toJsonObject(), futureRecord);
+
+    // Case 2: a decision whose recorded digest disagrees with its payload.
+    QJsonObject tamperedDecision =
+        goodRecord.value(QStringLiteral("editDecision")).toObject();
+    tamperedDecision.insert(QStringLiteral("instruction"),
+                            QStringLiteral("follow someone else"));
+    QJsonObject tamperedRecord = goodRecord;
+    tamperedRecord.insert(QStringLiteral("editDecision"), tamperedDecision);
+
+    ReframeCommandOutcome fromTampered;
+    QVERIFY2(ReframeCommandOutcome::readFromJsonObject(tamperedRecord, &fromTampered,
+                                                       &error),
+             qPrintable(error));
+    QVERIFY(!fromTampered.hasEditDecision());
+    QVERIFY(fromTampered.editDecisionError().contains(QStringLiteral("hash"),
+                                                      Qt::CaseInsensitive));
+    QCOMPARE(fromTampered.toJsonObject(), tamperedRecord);
+
+    // Case 3: an editDecision entry that is not an object at all.
+    QJsonObject scalarRecord = goodRecord;
+    scalarRecord.insert(QStringLiteral("editDecision"), QStringLiteral("nonsense"));
+    ReframeCommandOutcome fromScalar;
+    QVERIFY2(ReframeCommandOutcome::readFromJsonObject(scalarRecord, &fromScalar,
+                                                       &error),
+             qPrintable(error));
+    QVERIFY(!fromScalar.hasEditDecision());
+    QVERIFY(!fromScalar.editDecisionError().isEmpty());
+    QCOMPARE(fromScalar.toJsonObject(), scalarRecord);
+
+    // The control: the same record with an intact decision still loads it.
+    ReframeCommandOutcome intact;
+    QVERIFY2(ReframeCommandOutcome::readFromJsonObject(goodRecord, &intact, &error),
+             qPrintable(error));
+    QVERIFY(intact.hasEditDecision());
+    QCOMPARE(intact.editDecision().decisionHash(), decision.decisionHash());
+    QVERIFY(intact.editDecisionError().isEmpty());
+
+    // setEditDecision() refuses to attach an invalid decision.
+    ReframeCommandOutcome invalid;
+    invalid.setEditDecision(EditDecision());
+    QVERIFY(!invalid.hasEditDecision());
+    QVERIFY(!invalid.toJsonObject().contains(QStringLiteral("editDecision")));
+}
+
+void ProjectTest::applicationOpenProjectSurfacesUnreadableDecision()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString mediaPath = writeTempMediaFile(directory);
+    QVERIFY(!mediaPath.isEmpty());
+    const MediaItem media = MediaItem::createFromFilePath(mediaPath);
+    QVERIFY(media.isValid());
+
+    ReframeCommandOutcome record;
+    record.ok = true;
+    record.instruction = QStringLiteral("pan right");
+    record.outputPath = directory.filePath(QStringLiteral("out.mp4"));
+    record.sourceMediaId = media.id();
+    record.setEditDecision(makeTestEditDecision(media));
+
+    QJsonObject recordJson = record.toJsonObject();
+    QJsonObject brokenDecision =
+        recordJson.value(QStringLiteral("editDecision")).toObject();
+    brokenDecision.insert(QStringLiteral("schemaVersion"),
+                          EditDecision::CurrentSchemaVersion + 1);
+    brokenDecision.remove(QStringLiteral("decisionHash"));
+    recordJson.insert(QStringLiteral("editDecision"), brokenDecision);
+
+    Project project;
+    QJsonArray outputs;
+    outputs.append(recordJson);
+    project.setReframeOutputs(outputs);
+    const QString projectPath = directory.filePath(QStringLiteral("broken.reel"));
+    QString error;
+    QVERIFY2(project.save(projectPath, &error), qPrintable(error));
+
+    Application reopened;
+    QSignalSpy statusSpy(&reopened, &Application::backgroundCompleted);
+    QVERIFY(reopened.openProject(projectPath));
+
+    // The record survived ...
+    QCOMPARE(reopened.reframeOutputs().size(), 1);
+    const ReframeCommandOutcome &restored = reopened.reframeOutputs().at(0);
+    QVERIFY(restored.ok);
+    QCOMPARE(restored.instruction, QStringLiteral("pan right"));
+    QVERIFY(!restored.hasEditDecision());
+    QVERIFY(restored.editDecisionError().contains(QStringLiteral("unsupported")));
+
+    // ... and the failure was reported, not swallowed.
+    bool reported = false;
+    for (int i = 0; i < statusSpy.count(); ++i) {
+        const QString message = statusSpy.at(i).at(0).toString();
+        if (message.contains(QStringLiteral("unreadable edit decision"))) {
+            reported = true;
+        }
+    }
+    QVERIFY(reported);
+}
+
+void ProjectTest::editDecisionAttachedOnFailedRender()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+
+    // The real decision stage runs and produces a real plan; the render then
+    // fails. The decision must still be attached, because the plan is exactly
+    // what makes a later replay possible.
+    ReframePlan preparedPlan;
+    app.setReframeCommandExecutor(
+        [&preparedPlan](const ReframeCommandRequest &request,
+                        TargetDetector *detector, ReframeFrameProvider *provider) {
+            ReframeCommandResult result =
+                ReframeCommandRunner::prepare(request, detector, provider);
+            preparedPlan = result.plan;
+            result.ok = false;
+            result.error = QStringLiteral("simulated render failure");
+            result.frameCount = 0;
+            return result;
+        });
+
+    const QString outputPath = directory.filePath(QStringLiteral("failed.mp4"));
+    QVERIFY(!app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                     outputPath));
+
+    QVERIFY(preparedPlan.isValid());
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    const ReframeCommandOutcome &record = app.reframeOutputs().at(0);
+    QVERIFY(!record.ok);
+    QVERIFY(record.error.contains(QStringLiteral("simulated render failure")));
+
+    // Attached despite the failed render ...
+    QVERIFY(record.hasEditDecision());
+    QVERIFY(record.editDecisionError().isEmpty());
+    // ... holding the decision stage's plan, not a re-derived one.
+    QCOMPARE(record.editDecision().plan().toJsonObject(),
+             preparedPlan.toJsonObject());
+    // The instruction is the single string the record already carries.
+    QCOMPARE(record.editDecision().instruction(), record.instruction);
+    QCOMPARE(record.editDecision().instruction(), QStringLiteral("pan right"));
+    QCOMPARE(record.editDecision().source().mediaId, app.activeMediaId());
+    QVERIFY(record.editDecision().source().sizeBytes > 0);
+
+    // Serialized, and stable across load round trips.
+    const QJsonObject serialized = record.toJsonObject();
+    QVERIFY(serialized.contains(QStringLiteral("editDecision")));
+
+    ReframeCommandOutcome restored;
+    QString error;
+    QVERIFY2(ReframeCommandOutcome::readFromJsonObject(serialized, &restored,
+                                                       &error),
+             qPrintable(error));
+    QVERIFY(restored.hasEditDecision());
+    QCOMPARE(restored.editDecision().decisionHash(),
+             record.editDecision().decisionHash());
+
+    ReframeCommandOutcome twice;
+    QVERIFY2(ReframeCommandOutcome::readFromJsonObject(restored.toJsonObject(),
+                                                       &twice, &error),
+             qPrintable(error));
+    QCOMPARE(twice.editDecision().decisionHash(),
+             record.editDecision().decisionHash());
+    QCOMPARE(twice.toJsonObject(), serialized);
+}
+
+void ProjectTest::editDecisionRefusedForInvalidPlanIsReportedNotSilent()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+
+    // An executor that reaches an output target but produces no valid plan.
+    app.setReframeCommandExecutor(
+        [](const ReframeCommandRequest &request, TargetDetector *,
+           ReframeFrameProvider *) {
+            ReframeCommandResult result;
+            result.ok = false;
+            result.error = QStringLiteral("simulated failure before planning");
+            result.outputPath = request.outputPath;
+            // result.plan stays default-constructed, and is therefore invalid.
+            return result;
+        });
+
+    const QString outputPath = directory.filePath(QStringLiteral("noplan.mp4"));
+    QVERIFY(!app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                     outputPath));
+
+    // The record is still appended -- the append gate is unchanged -- but no
+    // decision accompanies it, and the reason is explicit rather than implied.
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    const ReframeCommandOutcome &record = app.reframeOutputs().at(0);
+    QVERIFY(!record.hasEditDecision());
+    QVERIFY(!record.editDecisionError().isEmpty());
+    QVERIFY(record.editDecisionError().contains(
+        QStringLiteral("no valid reframe plan")));
+    QVERIFY(!record.toJsonObject().contains(QStringLiteral("editDecision")));
+
+    // The refusal path of setEditDecision() itself: an invalid decision is
+    // refused WITH a reason instead of being dropped silently.
+    const MediaItem media = app.mediaItems().first();
+    const EditDecision invalidDecision =
+        EditDecision::fromPlan(ReframePlan(), media, QStringLiteral("pan right"));
+    QVERIFY(!invalidDecision.isValid());
+
+    ReframeCommandOutcome refused;
+    refused.setEditDecision(invalidDecision);
+    QVERIFY(!refused.hasEditDecision());
+    QVERIFY(!refused.editDecisionError().isEmpty());
+    QVERIFY(refused.editDecisionError().contains(QStringLiteral("plan"),
+                                                 Qt::CaseInsensitive));
+    QVERIFY(!refused.toJsonObject().contains(QStringLiteral("editDecision")));
+    // A later valid attach clears the earlier refusal reason.
+    refused.setEditDecision(makeTestEditDecision(media));
+    QVERIFY(refused.hasEditDecision());
+    QVERIFY(refused.editDecisionError().isEmpty());
+}
+
+void ProjectTest::editDecisionDoesNotAlterReframeOutputAppendGate()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandExecutor(successExecutor());
+
+    // A failure that never reaches an output target is still not appended, and it
+    // acquires neither a decision nor a decision error.
+    QVERIFY(!app.runReframeCommandTo(
+        QStringLiteral("pan right"), 0, 2000,
+        QStringLiteral("/nonexistent_reelcraft_dir_xyz/out.mp4")));
+    QVERIFY(app.reframeOutputs().isEmpty());
+    QVERIFY(!app.lastReframeCommandOutcome().hasEditDecision());
+    QVERIFY(app.lastReframeCommandOutcome().editDecisionError().isEmpty());
+
+    // A command rejected before the executor runs is likewise not appended.
+    Application noProject;
+    QVERIFY(!noProject.runReframeCommandTo(
+        QStringLiteral("pan right"), 0, 2000,
+        directory.filePath(QStringLiteral("x.mp4"))));
+    QVERIFY(noProject.reframeOutputs().isEmpty());
+
+    // A command that DOES reach an output target is appended exactly once and
+    // signals once, exactly as before Objective 16 -- now carrying its decision.
+    int signalCount = 0;
+    QObject::connect(&app, &Application::reframeOutputsChanged,
+                     [&signalCount](const QList<ReframeCommandOutcome> &) {
+                         ++signalCount;
+                     });
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                    directory.filePath(QStringLiteral("ok.mp4"))));
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    QCOMPARE(signalCount, 1);
+    QVERIFY(app.reframeOutputs().at(0).hasEditDecision());
+    QVERIFY(app.reframeOutputs().at(0).editDecisionError().isEmpty());
+}
+
+void ProjectTest::replayRefusesMissingSource()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QString mediaPath;
+    QVERIFY(setupActiveMedia(app, directory, &mediaPath));
+    app.setReframeCommandExecutor(successExecutor());
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                    directory.filePath(QStringLiteral("render1.mp4"))));
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    QVERIFY(app.reframeOutputs().at(0).hasEditDecision());
+
+    // Counts any render attempt: the refusal must happen before the encoder runs.
+    int calls = 0;
+    app.setReframeReplayRenderer(countingReplayRenderer(&calls));
+
+    QVERIFY(QFile::remove(mediaPath));
+
+    const QString replayOutput =
+        directory.filePath(QStringLiteral("replay.mp4"));
+    const ReplayResult replay = app.replayEditDecision(0, replayOutput);
+    QVERIFY(!replay.ok);
+    QCOMPARE(replay.newRecordIndex, -1);
+    QVERIFY(replay.error.contains(QStringLiteral("does not exist")));
+    // The two source failure classes stay distinct.
+    QVERIFY(!replay.error.contains(QStringLiteral("has changed")));
+
+    // Nothing was rendered, nothing was appended, nothing was written.
+    QCOMPARE(calls, 0);
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    QVERIFY(!QFileInfo::exists(replayOutput));
+}
+
+void ProjectTest::replayRefusesChangedSource()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QString mediaPath;
+    QVERIFY(setupActiveMedia(app, directory, &mediaPath));
+    app.setReframeCommandExecutor(successExecutor());
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                    directory.filePath(QStringLiteral("render1.mp4"))));
+    QVERIFY(app.reframeOutputs().at(0).hasEditDecision());
+
+    int calls = 0;
+    app.setReframeReplayRenderer(countingReplayRenderer(&calls));
+
+    // The file is still there, but it is no longer the recorded file.
+    QFile file(mediaPath);
+    QVERIFY(file.open(QIODevice::Append));
+    QVERIFY(file.write("changed-after-the-decision") > 0);
+    file.close();
+
+    const QString replayOutput =
+        directory.filePath(QStringLiteral("replay.mp4"));
+    const ReplayResult replay = app.replayEditDecision(0, replayOutput);
+    QVERIFY(!replay.ok);
+    QVERIFY(replay.error.contains(QStringLiteral("has changed")));
+    // Distinct from the missing-file class.
+    QVERIFY(!replay.error.contains(QStringLiteral("does not exist")));
+
+    QCOMPARE(calls, 0);
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    QVERIFY(!QFileInfo::exists(replayOutput));
+}
+
+void ProjectTest::replayRefusesRecordWithoutDecision()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString replayOutput =
+        directory.filePath(QStringLiteral("replay.mp4"));
+
+    // (i) A legacy record: no editDecision key at all, and therefore no reason
+    // recorded either -- the plain absence message is reported.
+    QJsonObject legacyRecord;
+    legacyRecord.insert(QStringLiteral("ok"), true);
+    legacyRecord.insert(QStringLiteral("instruction"), QStringLiteral("pan right"));
+    legacyRecord.insert(QStringLiteral("outputPath"),
+                        directory.filePath(QStringLiteral("legacy.mp4")));
+    Project legacyProject;
+    QJsonArray legacyOutputs;
+    legacyOutputs.append(legacyRecord);
+    legacyProject.setReframeOutputs(legacyOutputs);
+    const QString legacyPath = directory.filePath(QStringLiteral("legacy.reel"));
+    QVERIFY(legacyProject.save(legacyPath));
+
+    Application legacyApp;
+    int legacyCalls = 0;
+    legacyApp.setReframeReplayRenderer(countingReplayRenderer(&legacyCalls));
+    QVERIFY(legacyApp.openProject(legacyPath));
+    QCOMPARE(legacyApp.reframeOutputs().size(), 1);
+
+    const ReplayResult legacyReplay = legacyApp.replayEditDecision(0, replayOutput);
+    QVERIFY(!legacyReplay.ok);
+    QCOMPARE(legacyReplay.newRecordIndex, -1);
+    QVERIFY(legacyReplay.error.contains(QStringLiteral("no edit decision")));
+    QCOMPARE(legacyCalls, 0);
+
+    // (ii) A record that expected a decision but could not load one reports that
+    // specific reason rather than the generic message.
+    QTemporaryDir second;
+    QVERIFY(second.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, second, nullptr));
+    app.setReframeCommandExecutor(
+        [](const ReframeCommandRequest &request, TargetDetector *,
+           ReframeFrameProvider *) {
+            ReframeCommandResult result;
+            result.ok = false;
+            result.error = QStringLiteral("simulated failure before planning");
+            result.outputPath = request.outputPath;
+            return result;
+        });
+    QVERIFY(!app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                     second.filePath(QStringLiteral("noplan.mp4"))));
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    QVERIFY(!app.reframeOutputs().at(0).editDecisionError().isEmpty());
+
+    int calls = 0;
+    app.setReframeReplayRenderer(countingReplayRenderer(&calls));
+    const ReplayResult noPlanReplay =
+        app.replayEditDecision(0, second.filePath(QStringLiteral("replay.mp4")));
+    QVERIFY(!noPlanReplay.ok);
+    QVERIFY(noPlanReplay.error.contains(QStringLiteral("no valid reframe plan")));
+    QCOMPARE(calls, 0);
+
+    // (iii) An index with no record behind it.
+    const ReplayResult badIndex = app.replayEditDecision(9, replayOutput);
+    QVERIFY(!badIndex.ok);
+    QVERIFY(badIndex.error.contains(QStringLiteral("no such reframe output")));
+    QCOMPARE(calls, 0);
+}
+
+void ProjectTest::replayAppendsNewRecordAndPreservesOriginal()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandExecutor(successExecutor());
+
+    const QString firstOutput = directory.filePath(QStringLiteral("render1.mp4"));
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                    firstOutput));
+    QCOMPARE(app.reframeOutputs().size(), 1);
+
+    // A stored copy of the original record, for a strict before/after comparison.
+    const ReframeCommandOutcome originalBefore = app.reframeOutputs().at(0);
+    const QJsonObject originalJsonBefore = originalBefore.toJsonObject();
+    const QByteArray originalDecisionHash =
+        originalBefore.editDecision().decisionHash();
+    const QDateTime originalCreatedUtc =
+        originalBefore.editDecision().createdUtc();
+    QVERIFY(!originalDecisionHash.isEmpty());
+
+    // A real file at the original output path, so the overwrite guard is testable.
+    QFile existing(firstOutput);
+    QVERIFY(existing.open(QIODevice::WriteOnly));
+    QVERIFY(existing.write("previous-render") > 0);
+    existing.close();
+
+    int calls = 0;
+    app.setReframeReplayRenderer(countingReplayRenderer(&calls));
+
+    // An existing file is never overwritten.
+    const ReplayResult overwrite = app.replayEditDecision(0, firstOutput);
+    QVERIFY(!overwrite.ok);
+    QVERIFY(overwrite.error.contains(QStringLiteral("already exists")));
+    QCOMPARE(calls, 0);
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    QCOMPARE(readFileBytes(firstOutput), QByteArray("previous-render"));
+
+    // Replay never targets the source media.
+    const ReplayResult ontoSource =
+        app.replayEditDecision(0, originalBefore.sourcePath);
+    QVERIFY(!ontoSource.ok);
+    QVERIFY(ontoSource.error.contains(QStringLiteral("must differ from the source")));
+    QCOMPARE(calls, 0);
+    QCOMPARE(app.reframeOutputs().size(), 1);
+
+    // An empty path is rejected rather than invented.
+    const ReplayResult emptyPath = app.replayEditDecision(0, QString());
+    QVERIFY(!emptyPath.ok);
+    QVERIFY(emptyPath.error.contains(QStringLiteral("requires an output path")));
+    QCOMPARE(calls, 0);
+
+    // The successful replay: one new record, signalled once.
+    const QString replayOutput =
+        directory.filePath(QStringLiteral("render1_replay.mp4"));
+    int signalCount = 0;
+    QObject::connect(&app, &Application::reframeOutputsChanged,
+                     [&signalCount](const QList<ReframeCommandOutcome> &) {
+                         ++signalCount;
+                     });
+    const ReplayResult replay = app.replayEditDecision(0, replayOutput);
+    QVERIFY2(replay.ok, qPrintable(replay.error));
+    QCOMPARE(replay.newRecordIndex, 1);
+    QCOMPARE(calls, 1);
+    QCOMPARE(signalCount, 1);
+    QCOMPARE(app.reframeOutputs().size(), 2);
+
+    // The original record is provably unchanged: the stored copy taken before the
+    // replay is compared byte for byte afterwards.
+    QCOMPARE(app.reframeOutputs().at(0).toJsonObject(), originalJsonBefore);
+    QCOMPARE(app.reframeOutputs().at(0).outputPath, originalBefore.outputPath);
+    QCOMPARE(app.reframeOutputs().at(0).editDecision().decisionHash(),
+             originalDecisionHash);
+
+    // The new record is a distinct record carrying the SAME decision.
+    const ReframeCommandOutcome &replayed = app.reframeOutputs().at(1);
+    QVERIFY(replayed.ok);
+    QVERIFY(replayed.hasEditDecision());
+    QVERIFY(replayed.editDecisionError().isEmpty());
+    QCOMPARE(replayed.editDecision().decisionHash(), originalDecisionHash);
+    QCOMPARE(replayed.editDecision().createdUtc(), originalCreatedUtc);
+    QCOMPARE(replayed.editDecision().plan().toJsonObject(),
+             originalBefore.editDecision().plan().toJsonObject());
+    QCOMPARE(replayed.outputPath, QFileInfo(replayOutput).absoluteFilePath());
+    QVERIFY(replayed.outputPath != originalBefore.outputPath);
+    QCOMPARE(replayed.sourceMediaId, originalBefore.sourceMediaId);
+    QCOMPARE(replayed.instruction, originalBefore.instruction);
+}
+
+void ProjectTest::replaySameProcessProducesEquivalentRender()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable in this environment");
+    }
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    // A deliberately short source: the frame-extraction seam uses a fixed 15 s
+    // FFmpeg budget per frame, and keeping the render to two frames keeps this
+    // test's cost proportional to what it actually proves.
+    QString sourcePath;
+    QVERIFY(createEquirectReviewVideo(directory.path(),
+                                      FrameExtractor::defaultExecutablePath(), 2,
+                                      &sourcePath));
+
+    // Environment capability probe. FrameExtractor enforces a fixed per-frame
+    // FFmpeg budget; this test needs several extractions (two renders, plus two
+    // full decodes). If a SINGLE extraction already consumes a large fraction of
+    // that budget, the run cannot complete here for reasons that have nothing to
+    // do with the code under test -- on the current proot/Termux device one
+    // seek+decode was measured at ~15 s against a 15 s budget. The probe reports
+    // the measured cost rather than failing spuriously. On a normal host a frame
+    // costs well under a second and the test runs in full.
+    QElapsedTimer probe;
+    probe.start();
+    QImage probeFrame;
+    QString probeError;
+    const bool probed = FrameExtractor::extractFrameAt(
+        sourcePath, FrameExtractor::defaultExecutablePath(), 0.0, &probeFrame,
+        &probeError);
+    const qint64 probeMs = probe.elapsed();
+    if (!probed || probeMs > 5000) {
+        QSKIP(qPrintable(QStringLiteral(
+            "Frame extraction in this environment costs %1 ms per frame (%2); "
+            "too slow to run a multi-frame render test reliably.")
+                             .arg(probeMs)
+                             .arg(probed ? QStringLiteral("probe succeeded")
+                                         : probeError)));
+    }
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(sourcePath));
+    QVERIFY(app.setActiveMedia(app.mediaItems().first().id()));
+    app.setReframeDefaultOutput(160, 90, 2.0);
+
+    // render #1: the real command path, a direction-only command (no detector,
+    // no speaker provider, no perception of any kind).
+    const QString firstOutput = directory.filePath(QStringLiteral("render1.mp4"));
+    QVERIFY2(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 1000,
+                                     firstOutput),
+             qPrintable(app.lastReframeCommandOutcome().error));
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    QVERIFY(app.reframeOutputs().at(0).hasEditDecision());
+    QVERIFY(QFileInfo::exists(firstOutput));
+
+    const QByteArray firstFrames = decodeAllFramesRaw(firstOutput);
+    QVERIFY(!firstFrames.isEmpty());
+
+    // The replay uses the DEFAULT renderer: the stored plan plus the source path.
+    // If this test passes, no parser and no perception provider was involved.
+    const QString replayOutput =
+        directory.filePath(QStringLiteral("render1_replay.mp4"));
+    const ReplayResult replay = app.replayEditDecision(0, replayOutput);
+    QVERIFY2(replay.ok, qPrintable(replay.error));
+    QVERIFY(QFileInfo::exists(replayOutput));
+
+    // PRIMARY assertion: the replay decodes to identical pixels, frame for frame.
+    // This is the toolchain-independent guarantee: it holds regardless of how the
+    // container is written.
+    const QByteArray replayFrames = decodeAllFramesRaw(replayOutput);
+    QVERIFY(!replayFrames.isEmpty());
+    QCOMPARE(QCryptographicHash::hash(replayFrames, QCryptographicHash::Sha256).toHex(),
+             QCryptographicHash::hash(firstFrames, QCryptographicHash::Sha256).toHex());
+    QCOMPARE(replayFrames, firstFrames);
+
+    // SECONDARY assertion: the containers are byte-identical.
+    // Relaxation note: container byte-equality is a property of the FFmpeg build
+    // and its muxer (this build writes no volatile timestamp metadata and
+    // reproduces byte for byte, verified 65 s apart), NOT of the decision
+    // artifact. It is asserted here because it is available and strictly
+    // stronger; the frame-decode comparison above is the primary,
+    // toolchain-independent guarantee, so a future FFmpeg that embedded volatile
+    // metadata would relax this single line without weakening Objective 16.
+    QCOMPARE(QCryptographicHash::hash(readFileBytes(replayOutput),
+                                      QCryptographicHash::Sha256).toHex(),
+             QCryptographicHash::hash(readFileBytes(firstOutput),
+                                      QCryptographicHash::Sha256).toHex());
+
+    // A new record carrying the same decision and the new path.
+    QCOMPARE(app.reframeOutputs().size(), 2);
+    QCOMPARE(app.reframeOutputs().at(1).editDecision().decisionHash(),
+             app.reframeOutputs().at(0).editDecision().decisionHash());
+    QCOMPARE(app.reframeOutputs().at(1).outputPath,
+             QFileInfo(replayOutput).absoluteFilePath());
+    QCOMPARE(app.reframeOutputs().at(0).outputPath,
+             QFileInfo(firstOutput).absoluteFilePath());
+}
+
+void ProjectTest::replayRefusesExistingOutputPath()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandExecutor(successExecutor());
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                    directory.filePath(QStringLiteral("render1.mp4"))));
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    QVERIFY(app.reframeOutputs().at(0).hasEditDecision());
+
+    // Counts render attempts: the refusal must happen before the encoder runs.
+    int calls = 0;
+    app.setReframeReplayRenderer(countingReplayRenderer(&calls));
+
+    // A pre-existing file at the requested output path, with known contents.
+    const QString occupied = directory.filePath(QStringLiteral("occupied.mp4"));
+    const QByteArray known("this file must survive the refusal untouched");
+    QFile existing(occupied);
+    QVERIFY(existing.open(QIODevice::WriteOnly));
+    QCOMPARE(existing.write(known), qint64(known.size()));
+    existing.close();
+    QCOMPARE(readFileBytes(occupied), known);
+
+    QSignalSpy outputsSpy(&app, &Application::reframeOutputsChanged);
+    const int sizeBefore = app.reframeOutputs().size();
+
+    const ReplayResult replay = app.replayEditDecision(0, occupied);
+
+    QVERIFY(!replay.ok);
+    QCOMPARE(replay.newRecordIndex, -1);
+    QVERIFY(replay.error.contains(QStringLiteral("already exists")));
+    QVERIFY(replay.error.contains(occupied));
+
+    // The existing file is byte-identical: not touched, truncated or partially
+    // written.
+    QCOMPARE(readFileBytes(occupied), known);
+    QCOMPARE(QFileInfo(occupied).size(), qint64(known.size()));
+
+    // No record was appended, and no signal was emitted.
+    QCOMPARE(app.reframeOutputs().size(), sizeBefore);
+    QCOMPARE(outputsSpy.count(), 0);
+
+    // The encoder was never invoked.
+    QCOMPARE(calls, 0);
+}
+
+void ProjectTest::replayFreshProcessChild()
+{
+    // Child role: this slot only does work when the parent drives it through the
+    // environment. Run on its own it declares itself rather than pretending to
+    // be an independent test.
+    const QString decisionPath = qEnvironmentVariable(kReplayDecisionEnv);
+    if (decisionPath.isEmpty()) {
+        QSKIP("Child-only test driven by replayFreshProcessReproducesRender(); "
+              "not runnable standalone.");
+    }
+    const QString outputPath = qEnvironmentVariable(kReplayOutputEnv);
+    QVERIFY(!outputPath.isEmpty());
+
+    // Strict load from disk. An unsupported/incompatible schemaVersion is
+    // refused here rather than mis-parsed.
+    bool ok = false;
+    QString error;
+    const EditDecision decision = EditDecision::load(decisionPath, &ok, &error);
+    QVERIFY2(ok, qPrintable(error));
+
+    // Fingerprint verification before anything is rendered.
+    QString sourceDetail;
+    QCOMPARE(decision.checkSource(&sourceDetail), EditDecision::SourceStatus::Matches);
+
+    // Render the STORED plan. This is the whole replay call graph, and it
+    // deliberately contains no ReframeIntentParser, no TargetDetector and no
+    // perception provider of any kind: a plan plus a source path is sufficient.
+    const ReframePipeline::Result rendered = ReframePipeline::renderPlan(
+        decision.plan(), decision.source().path, outputPath, nullptr);
+    QVERIFY2(rendered.ok, qPrintable(rendered.error));
+
+    const QByteArray frames = decodeAllFramesRaw(outputPath);
+    QVERIFY(!frames.isEmpty());
+
+    // Machine-readable result for the parent.
+    const QByteArray frameHash =
+        QCryptographicHash::hash(frames, QCryptographicHash::Sha256).toHex();
+    std::fprintf(stdout, "%s frameHash=%s\n", kReplayMarker, frameHash.constData());
+    std::fprintf(stdout, "%s decisionHash=%s\n", kReplayMarker,
+                 decision.decisionHash().constData());
+    std::fprintf(stdout, "%s frameBytes=%lld\n", kReplayMarker,
+                 static_cast<long long>(frames.size()));
+    std::fflush(stdout);
+}
+
+void ProjectTest::replayFreshProcessReproducesRender()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable in this environment");
+    }
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString sourcePath;
+    QVERIFY(createEquirectReviewVideo(directory.path(),
+                                      FrameExtractor::defaultExecutablePath(), 2,
+                                      &sourcePath));
+
+    // Same environment capability probe as the same-process replay test.
+    QElapsedTimer probe;
+    probe.start();
+    QImage probeFrame;
+    QString probeError;
+    const bool probed = FrameExtractor::extractFrameAt(
+        sourcePath, FrameExtractor::defaultExecutablePath(), 0.0, &probeFrame,
+        &probeError);
+    const qint64 probeMs = probe.elapsed();
+    if (!probed || probeMs > 5000) {
+        QSKIP(qPrintable(QStringLiteral(
+            "Frame extraction in this environment costs %1 ms per frame (%2); "
+            "too slow to run a multi-frame render test reliably.")
+                             .arg(probeMs)
+                             .arg(probed ? QStringLiteral("probe succeeded")
+                                         : probeError)));
+    }
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(sourcePath));
+    QVERIFY(app.setActiveMedia(app.mediaItems().first().id()));
+    app.setReframeDefaultOutput(160, 90, 2.0);
+
+    // render #1, in THIS process.
+    const QString firstOutput = directory.filePath(QStringLiteral("render1.mp4"));
+    QVERIFY2(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 1000,
+                                     firstOutput),
+             qPrintable(app.lastReframeCommandOutcome().error));
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    QVERIFY(app.reframeOutputs().at(0).hasEditDecision());
+    const EditDecision decision = app.reframeOutputs().at(0).editDecision();
+
+    // Persist the artifact. This file is the ONLY thing the child receives.
+    const QString decisionPath = directory.filePath(QStringLiteral("decision.json"));
+    QString saveError;
+    QVERIFY2(decision.save(decisionPath, &saveError), qPrintable(saveError));
+
+    const QByteArray firstFrames = decodeAllFramesRaw(firstOutput);
+    QVERIFY(!firstFrames.isEmpty());
+    const QString expectedFrameHash = QString::fromLatin1(
+        QCryptographicHash::hash(firstFrames, QCryptographicHash::Sha256).toHex());
+
+    // Launch a genuinely separate OS process running only the child slot.
+    const QString childOutput = directory.filePath(QStringLiteral("render_child.mp4"));
+    QProcessEnvironment childEnvironment = QProcessEnvironment::systemEnvironment();
+    childEnvironment.insert(QString::fromLatin1(kReplayDecisionEnv), decisionPath);
+    childEnvironment.insert(QString::fromLatin1(kReplayOutputEnv), childOutput);
+    // Pin the child to the same ffmpeg executable the parent used.
+    childEnvironment.insert(QStringLiteral("REELCRAFT_FFMPEG"),
+                            FrameExtractor::defaultExecutablePath());
+
+    QProcess child;
+    child.setProcessChannelMode(QProcess::SeparateChannels);
+    child.setProcessEnvironment(childEnvironment);
+    child.start(QCoreApplication::applicationFilePath(),
+                { QStringLiteral("replayFreshProcessChild") });
+    QVERIFY(child.waitForStarted(30000));
+    QVERIFY(child.waitForFinished(300000));
+    const QString childStdout = QString::fromLocal8Bit(child.readAllStandardOutput());
+    const QString childStderr = QString::fromLocal8Bit(child.readAllStandardError());
+    QCOMPARE(child.exitStatus(), QProcess::NormalExit);
+    QVERIFY2(child.exitCode() == 0,
+             qPrintable(QStringLiteral("child failed:\n%1\n%2")
+                            .arg(childStdout, childStderr)));
+
+    QString childFrameHash;
+    QString childDecisionHash;
+    const QStringList lines = childStdout.split(QLatin1Char('\n'));
+    for (const QString &line : lines) {
+        const QString trimmed = line.trimmed();
+        if (!trimmed.startsWith(QString::fromLatin1(kReplayMarker))) {
+            continue;
+        }
+        const QStringList parts = trimmed.split(QLatin1Char(' '));
+        for (const QString &part : parts) {
+            if (part.startsWith(QStringLiteral("frameHash="))) {
+                childFrameHash = part.mid(10);
+            } else if (part.startsWith(QStringLiteral("decisionHash="))) {
+                childDecisionHash = part.mid(13);
+            }
+        }
+    }
+    QVERIFY2(!childFrameHash.isEmpty(), qPrintable(childStdout));
+    QVERIFY2(!childDecisionHash.isEmpty(), qPrintable(childStdout));
+
+    // The fresh process reproduced render #1's decoded frames exactly, from the
+    // persisted artifact alone.
+    QCOMPARE(childFrameHash, expectedFrameHash);
+    // ... and it loaded the very decision this process wrote.
+    QCOMPARE(childDecisionHash, QString::fromLatin1(decision.decisionHash()));
+    // The child really did render (not e.g. copy a file).
+    QVERIFY(QFileInfo::exists(childOutput));
+    QVERIFY(QFileInfo(childOutput).size() > 0);
+    QVERIFY(childOutput != firstOutput);
 }
 
 void ProjectTest::mainWindowShowsReframeOutputs()

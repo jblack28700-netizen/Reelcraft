@@ -15,6 +15,7 @@
 #include "media/MediaDurationProbe.h"
 #include "playback/Player.h"
 #include "reframe/ReframeCommandRunner.h"
+#include "reframe/ReframePipeline.h"
 
 class QTimer;
 class ViewportState;
@@ -37,6 +38,23 @@ using ReframePreviewDecoder =
 // source so playback orchestration stays model-free.
 using PlaybackSourceFactory = std::function<std::unique_ptr<FrameSource>(
     const ReframeCommandOutcome &record, QString *error)>;
+
+// The application-level replay renderer. It defaults to
+// ReframePipeline::renderPlan, which needs only a validated plan and a source
+// path: replay uses no detector, no frame provider and no parser. Tests inject a
+// fake so replay orchestration stays model-free.
+using ReframeReplayRenderer = std::function<ReframePipeline::Result(
+    const ReframePlan &plan, const QString &sourcePath,
+    const QString &outputPath)>;
+
+// The outcome of one replay attempt. On success newRecordIndex identifies the
+// newly appended record; the replayed source record is never modified.
+struct ReplayResult
+{
+    bool ok = false;
+    int newRecordIndex = -1;
+    QString error;
+};
 
 class Application : public QObject
 {
@@ -163,6 +181,37 @@ public slots:
     // persisted additively in the project.
     QList<ReframeCommandOutcome> reframeOutputs() const;
 
+    // --- edit-decision replay (Objective 16) --------------------------------
+    // Re-renders the indexed persisted record from its EditDecision, without
+    // re-parsing the instruction and without any perception provider: the
+    // decision's stored plan is executed through the existing
+    // ReframePipeline::renderPlan(). No detector, no provider, no parser.
+    //
+    // Output-path policy. Replay writes ONLY to the caller-supplied path:
+    //   - an empty path is rejected (replay never invents an output location);
+    //   - a path equal to the decision's source media is rejected, so replay can
+    //     never overwrite the original media;
+    //   - a path that already exists is refused outright, with the error
+    //     "output path already exists: <path>; delete it or choose a fresh
+    //     path". The existing file is not touched, truncated or partially
+    //     written, and no record is appended. There is currently NO override for
+    //     this: a caller that means to replace a file must delete it or choose a
+    //     fresh path. A future explicit allowOverwrite option is recorded in
+    //     Decision 033 as a forward extension and is NOT implemented.
+    //
+    // Validation is completed in full before any render is attempted: the index,
+    // the presence of a decision, and the source fingerprint (a missing file and
+    // a changed file are distinct, separately reported failures). On success a
+    // NEW record is appended through the same append gate and signal as the
+    // command path; the original record is left byte-identical, and the new
+    // record carries the SAME decision (same decisionHash and createdUtc) with
+    // the new output path.
+    ReplayResult replayEditDecision(int index, const QString &outputPath);
+
+    // Test/DI seam: the replay renderer defaults to ReframePipeline::renderPlan.
+    void setReframeReplayRenderer(const ReframeReplayRenderer &renderer);
+    void resetReframeReplayRenderer();
+
     // Replaceable, optional media duration probe used to default a whole-clip
     // range (a zero start/end). The application owns a built-in ffprobe probe;
     // this override is non-owned. Passing null restores the built-in probe.
@@ -286,6 +335,10 @@ private:
     QString defaultReframeOutputPath(const MediaItem &media) const;
     QJsonArray reframeOutputsJson() const;
     void restoreReframeOutputsFromJson(const QJsonArray &outputs);
+    // The single append/emit path for render records, shared by the command path
+    // and by replayEditDecision so records are only ever persisted through one
+    // gate (Objective 16).
+    void appendReframeOutput(const ReframeCommandOutcome &outcome);
 
     QJsonArray mediaJson() const;
     void restoreMediaFromJson(const QJsonArray &media);
@@ -315,6 +368,7 @@ private:
     SpeakerEvidenceProvider *m_speakerProvider = nullptr;
     QList<QPair<QString, QString>> m_speakerBindings;
     QList<ReframeCommandOutcome> m_reframeOutputs;
+    ReframeReplayRenderer m_replayRenderer;
 
     // Objective 12: creator "me" selection and render preview.
     CreatorTargetSelection m_creatorSelection;

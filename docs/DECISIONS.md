@@ -1022,3 +1022,93 @@ Explicitly out of scope: new detection/tracking/re-identification/speaker system
 - This is a composition fix in the existing intent parser, not a new natural-language architecture.
 - A temporal clause's time ranges are stripped before camera/target extraction, so both halves of a compound "and" command survive; the operation keyword is retained so "keep <subject> centered" still parses.
 - The default applicability rule is whole-retained-range; a camera instruction that supplies its own separate time interval is unsupported and fails honestly rather than being silently dropped.
+
+---
+
+# Decision 033 — Persisted, Versioned Edit Decisions (EditDecision)
+
+**Status:** Accepted (2026-09-17, 360 Reframing Objective 16; human-selected scope)
+
+## Context
+
+The 360 command path produces a render from a natural-language instruction, and Objective 10 persists each attempt as a structured `ReframeCommandOutcome` record. That record is an *audit* record, not a *reproduction* record: it stores the instruction, the source reference, the effective ranges, the output specification and the frame count, but it does **not** store the resolved `ReframePlan` (camera keyframes, retained segments). The plan is computed inside `ReframeCommandRunner::prepare()`, used for the render, and then discarded by the application.
+
+The consequence is that a persisted render can only be reproduced by re-running the original command, which requires re-parsing the natural-language instruction and, for any subject reference ("follow me", "follow the speaker"), re-running the whole perception stack — detector, tracker, identity/selection, appearance, speaker providers. A later render is therefore only as reproducible as those replaceable providers are stable, and it cannot be reproduced at all if a provider is unavailable.
+
+Objective 16 closes that gap with a persisted, versioned `EditDecision` artifact that is sufficient on its own to reproduce a render.
+
+## Decisions
+
+- **The artifact is the resolved decision, not the instruction.** `app/reframe/EditDecision.{h,cpp}` stores the media the decision was made against (id, path, fingerprint), the already-resolved `ReframePlan` verbatim, the originating instruction (provenance only), and a creation timestamp. Because the plan already contains concrete camera keyframes, retained segments and the output specification, replay requires no natural-language parsing and no perception provider. The instruction is never re-parsed.
+
+- **It embeds in the existing outcome record; no parallel pipeline, store, or file format.** The decision is written as an additive `editDecision` object inside each existing `reframeOutputs` record, so it reuses the project's existing additive-section persistence, the existing `Application` save/open path, and the existing `ReframeCommandOutcome` JSON round trip. Replay reuses the existing renderer through `ReframePipeline::renderPlan()` — the entry point that already renders an already-validated plan. Nothing new renders, stores, or migrates data.
+
+- **Original media is referenced, never touched.** A decision stores only `mediaId` (the deterministic id `MediaItem` derives from the canonical path), the path, and a fingerprint. Replay opens the source read-only; no code path in this feature writes to source media.
+
+- **`Project::CurrentSchemaVersion` stays 3; the artifact's own `schemaVersion` is the compatibility gate.** Adding a field inside the already-opaque `reframeOutputs` array does not change which top-level project sections exist, so a project schema bump would signal a change that has not occurred and would make older builds refuse a project they can read perfectly well (they simply ignore `editDecision`). `EditDecision::CurrentSchemaVersion` (1) is the real gate, checked by the artifact loader. Precedent: `activeMediaId` was added additively without a bump (Decision 027 notes `reframeOutputs` "becomes 3"; the `media` section had produced 2).
+
+- **The loader refuses to mis-parse.** `EditDecision::readFromJsonObject()` fails with a descriptive error when `schemaVersion` is missing, non-numeric, `<= 0`, or greater than `CurrentSchemaVersion`; when the creation time or source reference is missing/malformed; when the plan is absent or fails `ReframePlan::isValid()`; or when a present `decisionHash` disagrees with the recomputed digest. A refusal never writes a partially-parsed artifact into the caller's output object. An unknown version is refused outright rather than parsed on the assumption that the layout is compatible.
+
+- **The digest rule is fixed and precise.** `decisionHash` is the lowercase-hex SHA-256 over the **compact** JSON encoding of the decision payload *with the `decisionHash` key removed*; `createdUtc` **is** included. Key order is Qt's deterministic sorted `QJsonObject` order, so the digest is stable across processes, which is what makes it usable for diffs, integrity checks on load, and replay comparison.
+
+- **An absent `decisionHash` is tolerated; a wrong one is fatal.** The digest is derived data, not authoritative: recomputing it is always possible and costs nothing, so its absence is not a compatibility signal and does not justify rejecting an otherwise well-formed decision, while a digest that is *present and disagreeing* is positive evidence of tampering or corruption and must fail.
+
+- **Timestamp quantization is applied in three places, and all three must be preserved.** `MediaItem` holds the source modification time in memory at full filesystem resolution (typically microseconds) but serializes it as ISO-8601 **with milliseconds**; `QFileInfo` reports full resolution. Comparing a stored value against a live one therefore reports a spurious *"the source file has changed"* after every save/load cycle, and replay would refuse valid decisions. `EditDecision` therefore quantizes the modification time to **UTC milliseconds in all three places**: on record (`fromPlan`), on load (`readFromJsonObject`), and on comparison (`checkSource`). Any future change that touches `EditDecision` or `MediaItem` serialization **must preserve this triple application**; dropping or partially applying it silently breaks reproducibility rather than failing loudly.
+
+- **Record-load failure policy: LENIENT-RECORD (decided explicitly).** When `ReframeCommandOutcome::readFromJsonObject()` encounters an `editDecision` it cannot load, the **record still loads**; the decision is simply not available. The record reports `hasEditDecision() == false` and a non-empty `editDecisionError()` explaining why, and the unreadable `editDecision` JSON is **preserved verbatim** so that re-saving the project cannot destroy data this build does not understand (a newer build may still interpret it).
+  - *Reasoning.* The two objects have different truth status. The record is a **historical fact**: that render was produced, and its output file exists on disk. Failing the whole record would delete a completed render from the creator's list, and would make opening a project in an older build silently lose entries — the same silent-loss failure the strict loader exists to prevent. The decision, by contrast, is a **derived instruction**: if it cannot be trusted it must not be guessed, and replay must refuse honestly. Lenient-record + strict-decision satisfies both, and is consistent with the project's existing stance that records are preserved and degradation is surfaced (media records are never removed when a file becomes unavailable).
+  - *Surfacing.* Because the record is kept, the failure must not be silent: `Application::restoreReframeOutputsFromJson()` counts records whose decision failed to load and reports them through the existing `backgroundCompleted` status channel on project open.
+
+- **Known limitation: a decision is only persisted where a record is.** `Application::runReframeCommandTo()` only appends an outcome (and therefore only persists a decision) when the command reached a **non-empty output path**. Early application-state and validation failures — no project, no active media, unavailable media file, empty instruction, missing output directory, output path equal to the source — produce a user-visible failure outcome but **no persisted record and no decision**. Such a command cannot be replayed from the project, because nothing about it was stored.
+
+- **Forward constraint for Objective 17+: persisted decisions are immutable.** A persisted `EditDecision` is a historical record of a decision that was actually executed and must never be mutated in place. A revision — a different camera, a different range, a different output specification — is expressed as a **new decision that references the prior one** (lineage), preserving both the original artifact and the fact that it was superseded. Any future editing, revision, or undo/redo feature must be built on new-decision-with-lineage rather than mutation, or the reproducibility guarantee this artifact exists to provide is lost.
+- **Reproducibility claim:** same decision + same source -> same decoded frames,
+  independent of ffmpeg build. Byte-identical container equality is asserted in
+  this environment and may differ across ffmpeg builds; that is a delivery-layer
+  concern (Obj22), not a decision-layer one.
+
+- **Enforced output-path refusals, all before any render.** Replay validates the
+  output path in full before the encoder can be invoked, and refuses three cases:
+  an empty path; a path equal to the decision's source media (so replay can never
+  overwrite the original media); and a path that already exists. Each refusal
+  returns `ReplayResult{ ok = false }` with a descriptive error, appends no
+  record, emits no `reframeOutputsChanged`, leaves any existing file
+  byte-identical, and never reaches the renderer.
+
+- **Forward extension, NOT implemented: an explicit `allowOverwrite` option.**
+  Replay currently refuses any output path that already exists, with the error
+  `"output path already exists: <path>; delete it or choose a fresh path"`, and
+  the existing file is left untouched (not truncated, not partially written) with
+  no record appended. There is no override. A future `allowOverwrite` flag --
+  for callers that explicitly intend to replace an existing output -- is recorded
+  here as a possible extension, so that the refusal reads as a deliberate default
+  rather than an unfinished capability. It is **not** built in Objective 16.
+
+
+- Verified results at completion (2026-09-17): the model-free artifact tests, the
+  record-integration and back-compat tests, the decision-attachment tests, the
+  same-process replay equivalence test, and the fresh-process replay test all pass.
+  Full suite: **401 passed / 0 failed / 8 skipped**. The 8th skip is the child-only
+  slot `replayFreshProcessChild`, which is driven by its parent
+  (`replayFreshProcessReproducesRender`) and intentionally skips when run
+  standalone; the other 7 are the env-gated real-media integration tests.
+- Verification toolchain: the replay equivalence results above were obtained with
+  the **Debian** FFmpeg build inside the proot container, after the FFmpeg PATH leak
+  described in `docs/DEVELOPMENT_ENVIRONMENT.md` was diagnosed and fixed. The
+  frame-level reproducibility claim holds across FFmpeg builds; the container
+  byte-equality assertion is environment-specific, exactly as scoped in the
+  reproducibility claim above.
+- The replay path is **perception-free by construction and verified at object-code
+  level**: `EditDecision.o`'s external surface is Qt plus
+  `ReframePlan::readFromJsonObject`, and the disassembled call graph of both
+  `ReframePipeline::renderPlan` and the fresh-process child function contains no
+  `ReframeIntentParser`, `TargetDetector`, or provider symbol.
+
+## Consequences
+
+- A render produced by the 360 command path can be reproduced from persisted data alone: load the decision, verify the source fingerprint, render the stored plan. No natural-language parsing and no perception provider are on that path.
+- Source drift is detected rather than ignored: a missing file and a changed file are reported as **separate failure classes with separate messages**, never collapsed into one.
+- Model-free tests cover the artifact in isolation (round-trip determinism, digest rule and stability, schema rejection, invalid-plan rejection, tamper rejection, fingerprint classes, file save/load); the record-level tests cover a valid decision, a corrupt decision under the lenient-record policy, and pre-Objective-16 records that carry no decision at all.
+- Replay is verified end to end, including a genuinely fresh OS process that loads the artifact from disk and re-renders, confirming that reproduction does not depend on in-process state.
+- Decisions 017–032 are preserved. No new database, ORM, storage format, renderer, or parallel pipeline was introduced; `Project::CurrentSchemaVersion` remains 3.
+

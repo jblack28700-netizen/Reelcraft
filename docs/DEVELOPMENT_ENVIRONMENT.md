@@ -218,13 +218,75 @@ The primary development device is an aarch64 proot-distro Ubuntu environment. It
    - `/usr/lib/gcc/aarch64-linux-gnu/15/ld` -> `/usr/bin/ld`
 2. Invoke qmake with absolute compilers so the driver computes its prefix:
    `/usr/lib/qt6/bin/qmake QMAKE_CC=/usr/bin/gcc QMAKE_CXX=/usr/bin/g++`
-3. Provide FFmpeg explicitly (Termux build; not on the Debian PATH):
-   `export REELCRAFT_FFMPEG=/data/data/com.termux/files/usr/bin/ffmpeg`
+3. Provide FFmpeg from the **Debian** container, never the Termux build. Either
+   leave `REELCRAFT_FFMPEG` unset (PATH resolves `/usr/bin/ffmpeg`) or set it
+   explicitly to `/usr/bin/ffmpeg`. Pointing it at the Termux binary
+   (`/data/data/com.termux/files/usr/bin/ffmpeg`) was the original instruction
+   here and is a **known-bad configuration** - see the FFmpeg PATH Leak section below.
 
 Verified result on this device: application and test builds succeed; full suite 180 passed / 0 failed / 0 skipped; offscreen smoke SMOKE_EXIT=124.
 
 The `bash` tool is unavailable in this environment (the workspace-write bwrap sandbox backend cannot start). Builds/tests were run through the in-process code runtime with detached background processes. See KNOWN_ISSUES.md.
 
+## FFmpeg PATH Leak — REQUIRED Environment Setup (2026-09-17)
+
+**This is required setup, not an optional convenience.** Without it the real-render
+tests cannot complete reliably, and the failure mode looks like intermittency rather
+than a configuration error.
+
+### The leak
+
+Inside `proot-distro login ubuntu`, `PATH` ends with the Termux bin directory:
+
+```
+/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/data/data/com.termux/files/usr/bin
+```
+
+Debian had no `ffmpeg` of its own, so `ffmpeg` resolved to the **Termux
+(Android/bionic) build** at `/data/data/com.termux/files/usr/bin/ffmpeg`. Inside
+proot that binary had Debian/glibc libraries bound over `/lib`, an ABI mismatch:
+
+```
+$ ldd $(which ffmpeg)
+.../ffmpeg: error while loading shared libraries:
+    /lib/aarch64-linux-gnu/libm.so: invalid ELF header
+```
+
+The consequence was measured, not assumed: a **single** seek+decode cost
+**14,607 / 15,570 / 15,939 ms**, while `FrameExtractor` enforces a fixed
+`kProcessTimeoutMs = 15000` budget (`app/media/FrameExtractor.cpp`). The work sat
+exactly on the timeout boundary, so the same test passed or failed by a few hundred
+milliseconds run to run. This was a specific, diagnosable PATH leak with a specific
+fix — not environmental flakiness.
+
+### The fix
+
+```
+proot-distro login ubuntu -- bash -lc 'apt-get update && apt-get install -y ffmpeg'
+```
+
+After installation `ffmpeg` resolves to `/usr/bin/ffmpeg` (Debian 8.0.1,
+`built with gcc 15`), `ldd` is clean, and the same seek+decode measures
+**2,590-2,640 ms** — about 17% of the frame-extraction budget rather than straddling it.
+
+| Measurement | Termux ffmpeg (leaked) | Debian ffmpeg (fixed) |
+|---|---|---|
+| `which ffmpeg` | `/data/data/com.termux/files/usr/bin/ffmpeg` | `/usr/bin/ffmpeg` |
+| `ldd` | `invalid ELF header` | clean |
+| Single seek+decode | `14,600-15,900 ms | `2,590-2,640 ms |
+| Full suite runtime | `850,000-1,021,000 ms | `221,000-241,000 ms |
+| Full suite result | up to 14 failures | 0 failures |
+
+### Why it matters beyond the tests
+
+`scripts/build_and_test.sh` runs the suite under `timeout 240`. With the leaked
+Termux ffmpeg the suite took 850-1,021 s and **could never have finished inside that
+ceiling**, so the repository's own documented verification workflow was unviable for
+reasons unrelated to the product. With the Debian build the suite completes in
+`221-241 s and the script is viable again.
+
+Do **not** set `REELCRAFT_FFMPEG` to the Termux binary. Leave it unset (PATH
+resolves `/usr/bin/ffmpeg`) or set it explicitly to `/usr/bin/ffmpeg`.
 ## Optional Detector/Appearance Helper Runtimes — 2026-09-17
 
 The real target-detection and appearance helpers are optional and external; the C++ build links none of these runtimes, and the model-free unit suite requires none of them.

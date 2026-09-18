@@ -22,6 +22,7 @@ Application::Application(QObject *parent)
 {
     m_durationProbe = m_ownedDurationProbe.get();
     resetReframeCommandExecutor();
+    resetReframeReplayRenderer();
     resetReframePreviewDecoder();
     resetPlaybackSourceFactory();
 
@@ -516,16 +517,38 @@ bool Application::runReframeCommandTo(const QString &instruction, qint64 startMs
 
     // Every path (success and failure) records and emits the structured
     // outcome; nothing is silently substituted.
-    const auto finish = [this, &outcome]() {
+    // Objective 16 (Decision 033). These two values are prepared before finish()
+    // is defined so that the single finish path can attach the decision:
+    //   mediaSnapshot -- a BY-VALUE copy of the active media record, taken at
+    //     validation time. The decision must not hold a raw pointer into
+    //     m_mediaItems across the executor call.
+    //   executedPlan -- the decision stage's plan. It stays default-constructed
+    //     (and therefore invalid) on every early failure path, which correctly
+    //     produces no decision for those.
+    MediaItem mediaSnapshot;
+    ReframePlan executedPlan;
+
+    const auto finish = [this, &outcome, &mediaSnapshot, &executedPlan]() {
+        // Attach the decision whenever the decision stage produced a valid plan,
+        // including when the RENDER failed: the decision is the plan itself and
+        // the record is persisted either way, so replaying it later is
+        // meaningful. outcome.instruction is the single source of the instruction
+        // string -- it is not re-derived here.
+        if (executedPlan.isValid()) {
+            outcome.setEditDecision(EditDecision::fromPlan(
+                executedPlan, mediaSnapshot, outcome.instruction));
+        } else if (!outcome.outputPath.isEmpty()) {
+            outcome.setEditDecisionUnavailable(QStringLiteral(
+                "The decision stage produced no valid reframe plan, so no edit "
+                "decision is recorded for this render."));
+        }
+
         m_lastReframeOutcome = outcome;
         // Only commands that reached an output target are recorded/persisted;
         // early state/validation failures are reported but not stored as
         // renders. The record is the same structured outcome, so failures carry
         // their error.
-        if (!outcome.outputPath.isEmpty()) {
-            m_reframeOutputs.append(outcome);
-            emit reframeOutputsChanged(m_reframeOutputs);
-        }
+        appendReframeOutput(outcome);
         emit reframeCommandFinished(m_lastReframeOutcome);
         return m_lastReframeOutcome.ok;
     };
@@ -552,6 +575,9 @@ bool Application::runReframeCommandTo(const QString &instruction, qint64 startMs
     }
     outcome.sourceMediaId = media->id();
     outcome.sourcePath = media->path();
+    // By-value snapshot of the validated media record: the decision is built from
+    // this copy, so no pointer into m_mediaItems is held across the executor call.
+    mediaSnapshot = *media;
 
     // A zero start/end range means "the whole clip". Resolve it through the
     // replaceable duration-probe seam; when the duration is unknown the runner
@@ -617,6 +643,9 @@ bool Application::runReframeCommandTo(const QString &instruction, qint64 startMs
 
     const ReframeCommandResult result =
         m_commandExecutor(request, m_targetDetector, m_commandFrameProvider);
+
+    // The decision stage's plan, consumed by the finish path above.
+    executedPlan = result.plan;
 
     outcome.notes.append(result.notes);
     outcome.unresolvedReferences = result.unresolvedReferences;
@@ -870,6 +899,15 @@ QJsonArray Application::reframeOutputsJson() const
 void Application::restoreReframeOutputsFromJson(const QJsonArray &outputs)
 {
     m_reframeOutputs.clear();
+
+    // Objective 16 (Decision 033): the record-load policy for edit decisions is
+    // lenient-record. A record whose persisted decision cannot be read is still
+    // restored -- it is the historical fact that a render happened -- but the
+    // failure is never silent, so it is counted here and reported through the
+    // existing status channel once the whole list has been restored.
+    int unreadableDecisions = 0;
+    QString firstDecisionError;
+
     for (const QJsonValue &value : outputs) {
         if (!value.isObject()) {
             continue;
@@ -878,9 +916,152 @@ void Application::restoreReframeOutputsFromJson(const QJsonArray &outputs)
         QString error;
         if (ReframeCommandOutcome::readFromJsonObject(value.toObject(), &outcome,
                                                       &error)) {
+            if (!outcome.editDecisionError().isEmpty()) {
+                ++unreadableDecisions;
+                if (firstDecisionError.isEmpty()) {
+                    firstDecisionError = outcome.editDecisionError();
+                }
+            }
             m_reframeOutputs.append(outcome);
         }
     }
+
+    if (unreadableDecisions > 0) {
+        emit backgroundCompleted(
+            QStringLiteral("%1 persisted render record(s) carry an unreadable "
+                           "edit decision and cannot be replayed: %2")
+                .arg(unreadableDecisions)
+                .arg(firstDecisionError));
+    }
+}
+
+void Application::appendReframeOutput(const ReframeCommandOutcome &outcome)
+{
+    // The single append gate for render records, unchanged since Objective 10:
+    // only a record that reached an output target is persisted. Shared by the
+    // command finish path and by replayEditDecision.
+    if (outcome.outputPath.isEmpty()) {
+        return;
+    }
+    m_reframeOutputs.append(outcome);
+    emit reframeOutputsChanged(m_reframeOutputs);
+}
+
+void Application::setReframeReplayRenderer(const ReframeReplayRenderer &renderer)
+{
+    if (renderer) {
+        m_replayRenderer = renderer;
+    }
+}
+
+void Application::resetReframeReplayRenderer()
+{
+    m_replayRenderer = [](const ReframePlan &plan, const QString &sourcePath,
+                          const QString &outputPath) {
+        // The whole point of a persisted decision: a plan plus a source path.
+        // No detector, no frame provider, no natural-language parser.
+        return ReframePipeline::renderPlan(plan, sourcePath, outputPath, nullptr);
+    };
+}
+
+ReplayResult Application::replayEditDecision(int index, const QString &outputPath)
+{
+    ReplayResult result;
+
+    // (a) The record must exist.
+    if (index < 0 || index >= m_reframeOutputs.size()) {
+        result.error =
+            QStringLiteral("There is no such reframe output to replay.");
+        return result;
+    }
+
+    // (b) The record must carry a usable decision. A record whose decision failed
+    // to load reports its own reason; a legacy record reports plain absence.
+    const ReframeCommandOutcome &record = m_reframeOutputs.at(index);
+    if (!record.hasEditDecision()) {
+        result.error = record.editDecisionError().isEmpty()
+            ? QStringLiteral("This render record has no edit decision, so it "
+                             "cannot be replayed.")
+            : record.editDecisionError();
+        return result;
+    }
+
+    const EditDecision decision = record.editDecision();
+
+    // (c) The source must still be the recording's source. The two failure
+    // classes stay distinct: missing and changed mean different things.
+    QString sourceDetail;
+    const EditDecision::SourceStatus sourceStatus = decision.checkSource(&sourceDetail);
+    if (sourceStatus == EditDecision::SourceStatus::FileMissing
+        || sourceStatus == EditDecision::SourceStatus::FingerprintMismatch) {
+        result.error = QStringLiteral("Cannot replay: %1").arg(sourceDetail);
+        return result;
+    }
+
+    // (d) Output-path policy, resolved before anything is rendered.
+    const QString requested = outputPath.trimmed();
+    if (requested.isEmpty()) {
+        result.error = QStringLiteral("Replay requires an output path.");
+        return result;
+    }
+    const QString absoluteOutput = QFileInfo(requested).absoluteFilePath();
+    if (absoluteOutput
+        == QFileInfo(decision.source().path).absoluteFilePath()) {
+        result.error = QStringLiteral(
+            "The replay output path must differ from the source media path.");
+        return result;
+    }
+    if (QFileInfo::exists(absoluteOutput)) {
+        // Refused before any render is attempted: the existing file is not
+        // touched, truncated or partially written, and no record is appended.
+        result.error = QStringLiteral(
+                           "output path already exists: %1; delete it or choose a "
+                           "fresh path")
+                           .arg(absoluteOutput);
+        return result;
+    }
+
+    // Render the stored plan. The original media is only ever read.
+    const ReframePipeline::Result executed =
+        m_replayRenderer(decision.plan(), decision.source().path, absoluteOutput);
+    if (!executed.ok) {
+        result.error = executed.error.isEmpty()
+            ? QStringLiteral("The replay render failed.")
+            : executed.error;
+        return result;
+    }
+
+    // A NEW record. The original stays byte-identical; this copy carries the
+    // SAME decision (same decisionHash, same createdUtc) and the new output path.
+    ReframeCommandOutcome replayed;
+    replayed.ok = true;
+    replayed.instruction = record.instruction;
+    replayed.sourceMediaId = record.sourceMediaId;
+    replayed.sourcePath = record.sourcePath;
+    replayed.outputPath = absoluteOutput;
+    replayed.startMs = record.startMs;
+    replayed.endMs = record.endMs;
+    replayed.outputWidth = record.outputWidth;
+    replayed.outputHeight = record.outputHeight;
+    replayed.outputFps = record.outputFps;
+    replayed.frameCount = executed.frameCount;
+    replayed.temporalSegments = record.temporalSegments;
+    replayed.notes = record.notes;
+    replayed.notes.append(
+        QStringLiteral("Replayed from the recorded edit decision."));
+    replayed.setEditDecision(decision);
+
+    const int sizeBefore = m_reframeOutputs.size();
+    appendReframeOutput(replayed);
+    if (m_reframeOutputs.size() == sizeBefore) {
+        result.error = QStringLiteral(
+            "The replay produced no output path, so no record was appended.");
+        return result;
+    }
+
+    result.ok = true;
+    result.newRecordIndex = m_reframeOutputs.size() - 1;
+    return result;
 }
 
 int Application::playbackIntervalMsForFps(double fps) const

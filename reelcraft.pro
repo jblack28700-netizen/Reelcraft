@@ -26,6 +26,7 @@ SOURCES += \
     app/ui/ViewerWidget.cpp \
     app/reframe/CameraKeyframe.cpp \
     app/reframe/CameraPath.cpp \
+    app/reframe/EditDecision.cpp \
     app/reframe/FfmpegSeekFrameProvider.cpp \
     app/reframe/ReframeCommandRunner.cpp \
     app/reframe/ReframeIntent.cpp \
@@ -79,6 +80,7 @@ HEADERS += \
     app/ui/ViewerWidget.h \
     app/reframe/CameraKeyframe.h \
     app/reframe/CameraPath.h \
+    app/reframe/EditDecision.h \
     app/reframe/FfmpegSeekFrameProvider.h \
     app/reframe/ReframeCommandRunner.h \
     app/reframe/ReframeFrameProvider.h \

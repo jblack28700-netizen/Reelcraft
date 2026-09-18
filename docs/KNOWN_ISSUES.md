@@ -226,14 +226,14 @@ Make technology decisions incrementally based on documented requirements, testin
 
 ### Status
 
-Open — environment limitation, not a product defect.
+Partly resolved — the FFmpeg PATH leak is RESOLVED (2026-09-17); the GCC driver prefix workaround and the unavailable bash sandbox remain environment limitations, not product defects.
 
 ### Description
 
 On the current aarch64 proot/Termux development device:
 
 - The Debian GCC 15 driver could not locate `cc1`/`cc1plus` (installed under `/usr/libexec/gcc/...`) or `ld` when invoked as bare `g++`, because it computed an empty/relative install prefix from `argv[0]`. It was repaired non-destructively by symlinking `cc1`, `cc1plus`, and `ld` into `/usr/lib/gcc/aarch64-linux-gnu/15/` and invoking `/usr/bin/g++` (absolute path). Builds must pass `QMAKE_CC=/usr/bin/gcc QMAKE_CXX=/usr/bin/g++`.
-- FFmpeg is not on the Debian PATH; the Termux build is used via `REELCRAFT_FFMPEG=/data/data/com.termux/files/usr/bin/ffmpeg`.
+- **RESOLVED (2026-09-17) — FFmpeg PATH leak.** Debian had no `ffmpeg` of its own, and the proot `PATH` ends with the Termux bin directory, so `ffmpeg` resolved to the Android/bionic build and was loaded against Debian glibc (`/lib/aarch64-linux-gnu/libm.so: invalid ELF header`). A single seek+decode cost `14,600-15,939 ms` against `FrameExtractor`'s fixed 15,000 ms budget, so real-render tests passed or failed by a few hundred milliseconds run to run. Fixed by installing the Debian ffmpeg (`apt-get install -y ffmpeg`): `which ffmpeg` is now `/usr/bin/ffmpeg`, `ldd` is clean, a seek+decode costs `2,590-2,640 ms`, and the suite runs in `221-241 s` instead of 850-1,021 s. This is now REQUIRED environment setup — see `docs/DEVELOPMENT_ENVIRONMENT.md`, section FFmpeg PATH Leak.
 - The `bash` tool is unavailable: the workspace-write sandbox backend (bwrap) cannot start on this host, and escalation to `danger-full-access` was declined. Inspection, builds, and tests were performed through the in-process code runtime and detached background processes only.
 
 ### Impact
@@ -242,7 +242,7 @@ Build/test commands must set the compiler and FFmpeg environment explicitly. She
 
 ### Planned Resolution
 
-Re-verify the standard `scripts/build_and_test.sh` workflow on a host with a working sandbox and a correctly installed GCC; record the result in `DEVELOPMENT_ENVIRONMENT.md`. The GCC symlinks are reversible.
+FFmpeg: DONE — the PATH leak is fixed and `scripts/build_and_test.sh` is viable again (suite `221-241 s` against its `timeout 240` ceiling); see `docs/DEVELOPMENT_ENVIRONMENT.md`. Remaining: re-verify the workflow on a host with a working sandbox and a correctly installed GCC. The GCC symlinks are reversible.
 
 ---
 
@@ -452,3 +452,65 @@ When an issue is resolved, preserve its record and mark it resolved with the ver
 
 - Offscreen QPA plugin reports `This plugin does not support propagateSizeHints()` during headless smoke test; not observed under a normal windowing platform.
 - `qmake` is not on the default PATH in the current environment; use `/usr/lib/qt6/bin/qmake`.
+
+# Issue — Unbounded edit-decision accumulation in the project file (2026-09-17)
+
+### Status
+
+Open — recorded limitation, not a defect (Decision 033).
+
+### Description
+
+Every command that reaches an output target appends a `ReframeCommandOutcome` to the
+project's `reframeOutputs` array, and since Objective 16 each such record also carries a
+full `EditDecision` (source reference, the resolved `ReframePlan` with all camera
+keyframes and retained segments, plus digests). There is **no retention policy**: nothing
+prunes, compacts, or expires records, so a project file grows with every render.
+Replaying a render appends another record carrying another copy of the same decision.
+
+### Impact
+
+Project files grow monotonically with editing activity. For long sessions this is a
+project-file size and load-time concern rather than a correctness concern: the artifact is
+small relative to the media it references, and growth corrupts nothing.
+
+### Planned Resolution
+
+A future objective should define a retention/compaction policy — for example pruning
+superseded replay records, or storing a decision once and referencing it. Recorded as a
+known limitation in Decision 033; no retention policy is implemented in Objective 16.
+
+---
+
+# Issue — Intentional skips in the automated suite (2026-09-17)
+
+### Status
+
+By design — not broken or disabled tests.
+
+### Description
+
+The automated suite reports skips that are deliberate:
+
+- **7 env-gated real-media integration tests** (`realDetectorIntegration`,
+  `realUserCommandIntegration`, `realApplicationCommandIntegration`,
+  `realTemporalEditIntegration`, `realCompoundCommandIntegration`,
+  `realSpeakerCommandIntegration`, `realReframePlaybackIntegration`) — each skips unless
+  its documented `REELCRAFT_*` inputs are configured, and each prints the exact variables
+  it needs.
+- **1 child-only slot**: `replayFreshProcessChild` is the fresh-process half of the
+  Objective 16 replay verification, driven by its parent
+  `replayFreshProcessReproducesRender`, which launches this same test binary with a single
+  QtTest function name plus `REELCRAFT_TEST_REPLAY_*` environment variables. Run
+  standalone it skips with the message 'Child-only test ... not runnable standalone.' An
+  explicit skip was chosen deliberately over a no-op test that would silently pass.
+
+### Impact
+
+A clean run reports `401 passed / 0 failed / 8 skipped`. The skip count is 7 + 1 by
+design; a reader expecting 7 should not read the 8th as a regression.
+
+### Planned Resolution
+
+None required. Revisit if a standalone child invocation is ever added.
+
