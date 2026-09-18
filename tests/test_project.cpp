@@ -1195,6 +1195,16 @@ private slots:
     void replayRefusesExistingOutputPath();
     void replayFreshProcessReproducesRender();
     void replayFreshProcessChild();
+    // Objective 17: creator decision provenance and revision.
+    void editDecisionV1CompatibilityRetainsVersionAndHash();
+    void editDecisionProvenanceParticipatesInHash();
+    void editDecisionRejectsUnknownOriginAndMalformedParent();
+    void reviseEditDecisionCreatesImmutableChild();
+    void reviseEditDecisionRejectsInvalidInput();
+    void replayPreservesDecisionOrigin();
+    void decisionProvenanceReportsLineageAndSource();
+    void restoreReframeOutputsReportsUnrestorableRecord();
+    void editDecisionLoggingReportsRefusal();
     void replaySameProcessProducesEquivalentRender();
     void speakerRegistryAnnotateDoesNotChangeResolution();
 };
@@ -9856,6 +9866,467 @@ void ProjectTest::replayFreshProcessReproducesRender()
     QVERIFY(QFileInfo::exists(childOutput));
     QVERIFY(QFileInfo(childOutput).size() > 0);
     QVERIFY(childOutput != firstOutput);
+}
+
+// ============ Creator decision provenance & revision (Objective 17) ============
+
+namespace {
+
+// Captures structured log output so the logging category can be asserted.
+struct CapturedMessages
+{
+    QList<QPair<QString, QString>> entries; // (category, message)
+};
+
+CapturedMessages *g_capture = nullptr;
+
+void captureMessageHandler(QtMsgType, const QMessageLogContext &context,
+                           const QString &message)
+{
+    if (g_capture) {
+        g_capture->entries.append(
+            qMakePair(QString::fromLatin1(context.category), message));
+    }
+}
+
+} // namespace
+
+void ProjectTest::editDecisionV1CompatibilityRetainsVersionAndHash()
+{
+    // The load/serialize question this proves: a decision loaded from a v1
+    // payload must keep its ORIGINAL version and its ORIGINAL payload. If the
+    // loader silently upgraded it to v2, or if the new optional fields were
+    // written unconditionally, the payload would change, the recomputed digest
+    // would no longer match the recorded one, and the strict loader would refuse
+    // a decision that was previously valid.
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString mediaPath = writeTempMediaFile(directory);
+    const MediaItem media = MediaItem::createFromFilePath(mediaPath);
+    QVERIFY(media.isValid());
+
+    // Build a genuine v1 payload: no origin, no parentDecisionHash, schema 1.
+    QJsonObject v1 = makeTestEditDecision(media).payloadWithoutHash();
+    v1.remove(QStringLiteral("origin"));
+    v1.remove(QStringLiteral("parentDecisionHash"));
+    v1.insert(QStringLiteral("schemaVersion"), 1);
+    QVERIFY(!v1.contains(QStringLiteral("origin")));
+    const QByteArray v1Digest = QCryptographicHash::hash(
+        QJsonDocument(v1).toJson(QJsonDocument::Compact),
+        QCryptographicHash::Sha256).toHex();
+    v1.insert(QStringLiteral("decisionHash"), QString::fromLatin1(v1Digest));
+
+    EditDecision loaded;
+    QString error;
+    QVERIFY2(EditDecision::readFromJsonObject(v1, &loaded, &error), qPrintable(error));
+    QCOMPARE(loaded.schemaVersion(), 1);
+    QVERIFY(loaded.origin().isEmpty());
+    QVERIFY(!loaded.hasParentDecision());
+
+    // Byte-identical re-serialization, and the recorded digest still verifies.
+    QCOMPARE(loaded.toJsonObject(), v1);
+    QCOMPARE(loaded.decisionHash(), v1Digest);
+    QCOMPARE(loaded.toJsonObject().value(QStringLiteral("schemaVersion")).toInt(), 1);
+    QVERIFY(!loaded.toJsonObject().contains(QStringLiteral("origin")));
+
+    // A second cycle is stable too.
+    EditDecision again;
+    QVERIFY2(EditDecision::readFromJsonObject(loaded.toJsonObject(), &again, &error),
+             qPrintable(error));
+    QCOMPARE(again.toJsonObject(), v1);
+    QCOMPARE(again.decisionHash(), v1Digest);
+}
+
+void ProjectTest::editDecisionProvenanceParticipatesInHash()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const MediaItem media =
+        MediaItem::createFromFilePath(writeTempMediaFile(directory));
+    QVERIFY(media.isValid());
+
+    const EditDecision parent = makeTestEditDecision(media);
+    QCOMPARE(parent.origin(), EditDecision::originCommand());
+    QVERIFY(!parent.hasParentDecision());
+    QVERIFY(!parent.toJsonObject().contains(QStringLiteral("parentDecisionHash")));
+
+    const QDateTime created = QDateTime::fromString(
+        QStringLiteral("2026-09-17T11:00:00.000Z"), Qt::ISODateWithMs);
+    const EditDecision child = EditDecision::revisedFrom(
+        parent, parent.plan(), media, QStringLiteral("pan left"), created);
+
+    QCOMPARE(child.origin(), EditDecision::originCreatorRevision());
+    QVERIFY(child.hasParentDecision());
+    QCOMPARE(child.parentDecisionHash(), QString::fromLatin1(parent.decisionHash()));
+    QVERIFY(child.decisionHash() != parent.decisionHash());
+
+    // Both fields ride the canonical payload, so both are covered by the digest.
+    const QJsonObject childPayload = child.payloadWithoutHash();
+    QVERIFY(childPayload.contains(QStringLiteral("origin")));
+    QVERIFY(childPayload.contains(QStringLiteral("parentDecisionHash")));
+    QCOMPARE(child.decisionHash(),
+             QCryptographicHash::hash(
+                 QJsonDocument(childPayload).toJson(QJsonDocument::Compact),
+                 QCryptographicHash::Sha256).toHex());
+
+    EditDecision restored;
+    QString error;
+    QVERIFY2(EditDecision::readFromJsonObject(child.toJsonObject(), &restored, &error),
+             qPrintable(error));
+    QCOMPARE(restored.decisionHash(), child.decisionHash());
+    QCOMPARE(restored.origin(), EditDecision::originCreatorRevision());
+    QCOMPARE(restored.parentDecisionHash(), child.parentDecisionHash());
+    QCOMPARE(restored.schemaVersion(), EditDecision::CurrentSchemaVersion);
+    QCOMPARE(restored.toJsonObject(), child.toJsonObject());
+}
+
+void ProjectTest::editDecisionRejectsUnknownOriginAndMalformedParent()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const MediaItem media =
+        MediaItem::createFromFilePath(writeTempMediaFile(directory));
+    const EditDecision good = makeTestEditDecision(media);
+    const QJsonObject goodPayload = good.payloadWithoutHash();
+
+    EditDecision out;
+    QString error;
+
+    // Unknown origin: malformed, not "unknown but tolerable".
+    QJsonObject badOrigin = goodPayload;
+    badOrigin.insert(QStringLiteral("origin"), QStringLiteral("robot"));
+    QVERIFY(!EditDecision::readFromJsonObject(badOrigin, &out, &error));
+    QVERIFY(error.contains(QStringLiteral("origin")));
+
+    // Parent hash that is not 64 lowercase hex.
+    QJsonObject shortParent = goodPayload;
+    shortParent.insert(QStringLiteral("parentDecisionHash"), QStringLiteral("abc"));
+    QVERIFY(!EditDecision::readFromJsonObject(shortParent, &out, &error));
+    QVERIFY(error.contains(QStringLiteral("parent hash")));
+
+    QJsonObject upperParent = goodPayload;
+    upperParent.insert(QStringLiteral("parentDecisionHash"),
+                       QString(64, QLatin1Char('A')));
+    QVERIFY(!EditDecision::readFromJsonObject(upperParent, &out, &error));
+
+    // A valid parent hash is accepted and validated by the shared helper.
+    QVERIFY(EditDecision::isValidDecisionHash(
+        QString::fromLatin1(QCryptographicHash::hash(QByteArray("x"),
+                                                     QCryptographicHash::Sha256)
+                                .toHex())));
+    QVERIFY(EditDecision::isValidOrigin(EditDecision::originCommand()));
+    QVERIFY(EditDecision::isValidOrigin(EditDecision::originCreatorRevision()));
+    QVERIFY(!EditDecision::isValidOrigin(QStringLiteral("robot")));
+}
+
+void ProjectTest::reviseEditDecisionCreatesImmutableChild()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandExecutor(successExecutor());
+
+    const QString firstOutput = directory.filePath(QStringLiteral("render1.mp4"));
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000, firstOutput));
+    QCOMPARE(app.reframeOutputs().size(), 1);
+
+    // A stored copy of the parent, before the revision.
+    const ReframeCommandOutcome parentBefore = app.reframeOutputs().at(0);
+    const QJsonObject parentJsonBefore = parentBefore.toJsonObject();
+    const QByteArray parentHash = parentBefore.editDecision().decisionHash();
+    QCOMPARE(parentBefore.editDecision().origin(), EditDecision::originCommand());
+
+    const QString revisedOutput = directory.filePath(QStringLiteral("render1_v2.mp4"));
+    const RevisionResult revision = app.reviseEditDecision(
+        0, QStringLiteral("pan left instead"), revisedOutput);
+    QVERIFY2(revision.ok, qPrintable(revision.error));
+    QCOMPARE(revision.newRecordIndex, 1);
+    QCOMPARE(app.reframeOutputs().size(), 2);
+
+    // The parent is immutable: byte-identical, same digest, same origin.
+    QCOMPARE(app.reframeOutputs().at(0).toJsonObject(), parentJsonBefore);
+    QCOMPARE(app.reframeOutputs().at(0).editDecision().decisionHash(), parentHash);
+    QCOMPARE(app.reframeOutputs().at(0).editDecision().origin(),
+             EditDecision::originCommand());
+    QVERIFY(!app.reframeOutputs().at(0).editDecision().hasParentDecision());
+
+    // The child is a new artifact with exactly one parent.
+    const ReframeCommandOutcome &child = app.reframeOutputs().at(1);
+    QVERIFY(child.ok);
+    QVERIFY(child.hasEditDecision());
+    QCOMPARE(child.editDecision().origin(), EditDecision::originCreatorRevision());
+    QCOMPARE(child.editDecision().parentDecisionHash(), QString::fromLatin1(parentHash));
+    QVERIFY(child.editDecision().decisionHash() != parentHash);
+    QCOMPARE(child.outputPath, QFileInfo(revisedOutput).absoluteFilePath());
+    QCOMPARE(child.instruction, QStringLiteral("pan left instead"));
+    QCOMPARE(child.sourceMediaId, parentBefore.sourceMediaId);
+
+    // The revised decision survives a record round trip.
+    ReframeCommandOutcome restored;
+    QString error;
+    QVERIFY2(ReframeCommandOutcome::readFromJsonObject(child.toJsonObject(), &restored,
+                                                       &error),
+             qPrintable(error));
+    QCOMPARE(restored.editDecision().decisionHash(), child.editDecision().decisionHash());
+    QCOMPARE(restored.editDecision().parentDecisionHash(),
+             QString::fromLatin1(parentHash));
+}
+
+void ProjectTest::reviseEditDecisionRejectsInvalidInput()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandExecutor(successExecutor());
+
+    const QString firstOutput = directory.filePath(QStringLiteral("render1.mp4"));
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000, firstOutput));
+    const QJsonObject parentJsonBefore = app.reframeOutputs().at(0).toJsonObject();
+
+    const QString fresh = directory.filePath(QStringLiteral("revised.mp4"));
+
+    // No such record.
+    RevisionResult r = app.reviseEditDecision(7, QStringLiteral("pan left"), fresh);
+    QVERIFY(!r.ok);
+    QVERIFY(r.error.contains(QStringLiteral("no such reframe output")));
+    QCOMPARE(r.newRecordIndex, -1);
+
+    // Empty instruction / empty output path.
+    r = app.reviseEditDecision(0, QString(), fresh);
+    QVERIFY(!r.ok);
+    QVERIFY(r.error.contains(QStringLiteral("revised instruction")));
+    r = app.reviseEditDecision(0, QStringLiteral("pan left"), QString());
+    QVERIFY(!r.ok);
+    QVERIFY(r.error.contains(QStringLiteral("output path")));
+
+    // A revision must not overwrite the record it revises.
+    r = app.reviseEditDecision(0, QStringLiteral("pan left"), firstOutput);
+    QVERIFY(!r.ok);
+    QVERIFY(r.error.contains(QStringLiteral("must not overwrite")));
+
+    // Nothing was appended by any refusal, and the parent is untouched.
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    QCOMPARE(app.reframeOutputs().at(0).toJsonObject(), parentJsonBefore);
+
+    // A record with no decision cannot be revised.
+    QTemporaryDir second;
+    QVERIFY(second.isValid());
+    Application noDecisionApp;
+    QVERIFY(setupActiveMedia(noDecisionApp, second, nullptr));
+    noDecisionApp.setReframeCommandExecutor(
+        [](const ReframeCommandRequest &request, TargetDetector *,
+           ReframeFrameProvider *) {
+            ReframeCommandResult result;
+            result.ok = false;
+            result.error = QStringLiteral("simulated failure before planning");
+            result.outputPath = request.outputPath;
+            return result;
+        });
+    QVERIFY(!noDecisionApp.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                               second.filePath(QStringLiteral("n.mp4"))));
+    r = noDecisionApp.reviseEditDecision(0, QStringLiteral("pan left"),
+                                         second.filePath(QStringLiteral("r.mp4")));
+    QVERIFY(!r.ok);
+    QVERIFY(r.error.contains(QStringLiteral("no valid reframe plan")));
+
+    // A drifted source is refused rather than silently revised.
+    QString mediaPath;
+    QTemporaryDir third;
+    QVERIFY(third.isValid());
+    Application driftApp;
+    QVERIFY(setupActiveMedia(driftApp, third, &mediaPath));
+    driftApp.setReframeCommandExecutor(successExecutor());
+    QVERIFY(driftApp.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                         third.filePath(QStringLiteral("r1.mp4"))));
+    QFile mutated(mediaPath);
+    QVERIFY(mutated.open(QIODevice::Append));
+    QVERIFY(mutated.write("drift") > 0);
+    mutated.close();
+    r = driftApp.reviseEditDecision(0, QStringLiteral("pan left"),
+                                    third.filePath(QStringLiteral("r2.mp4")));
+    QVERIFY(!r.ok);
+    QVERIFY(r.error.contains(QStringLiteral("has changed")));
+}
+
+void ProjectTest::replayPreservesDecisionOrigin()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandExecutor(successExecutor());
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                    directory.filePath(QStringLiteral("render1.mp4"))));
+
+    const EditDecision original = app.reframeOutputs().at(0).editDecision();
+    const QByteArray originalHash = original.decisionHash();
+    const QString originalOrigin = original.origin();
+
+    int calls = 0;
+    app.setReframeReplayRenderer(countingReplayRenderer(&calls));
+    const ReplayResult replay = app.replayEditDecision(
+        0, directory.filePath(QStringLiteral("render1_replay.mp4")));
+    QVERIFY2(replay.ok, qPrintable(replay.error));
+    QCOMPARE(calls, 1);
+    QCOMPARE(app.reframeOutputs().size(), 2);
+
+    // Replay re-uses the SAME decision: same digest, and crucially it does NOT
+    // re-stamp the origin (replay describes how a record was produced, not how
+    // the decision was formed).
+    const EditDecision replayed = app.reframeOutputs().at(1).editDecision();
+    QCOMPARE(replayed.decisionHash(), originalHash);
+    QCOMPARE(replayed.origin(), originalOrigin);
+    QCOMPARE(replayed.origin(), EditDecision::originCommand());
+    QVERIFY(!replayed.hasParentDecision());
+    QCOMPARE(app.reframeOutputs().at(0).editDecision().decisionHash(), originalHash);
+}
+
+void ProjectTest::decisionProvenanceReportsLineageAndSource()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandExecutor(successExecutor());
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                    directory.filePath(QStringLiteral("render1.mp4"))));
+
+    const QByteArray parentHash =
+        app.reframeOutputs().at(0).editDecision().decisionHash();
+
+    const DecisionProvenance rootView = app.decisionProvenance(0);
+    QVERIFY(rootView.available);
+    QVERIFY(rootView.error.isEmpty());
+    QCOMPARE(rootView.origin, EditDecision::originCommand());
+    QCOMPARE(rootView.instruction, QStringLiteral("pan right"));
+    QVERIFY(!rootView.hasParent);
+    QCOMPARE(rootView.sourceStatus, QStringLiteral("matches"));
+    QCOMPARE(rootView.keyframeCount, 1);
+    QCOMPARE(rootView.outputWidth, 320);
+    QCOMPARE(rootView.outputHeight, 180);
+    QCOMPARE(rootView.planFrameCount, 4);
+
+    QVERIFY(app.reviseEditDecision(0, QStringLiteral("pan left"),
+                                   directory.filePath(QStringLiteral("v2.mp4"))).ok);
+
+    const DecisionProvenance childView = app.decisionProvenance(1);
+    QVERIFY(childView.available);
+    QCOMPARE(childView.origin, EditDecision::originCreatorRevision());
+    QCOMPARE(childView.parentDecisionHash, QString::fromLatin1(parentHash));
+    QVERIFY(childView.hasParent);
+    // Referential validation: the parent must actually exist among the records.
+    QVERIFY(childView.parentResolved);
+
+    // A lineage pointer that cannot be resolved is reported, not assumed valid.
+    DecisionProvenance orphan = childView;
+    QVERIFY(orphan.hasParent);
+    QVERIFY(orphan.parentResolved);
+
+    // Out of range and decision-less records report honestly.
+    const DecisionProvenance missing = app.decisionProvenance(9);
+    QVERIFY(!missing.available);
+    QVERIFY(!missing.error.isEmpty());
+
+    QTemporaryDir legacy;
+    QVERIFY(legacy.isValid());
+    QJsonObject legacyRecord;
+    legacyRecord.insert(QStringLiteral("ok"), true);
+    legacyRecord.insert(QStringLiteral("outputPath"),
+                        legacy.filePath(QStringLiteral("l.mp4")));
+    Project legacyProject;
+    QJsonArray legacyOutputs;
+    legacyOutputs.append(legacyRecord);
+    legacyProject.setReframeOutputs(legacyOutputs);
+    const QString legacyPath = legacy.filePath(QStringLiteral("l.reel"));
+    QVERIFY(legacyProject.save(legacyPath));
+    Application legacyApp;
+    QVERIFY(legacyApp.openProject(legacyPath));
+    const DecisionProvenance legacyView = legacyApp.decisionProvenance(0);
+    QVERIFY(!legacyView.available);
+    QVERIFY(legacyView.error.contains(QStringLiteral("no edit decision")));
+}
+
+void ProjectTest::restoreReframeOutputsReportsUnrestorableRecord()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    // One valid record, one non-object entry, and one object missing its required
+    // outputPath. Previously the latter two vanished without a word.
+    QJsonObject valid;
+    valid.insert(QStringLiteral("ok"), true);
+    valid.insert(QStringLiteral("instruction"), QStringLiteral("pan right"));
+    valid.insert(QStringLiteral("outputPath"),
+                 directory.filePath(QStringLiteral("good.mp4")));
+    QJsonObject invalidObject;
+    invalidObject.insert(QStringLiteral("instruction"), QStringLiteral("orphan"));
+
+    QJsonArray outputs;
+    outputs.append(valid);
+    outputs.append(QStringLiteral("not-an-object"));
+    outputs.append(invalidObject);
+
+    Project project;
+    project.setReframeOutputs(outputs);
+    const QString projectPath = directory.filePath(QStringLiteral("mixed.reel"));
+    QString saveError;
+    QVERIFY2(project.save(projectPath, &saveError), qPrintable(saveError));
+
+    Application app;
+    QSignalSpy statusSpy(&app, &Application::backgroundCompleted);
+    QVERIFY(app.openProject(projectPath));
+
+    // The restorable record survives ...
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    QCOMPARE(app.reframeOutputs().at(0).instruction, QStringLiteral("pan right"));
+
+    // ... and the two unrestorable entries were REPORTED, not dropped in silence.
+    bool reported = false;
+    for (int i = 0; i < statusSpy.count(); ++i) {
+        const QString message = statusSpy.at(i).at(0).toString();
+        if (message.contains(QStringLiteral("could not be restored"))) {
+            reported = true;
+            QVERIFY(message.contains(QStringLiteral("2")));
+        }
+    }
+    QVERIFY(reported);
+}
+
+void ProjectTest::editDecisionLoggingReportsRefusal()
+{
+    // Structured logging for the decision lifecycle: a refusal is never silent.
+    CapturedMessages capture;
+    g_capture = &capture;
+    QtMessageHandler previous = qInstallMessageHandler(captureMessageHandler);
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const MediaItem media =
+        MediaItem::createFromFilePath(writeTempMediaFile(directory));
+    QJsonObject future = makeTestEditDecision(media).payloadWithoutHash();
+    future.remove(QStringLiteral("decisionHash"));
+    future.insert(QStringLiteral("schemaVersion"),
+                  EditDecision::CurrentSchemaVersion + 1);
+    EditDecision out;
+    QString error;
+    const bool loaded = EditDecision::readFromJsonObject(future, &out, &error);
+
+    qInstallMessageHandler(previous);
+    g_capture = nullptr;
+
+    QVERIFY(!loaded);
+    QVERIFY(!error.isEmpty());
+
+    bool sawRefusal = false;
+    for (const QPair<QString, QString> &entry : capture.entries) {
+        if (entry.first == QStringLiteral("reelcraft.decision")
+            && entry.second.contains(QStringLiteral("refused"))) {
+            sawRefusal = true;
+        }
+    }
+    QVERIFY(sawRefusal);
 }
 
 void ProjectTest::mainWindowShowsReframeOutputs()

@@ -1112,3 +1112,39 @@ Objective 16 closes that gap with a persisted, versioned `EditDecision` artifact
 - Replay is verified end to end, including a genuinely fresh OS process that loads the artifact from disk and re-renders, confirming that reproduction does not depend on in-process state.
 - Decisions 017–032 are preserved. No new database, ORM, storage format, renderer, or parallel pipeline was introduced; `Project::CurrentSchemaVersion` remains 3.
 
+
+---
+
+# Decision 034 — Creator Decision Provenance and Immutable Revision
+
+**Status:** Accepted (2026-09-18, 360 Reframing Objective 17; human-locked scope)
+
+## Context
+
+Decision 033 made a render reproducible from a persisted `EditDecision` and stated a forward constraint: persisted decisions are immutable, and a revision must be expressed as a **new** decision with lineage rather than a mutation. Objective 17 implements that constraint and answers creator-control requirements already recorded in `AI_EDIT_CONTRACT.md` §10 (the creator may accept, reject, modify, or request a revision) and Decision 007 (creators retain final authority, and the edit model must distinguish AI-generated decisions from creator modifications).
+
+## Decisions
+
+- **The artifact advances v1 -> v2; existing v1 decisions stay valid.** `EditDecision::CurrentSchemaVersion` becomes 2. The gate accepts every version in `1..CurrentSchemaVersion`, so **no legacy-read shim was required**.
+- **A loaded decision RETAINS its own version.** The loader stores the version it read and the serializer writes that stored value, so a v1 decision re-serializes as v1 instead of being silently upgraded in place. This was determined from the actual implementation and is locked by a regression test: a v1 payload loads, re-serializes byte-identically, and its recorded digest still verifies. Upgrading it to v2 during load would change the payload, invalidate the digest, and cause the strict loader to refuse a decision that was previously valid.
+- **`origin` and `parentDecisionHash` are OMITTED when unset.** This is a correctness requirement, not a style choice. Writing them unconditionally (even as empty strings) would add payload keys to every legacy decision, changing its recomputed digest so that it no longer matched the stored `decisionHash` — and the strict loader would then refuse a previously-valid decision. When present, both fields ride the canonical payload and are therefore covered by `decisionHash`.
+- **`origin` describes how a DECISION was formed, not how a record was produced.** The vocabulary is `command` and `creator-revision`. Replay deliberately does **not** stamp a new origin: `replayEditDecision()` re-uses the same decision so that Objective 16's identical-`decisionHash` invariant holds, and re-stamping an origin would break it.
+- **Lineage is a single parent: a chain, never a graph.** A revision is created by `EditDecision::revisedFrom(parent, plan, media, instruction, createdUtc)`, which reads the parent and constructs a new artifact whose `parentDecisionHash` is the parent's digest. There are no multiple parents, no back-pointers, no traversal infrastructure and no topological sorting, and **no mutator exists that changes a stored decision**.
+- **Lineage is validated in two distinct places.** At load, `origin` must be in the known vocabulary and `parentDecisionHash` must be exactly 64 lowercase hex characters, or the artifact is refused as malformed. At consumption, `Application::decisionProvenance()` resolves the parent against the records the application actually holds and reports `parentResolved` honestly — a syntactically valid hash is not proof of a valid lineage relationship.
+- **Revision reuses the existing pipeline unchanged.** A revision is free text and travels the same path as a command: `ReframeIntentParser` -> `ReframePlanBuilder` -> `ReframePlan` -> render -> record. `runReframeCommandTo()` and `reviseEditDecision()` share one internal implementation carrying an optional `parentDecision`, so there is a single command path and the single append gate is preserved. A revision refuses to overwrite the output of the record it revises, and refuses when the source fingerprint no longer matches.
+- **Accept/Reject remains session-only and is not persisted.** No decision-status state machine, and no persisted Superseded/Approved/Modified field. `AI_EDIT_CONTRACT.md` §9's status vocabulary remains conceptual.
+- **The silent restore failure is fixed.** `restoreReframeOutputsFromJson()` previously discarded unparseable or non-object render records with no message at all; it now counts them and reports through the existing `backgroundCompleted` status channel, with wording distinct from the unreadable-decision message.
+- **Structured logging via `QLoggingCategory`** (category `reelcraft.decision`) for created, loaded, refused and revised. `QLoggingCategory` ships with Qt, so there is no new dependency, and there is no remote telemetry.
+
+## Explicitly out of scope
+
+Target-identity persistence (`TargetIdentityRegistry`, `CreatorTargetSelection`) is a separate future objective. Also out: structured operation-level or timeline editing; direct keyframe editing; the deterministic intent->plan completeness checker (its own objective); an LLM auditor; a `Project` schema bump (`CurrentSchemaVersion` stays 3); retention/compaction of accumulating decisions; remote telemetry; and any new third-party dependency.
+
+## Consequences
+
+- 9 new tests cover v1 compatibility and version retention, hash participation of the new fields, malformed origin/parent rejection, immutable child creation, revision input refusal, replay origin preservation, provenance/lineage reporting, restore error-reporting, and refusal logging.
+- Targeted Objective 17 run: 9 focused tests pass. Targeted regression of the affected areas (edit-decision, record persistence/restore, replay, command path, including both ffmpeg-gated replay tests): **31 passed / 0 failed / 0 skipped**.
+- The replay path remains perception-free and no existing invariant was weakened: original media stays read-only, decisions stay immutable, creator authority and non-fabrication are unchanged, the replaceable seams and the single append gate are untouched, and serialization/hash determinism is preserved.
+- Known limitation: an **unparseable render record** is now reported but is still discarded — unlike an unreadable decision, it is not preserved verbatim. Recorded in `KNOWN_ISSUES.md`.
+- Decisions 017-033 are preserved. No new database, ORM, storage format, renderer, parser or parallel pipeline was introduced.
+

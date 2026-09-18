@@ -693,3 +693,17 @@ Date: 2026-09-17
 - Verification also fixed a long-standing development-environment fault: a leaked Termux `PATH` entry made the Android ffmpeg run against Debian libraries, costing ~15 s per frame against a 15 s budget. With Debian's ffmpeg installed, a frame costs ~2.6 s, the suite runs in ~221-241 s instead of ~850-1,021 s, and `scripts/build_and_test.sh` is viable again. See `DEVELOPMENT_ENVIRONMENT.md`.
 - 19 new tests; full suite 401 passed / 0 failed / 8 skipped. Decision 033 records the scope and Definition of Done; Decisions 017-032 are preserved.
 
+
+## v0.2.54 — Creator Decision Provenance & Revision
+
+Date: 2026-09-18
+
+- A synced render decision can now record where it came from and be revised without ever altering the original. `EditDecision` gained an optional `origin` (`command` or `creator-revision`) and an optional single-parent `parentDecisionHash`; both are omitted when unset so that every existing v1 decision keeps its exact payload and digest.
+- The decision schema advanced from v1 to v2. Existing v1 decisions remain fully readable, and a loaded decision **keeps its own version** rather than being silently upgraded — a v1 decision re-serializes byte-identically and its recorded digest still verifies.
+- Creator revision is immutable by construction: a revision produces a **new** decision whose only parent is the decision it revises. There is no mutator for a stored decision, and the parent record is left byte-identical. Revisions use free text through the existing parser -> plan builder -> render pipeline; there is no structured operation or timeline editing.
+- New application surface: a revision method that refuses a bad record, an empty instruction, a colliding output path, or a source whose fingerprint has drifted; and a read-only provenance view exposing origin, instruction, lineage and source-fingerprint status, which resolves the recorded parent against the records actually held rather than trusting a well-formed hash.
+- Replay is unchanged and deliberately does not re-stamp provenance: a replayed record carries the same decision, preserving its digest and origin.
+- Fixed a silent failure: render records that could not be restored were previously discarded without any message. They are now reported through the application's status channel.
+- Added structured decision-lifecycle logging (created / loaded / refused / revised) using Qt logging categories, with no new dependency.
+- 9 new tests; targeted regression 31 passed / 0 failed / 0 skipped. Decision 034 records the scope, the version-retention and omission rules, and the out-of-scope list.
+

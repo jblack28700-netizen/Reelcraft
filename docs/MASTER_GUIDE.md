@@ -94,7 +94,7 @@ A development task is considered **done** only when:
 - **Phase 5 – AI Analysis:** Scene, speaker, object, and content analysis.
 - **Phase 6 – AI Editing:** Automated cutting and edit decisions.
 - **Phase 7 – B‑roll and Dialogue Intelligence:** Semantic B‑roll and speaker‑aware editing.
-- **Phase 8 – AI 360° Reframing:** Automatic virtual‑camera control. *(A deterministic 360 reframing engine — structured plan, camera path, renderer, and natural-language intent boundary — was implemented and verified 2026-09-17; automatic scene/target understanding is the next step.)* *(Objective 16, 2026-09-17: persisted, versioned edit decisions now make a render reproducible from the project alone — same decision plus same source yields the same decoded frames, with no parser and no perception provider on the replay path; see Decision 033.)*
+- **Phase 8 – AI 360° Reframing:** Automatic virtual‑camera control. *(A deterministic 360 reframing engine — structured plan, camera path, renderer, and natural-language intent boundary — was implemented and verified 2026-09-17; automatic scene/target understanding is the next step.)* *(Objective 16, 2026-09-17: persisted, versioned edit decisions now make a render reproducible from the project alone — same decision plus same source yields the same decoded frames, with no parser and no perception provider on the replay path; see Decision 033.)* *(Objective 17, 2026-09-18: persisted decisions now carry provenance and can be revised as new decisions with single-parent lineage, never by mutation — Decision 034.)*
 - **Phase 9 – AI Finishing:** Audio, color, captions, graphics, animations.
 - **Phase 10 – Conversational AI Editor:** Natural‑language editing and personalization.
 

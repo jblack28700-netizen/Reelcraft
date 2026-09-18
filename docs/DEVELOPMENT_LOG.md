@@ -1603,3 +1603,41 @@ Human-selected scope (Decision 033): a persisted, versioned `EditDecision` artif
 
 - Decision 033 recorded: the artifact, embedding in the existing record, schema 3 with per-artifact versioning, timestamp quantization (record/load/compare), lenient-record/strict-decision, absent-hash tolerance, the reproducibility claim, the known outputPath limitation, the Obj17 immutability/lineage constraint, the `allowOverwrite` forward extension, and the enforced output-path refusals. Decisions 017-032 preserved.
 
+
+## 2026-09-18 — 360 Reframing Objective 17: Creator Decision Provenance & Revision
+
+### Objective
+
+Human-locked scope (Decision 034): give persisted `EditDecision` artifacts provenance and an immutable revision path, reusing the existing free-text pipeline, without touching target-identity state, without operation-level editing, and without weakening any existing invariant.
+
+### Work completed
+
+- `EditDecision` schema v1 -> v2 (`CurrentSchemaVersion = 2`). The load gate already accepted every version in `1..Current`, so no legacy-read path was needed.
+- Investigated the load/serialize logic before implementing, as required. Finding: the loader stores the version it read (`decision.m_schemaVersion = schemaValue.toInt()`) and `payloadWithoutHash()` writes that stored value, so a loaded v1 decision is already version-retaining. Implementing a silent upgrade to v2 would have changed the payload, invalidated the recorded digest, and caused the strict loader to refuse previously-valid decisions. A regression test locks this in.
+- `origin` (`command` | `creator-revision`) and optional `parentDecisionHash`, inserted into the canonical payload only when non-empty. Omission is a correctness requirement: unconditional writing would mutate every legacy payload and break its digest.
+- `EditDecision::revisedFrom(parent, plan, media, instruction, createdUtc)` -- a new immutable child carrying the parent digest. `isValidOrigin()` and `isValidDecisionHash()` (64 lowercase hex).
+- `Application`: `runReframeCommandTo()` split into a thin wrapper plus `runReframeCommandInternal(..., const EditDecision *parentDecision)`, shared by `reviseEditDecision()` so there is one command path and one append gate. New `RevisionResult` and `DecisionProvenance` types.
+- `Application::decisionProvenance()` performs **referential** lineage validation against the held records, not merely format validation.
+- `restoreReframeOutputsFromJson()` now counts and reports unrestorable records (previously dropped in silence).
+- `QLoggingCategory` `reelcraft.decision` for created / loaded / refused / revised.
+- 9 new tests added.
+
+### Verification
+
+- Focused Objective 17 run: `Totals: 11 passed, 0 failed, 0 skipped` (9 new tests plus init/cleanup), 652 ms.
+- Targeted regression across affected areas (edit-decision artifact, record persistence/restore, replay, command path, plus both ffmpeg-gated replay tests): `Totals: 31 passed, 0 failed, 0 skipped`, 56.7 s. Zero skips means the ffmpeg-gated tests actually executed.
+- Incremental `-j1` build only; no clean checkout, no cold build, no configuration change. Build completed in ~4 min (test_project.cpp alone ~2 m 37 s, being a single ~14,400-line translation unit at -O2).
+- No warnings or errors in the test logs; no stray processes left after the runs.
+
+### Boundary notes / not implemented
+
+- Target-identity persistence (`TargetIdentityRegistry`, `CreatorTargetSelection`) is explicitly out of scope.
+- Accept/Reject is session-only; `AI_EDIT_CONTRACT.md` §9's status vocabulary remains conceptual.
+- The deterministic intent -> plan completeness checker remains its own future objective.
+- An unparseable render record is now reported but still discarded; unlike an unreadable decision it is not preserved verbatim.
+- No `Project` schema bump (stays 3), no retention policy, no remote telemetry, no new dependency.
+
+### Decisions
+
+- Decision 034 recorded. Decisions 017-033 preserved.
+

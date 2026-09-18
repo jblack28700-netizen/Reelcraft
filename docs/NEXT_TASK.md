@@ -417,9 +417,33 @@ Human-selected scope (Decision 033): a persisted, versioned `EditDecision` artif
 - Replay equivalence verified in the same process and in a genuinely fresh OS process (decoded-frame SHA-256 equality).
 - Perception-free replay path verified at object-code level.
 
-## Next Objective (360 Reframing Objective 17) — Creator Decision Control — NOT SCOPED
+## 360 Reframing Objective 17 — Creator Decision Provenance & Revision — Complete
 
-Objective 17 is **Creator Decision Control**: letting the creator inspect, choose among, and revise persisted edit decisions in the application. It is named here as the next objective and is deliberately **not** scoped in detail — detailed scoping is a separate step after the Objective 16 commit, and must not begin automatically.
+Status: **Complete — implemented and verified (2026-09-18).**
 
-**Carried-forward constraint (Decision 033, binding on Obj17):** persisted decisions are **immutable**. A revision is expressed as a **new decision that references the prior one (lineage)**, never as a mutation of a stored artifact. Any Obj17 design that edits a stored decision in place contradicts Decision 033 and must be rejected.
+### Objective
+
+Human-locked scope (Decision 034): give persisted `EditDecision` artifacts provenance and an immutable revision path, without touching target-identity state, without operation-level editing, and without weakening any existing invariant.
+
+### Scope (implemented)
+
+- `EditDecision` schema v1 -> v2, with v1 decisions still fully readable and version-retaining (a loaded v1 decision re-serializes as v1).
+- `origin` and optional single-parent `parentDecisionHash`, both omitted when unset so legacy payloads and digests are unchanged.
+- `EditDecision::revisedFrom()` producing a new immutable child; no mutator for a stored decision.
+- `Application::reviseEditDecision()` reusing the existing free-text pipeline, and `Application::decisionProvenance()` for read-only inspection with referential lineage validation.
+- One shared internal command path for both ordinary commands and revisions.
+- Fixed silent drop of unrestorable render records in `restoreReframeOutputsFromJson()`.
+- `QLoggingCategory` (`reelcraft.decision`) lifecycle logging; no new dependency.
+
+### Verification
+
+- 9 focused tests; targeted regression of affected areas: 31 passed / 0 failed / 0 skipped.
+
+## Next Objective — NOT SCOPED
+
+The leading candidates are: persisting the creator target selection / target identity (explicitly excluded from Objective 17), the deterministic intent -> plan completeness and consistency checker (excluded from Objective 16 and 17), and a retention/compaction policy for accumulating decisions (`KNOWN_ISSUES.md`).
+
+**Carried-forward constraint (Decision 033 / 034, binding):** persisted decisions are **immutable**. A revision is expressed as a **new decision referencing the prior one through a single parent hash**, never as a mutation. Any future design that edits a stored decision in place contradicts these decisions and must be rejected.
+
+Requires its own scoped objective; do not begin automatically.
 

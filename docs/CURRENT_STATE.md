@@ -1131,3 +1131,24 @@ Status: Complete (2026-09-17). Human-selected scope (Decision 033): a persisted,
 
 Next: **Objective 17 (Creator Decision Control)** — persisted decisions are immutable; revisions must be expressed as new decisions with lineage (Decision 033). Not yet scoped in detail.
 
+
+## Phase 4 Objective 17 — Creator Decision Provenance & Revision — Complete
+
+Status: Complete (2026-09-18). Human-locked scope (Decision 034): persisted `EditDecision` artifacts gain provenance and immutable revision. Target-identity work was explicitly excluded (separate future objective).
+
+- `EditDecision::CurrentSchemaVersion` advances **1 -> 2**. The gate accepts every version in `1..CurrentSchemaVersion`, so **v1 decisions remain fully readable** and no legacy-read shim was required.
+- **A loaded decision retains its own version.** The loader stores the version it read and the serializer writes that stored value, so a v1 decision re-serializes as v1 rather than being silently upgraded. Locked by a regression test that loads a hand-built v1 payload, asserts byte-identical re-serialization, and re-verifies the recorded digest.
+- **`origin`** (`command` | `creator-revision`) and optional **`parentDecisionHash`**, both **omitted when unset** — a correctness requirement, because writing them unconditionally would change every legacy decision's payload, invalidate its digest, and make the strict loader refuse a previously-valid decision. When present, both participate in `decisionHash` through the canonical payload.
+- `EditDecision::revisedFrom(parent, plan, media, instruction, createdUtc)` creates a **new immutable child** carrying the parent's digest. Single-parent chain only; no graph, back-pointers, or traversal. No mutator exists for a stored decision.
+- `Application::reviseEditDecision(index, revisedInstruction, outputPath)` -> `RevisionResult`. Reuses the existing free-text pipeline unchanged (parser -> plan builder -> plan -> execution); refuses a bad index, a record without a decision, an empty instruction or output path, an output path equal to the revised record's own output, and a source whose fingerprint has drifted. No structured operation or timeline editing.
+- `Application::decisionProvenance(index)` -> `DecisionProvenance`: read-only provenance (origin, instruction, lineage, source-fingerprint status, plan summary). Performs **referential** lineage validation (does the parent actually exist among the held records?) rather than trusting a syntactically valid hash.
+- `runReframeCommandTo()` and `reviseEditDecision()` share one internal implementation carrying an optional parent decision, so there is a single command path and the single append gate `appendReframeOutput()` is preserved.
+- **Silent failure fixed:** `restoreReframeOutputsFromJson()` previously discarded unparseable or non-object render records with no message; it now counts and reports them through `backgroundCompleted`, with wording distinct from the unreadable-decision message.
+- Structured logging added via `QLoggingCategory` (category `reelcraft.decision`) for created / loaded / refused / revised. No new dependency; no remote telemetry.
+- **Verification:** 9 focused new tests pass; targeted regression across the affected areas (edit-decision artifact, record persistence and restore, replay, command path, including both ffmpeg-gated replay tests): **31 passed / 0 failed / 0 skipped**.
+- Accept/Reject remains **session-only** and is not persisted. `AI_EDIT_CONTRACT.md` §9's status vocabulary stays conceptual.
+- Deliberately NOT in this objective: target-identity persistence, operation-level/timeline editing, keyframe editing, the intent->plan completeness checker, an LLM auditor, a `Project` schema bump (stays 3), decision retention/compaction, remote telemetry, any new dependency.
+- Architecture decision: Decision 034.
+
+Next: target-identity/creator-selection persistence, the deterministic intent->plan completeness checker, and decision retention remain candidates; each needs its own scoped objective.
+

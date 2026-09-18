@@ -56,6 +56,42 @@ struct ReplayResult
     QString error;
 };
 
+// The outcome of one creator revision attempt (Objective 17). A revision always
+// produces a NEW record; the parent record is never modified.
+struct RevisionResult
+{
+    bool ok = false;
+    int newRecordIndex = -1;
+    QString error;
+};
+
+// Read-only provenance view of the decision behind a render record (Objective
+// 17). Inspection never executes anything and never modifies the artifact.
+struct DecisionProvenance
+{
+    bool available = false;      // a decision is attached and loaded
+    QString error;               // why it is unavailable, when it is not
+    QString origin;
+    QString instruction;
+    QString parentDecisionHash;
+    // Referential lineage check: does the referenced parent actually exist among
+    // the records this application holds? A syntactically valid hash is not
+    // proof of a valid lineage relationship.
+    bool hasParent = false;
+    bool parentResolved = false;
+    QString sourceStatus;        // EditDecision::sourceStatusToString()
+    QString sourceDetail;
+    // Plan summary (no keyframes are copied).
+    int keyframeCount = 0;
+    int segmentCount = 0;
+    qint64 planStartMs = 0;
+    qint64 planEndMs = 0;
+    int outputWidth = 0;
+    int outputHeight = 0;
+    double outputFps = 0.0;
+    int planFrameCount = 0;
+};
+
 class Application : public QObject
 {
     Q_OBJECT
@@ -212,6 +248,24 @@ public slots:
     void setReframeReplayRenderer(const ReframeReplayRenderer &renderer);
     void resetReframeReplayRenderer();
 
+    // --- creator revision and provenance (Objective 17) ---------------------
+    // Revises the indexed record by producing a NEW immutable EditDecision from
+    // the creator's free-text instruction, through the SAME pipeline the command
+    // path uses (parser -> plan builder -> plan -> execution). The revised
+    // decision carries the revised record's single parent as parentDecisionHash.
+    // The parent record is read only and is left byte-identical; there is no
+    // mutator for a persisted decision.
+    //
+    // The output path is required and follows the same policy as replay: it must
+    // be non-empty, must differ from the source media, and must not already
+    // exist. Validation happens before any render is attempted.
+    RevisionResult reviseEditDecision(int index, const QString &revisedInstruction,
+                                      const QString &outputPath);
+
+    // Read-only provenance of the decision behind a record. Never executes,
+    // never modifies, and reports honestly when there is no usable decision.
+    DecisionProvenance decisionProvenance(int index) const;
+
     // Replaceable, optional media duration probe used to default a whole-clip
     // range (a zero start/end). The application owns a built-in ffprobe probe;
     // this override is non-owned. Passing null restores the built-in probe.
@@ -339,6 +393,13 @@ private:
     // and by replayEditDecision so records are only ever persisted through one
     // gate (Objective 16).
     void appendReframeOutput(const ReframeCommandOutcome &outcome);
+    // The single command implementation, shared by runReframeCommandTo() and
+    // reviseEditDecision(). parentDecision is null for an ordinary command and
+    // non-null for a revision, in which case the attached decision records it as
+    // its single parent.
+    bool runReframeCommandInternal(const QString &instruction, qint64 startMs,
+                                   qint64 endMs, const QString &outputPath,
+                                   const EditDecision *parentDecision);
 
     QJsonArray mediaJson() const;
     void restoreMediaFromJson(const QJsonArray &media);

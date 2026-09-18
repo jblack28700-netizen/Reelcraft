@@ -7,6 +7,8 @@
 #include <QJsonParseError>
 #include <QJsonValue>
 
+Q_LOGGING_CATEGORY(reelcraftDecision, "reelcraft.decision")
+
 namespace {
 
 // Streaming content digest. Chunked so a multi-gigabyte 360 source never has to
@@ -62,6 +64,36 @@ bool EditDecision::SourceReference::isValid() const
         && lastModifiedUtc.isValid();
 }
 
+QString EditDecision::originCommand()
+{
+    return QStringLiteral("command");
+}
+
+QString EditDecision::originCreatorRevision()
+{
+    return QStringLiteral("creator-revision");
+}
+
+bool EditDecision::isValidOrigin(const QString &origin)
+{
+    return origin == originCommand() || origin == originCreatorRevision();
+}
+
+bool EditDecision::isValidDecisionHash(const QString &hash)
+{
+    if (hash.size() != 64) {
+        return false;
+    }
+    for (const QChar c : hash) {
+        const ushort u = c.unicode();
+        const bool lowerHex = (u >= '0' && u <= '9') || (u >= 'a' && u <= 'f');
+        if (!lowerHex) {
+            return false;
+        }
+    }
+    return true;
+}
+
 EditDecision EditDecision::fromPlan(const ReframePlan &plan, const MediaItem &media,
                                     const QString &instruction,
                                     const QDateTime &createdUtc)
@@ -70,6 +102,8 @@ EditDecision EditDecision::fromPlan(const ReframePlan &plan, const MediaItem &me
     decision.m_schemaVersion = CurrentSchemaVersion;
     decision.m_createdUtc = toUtcMilliseconds(createdUtc);
     decision.m_instruction = instruction;
+    // Formed by the command pipeline unless revisedFrom() says otherwise.
+    decision.m_origin = originCommand();
     decision.m_source.mediaId = media.id();
     decision.m_source.path = media.path();
     decision.m_source.sizeBytes = media.sizeBytes();
@@ -80,6 +114,23 @@ EditDecision EditDecision::fromPlan(const ReframePlan &plan, const MediaItem &me
     // stronger content digest sets it explicitly.
     decision.m_source.contentSha256.clear();
     decision.m_plan = plan;
+    qCInfo(reelcraftDecision) << "created:" << decision.decisionHash()
+                              << "origin" << decision.m_origin;
+    return decision;
+}
+
+EditDecision EditDecision::revisedFrom(const EditDecision &parent,
+                                       const ReframePlan &plan,
+                                       const MediaItem &media,
+                                       const QString &instruction,
+                                       const QDateTime &createdUtc)
+{
+    // A revision is a NEW artifact. It reads the parent and never writes to it.
+    EditDecision decision = fromPlan(plan, media, instruction, createdUtc);
+    decision.m_origin = originCreatorRevision();
+    decision.m_parentDecisionHash = parent.decisionHash();
+    qCInfo(reelcraftDecision) << "revised:" << decision.decisionHash() << "parent"
+                              << decision.m_parentDecisionHash;
     return decision;
 }
 
@@ -116,6 +167,14 @@ bool EditDecision::isValid(QString *error) const
     }
     if (!m_source.isValid()) {
         return fail(QStringLiteral("Edit decision source reference is incomplete."));
+    }
+    if (!m_origin.isEmpty() && !isValidOrigin(m_origin)) {
+        return fail(QStringLiteral("Edit decision origin is not recognized."));
+    }
+    if (!m_parentDecisionHash.isEmpty()
+        && !isValidDecisionHash(m_parentDecisionHash)) {
+        return fail(QStringLiteral(
+            "Edit decision parent hash is not 64 lowercase hex characters."));
     }
     QString planError;
     if (!m_plan.isValid(&planError)) {
@@ -201,6 +260,16 @@ QJsonObject EditDecision::payloadWithoutHash() const
     object.insert(QStringLiteral("createdUtc"),
                   toUtcMilliseconds(m_createdUtc).toString(Qt::ISODateWithMs));
     object.insert(QStringLiteral("instruction"), m_instruction);
+    // Objective 17. Both are OMITTED when unset. Writing them (even empty) would
+    // add payload keys to every legacy v1 decision, changing its recomputed
+    // digest so that it no longer matched the stored decisionHash -- the strict
+    // loader would then refuse a previously-valid decision.
+    if (!m_origin.isEmpty()) {
+        object.insert(QStringLiteral("origin"), m_origin);
+    }
+    if (!m_parentDecisionHash.isEmpty()) {
+        object.insert(QStringLiteral("parentDecisionHash"), m_parentDecisionHash);
+    }
 
     QJsonObject source;
     source.insert(QStringLiteral("mediaId"), m_source.mediaId);
@@ -251,6 +320,8 @@ bool EditDecision::readFromJsonObject(const QJsonObject &object, EditDecision *o
         error->clear();
     }
     const auto fail = [error](const QString &message) {
+        // A refusal is never silent (Objective 17).
+        qCWarning(reelcraftDecision) << "refused:" << message;
         if (error) {
             *error = message;
         }
@@ -286,6 +357,21 @@ bool EditDecision::readFromJsonObject(const QJsonObject &object, EditDecision *o
     }
 
     decision.m_instruction = object.value(QStringLiteral("instruction")).toString();
+
+    // Objective 17 provenance. ABSENT means a legacy v1 decision, which is not an
+    // error; PRESENT but unrecognized is malformed and is refused.
+    decision.m_origin = object.value(QStringLiteral("origin")).toString();
+    if (!decision.m_origin.isEmpty() && !isValidOrigin(decision.m_origin)) {
+        return fail(QStringLiteral("Edit decision origin '%1' is not recognized.")
+                        .arg(decision.m_origin));
+    }
+    decision.m_parentDecisionHash =
+        object.value(QStringLiteral("parentDecisionHash")).toString();
+    if (!decision.m_parentDecisionHash.isEmpty()
+        && !isValidDecisionHash(decision.m_parentDecisionHash)) {
+        return fail(QStringLiteral(
+            "Edit decision parent hash is not 64 lowercase hex characters."));
+    }
 
     const QJsonValue sourceValue = object.value(QStringLiteral("source"));
     if (!sourceValue.isObject()) {
@@ -348,6 +434,12 @@ bool EditDecision::readFromJsonObject(const QJsonObject &object, EditDecision *o
     if (!decision.isValid(&validationError)) {
         return fail(validationError);
     }
+
+    qCInfo(reelcraftDecision)
+        << "loaded:" << decision.decisionHash()
+        << "schema" << decision.m_schemaVersion
+        << "origin" << (decision.m_origin.isEmpty() ? QStringLiteral("(none)")
+                                                    : decision.m_origin);
 
     *out = decision;
     return true;

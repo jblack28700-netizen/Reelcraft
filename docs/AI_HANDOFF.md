@@ -279,6 +279,18 @@ the property the artifact exists to guarantee. Verify at **object-code level** (
 `objdump` on the relevant objects), not by source grep alone — a provider symbol appearing
 in that call graph is a design regression, not a test detail.
 
+
+**Load-bearing invariant (Objective 17, Decision 034):** persisted decisions are
+**immutable** and lineage is a **single-parent chain**. A revision is a NEW
+`EditDecision` produced by `EditDecision::revisedFrom()`, referencing the decision it
+revises through one `parentDecisionHash`; no mutator may be added for a stored decision,
+and no graph, back-pointer, or traversal infrastructure should appear. Two further rules
+are easy to break accidentally: `origin` and `parentDecisionHash` must stay **omitted when
+unset** (writing them unconditionally invalidates the digest of every legacy decision), and
+a loaded decision must **retain the schema version it was loaded with** rather than being
+upgraded in place. Replay must never re-stamp `origin`. Enforced by
+`editDecisionV1CompatibilityRetainsVersionAndHash` and `replayPreservesDecisionOrigin`.
+
 Never silently overwrite architectural history.
 
 ---

@@ -514,3 +514,42 @@ design; a reader expecting 7 should not read the 8th as a regression.
 
 None required. Revisit if a standalone child invocation is ever added.
 
+
+---
+
+# Issue — Creator decision revision: boundary limits (2026-09-18)
+
+### Status
+
+Open — recorded limitations, not defects (Decision 034).
+
+### Description
+
+Objective 17 added provenance and immutable revision to persisted `EditDecision`
+artifacts. Four limits are deliberate and worth stating plainly:
+
+- **Accept/Reject is session-only.** It is not persisted, and there is no decision-status
+  state machine. `AI_EDIT_CONTRACT.md` §9's status vocabulary (Proposed, Approved,
+  Superseded, ...) therefore remains conceptual, not implemented. Reopening a project
+  loses any accept/reject decisions made in the previous session.
+- **An unparseable render record is reported but still discarded.**
+  `restoreReframeOutputsFromJson()` now counts and reports such records through the status
+  channel instead of dropping them silently, but unlike an *unreadable decision* (which is
+  preserved verbatim by `ReframeCommandOutcome`) the record itself is not retained.
+- **Lineage resolution requires the parent record to be present.**
+  `Application::decisionProvenance()` resolves `parentDecisionHash` against the records the
+  application currently holds and reports `parentResolved` honestly. If the parent record
+  is absent, the lineage is reported unresolved rather than assumed valid.
+- **Decisions still accumulate without bound.** Each revision adds a full decision; see the
+  separate retention-policy issue.
+
+### Impact
+
+Creator decisions are attributable and revisable, but the accept/reject workflow does not
+survive a project reopen, and a damaged record is reported rather than recovered.
+
+### Planned Resolution
+
+Persisting accept/reject status (with its own schema and versioning decision) and a
+retention/compaction policy are both future objectives. Neither is in scope for Objective 17.
+

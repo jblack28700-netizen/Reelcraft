@@ -507,6 +507,14 @@ bool Application::runReframeCommand(const QString &instruction, qint64 startMs,
 bool Application::runReframeCommandTo(const QString &instruction, qint64 startMs,
                                       qint64 endMs, const QString &outputPath)
 {
+    return runReframeCommandInternal(instruction, startMs, endMs, outputPath,
+                                     nullptr);
+}
+
+bool Application::runReframeCommandInternal(const QString &instruction, qint64 startMs,
+                                            qint64 endMs, const QString &outputPath,
+                                            const EditDecision *parentDecision)
+{
     ReframeCommandOutcome outcome;
     outcome.instruction = instruction.trimmed();
     outcome.startMs = startMs;
@@ -528,15 +536,24 @@ bool Application::runReframeCommandTo(const QString &instruction, qint64 startMs
     MediaItem mediaSnapshot;
     ReframePlan executedPlan;
 
-    const auto finish = [this, &outcome, &mediaSnapshot, &executedPlan]() {
+    const auto finish = [this, &outcome, &mediaSnapshot, &executedPlan,
+                         parentDecision]() {
         // Attach the decision whenever the decision stage produced a valid plan,
         // including when the RENDER failed: the decision is the plan itself and
         // the record is persisted either way, so replaying it later is
         // meaningful. outcome.instruction is the single source of the instruction
         // string -- it is not re-derived here.
         if (executedPlan.isValid()) {
-            outcome.setEditDecision(EditDecision::fromPlan(
-                executedPlan, mediaSnapshot, outcome.instruction));
+            if (parentDecision) {
+                // Objective 17: a revision is a NEW decision whose single parent is
+                // the decision it revises. The parent is only read.
+                outcome.setEditDecision(EditDecision::revisedFrom(
+                    *parentDecision, executedPlan, mediaSnapshot,
+                    outcome.instruction));
+            } else {
+                outcome.setEditDecision(EditDecision::fromPlan(
+                    executedPlan, mediaSnapshot, outcome.instruction));
+            }
         } else if (!outcome.outputPath.isEmpty()) {
             outcome.setEditDecisionUnavailable(QStringLiteral(
                 "The decision stage produced no valid reframe plan, so no edit "
@@ -907,9 +924,18 @@ void Application::restoreReframeOutputsFromJson(const QJsonArray &outputs)
     // existing status channel once the whole list has been restored.
     int unreadableDecisions = 0;
     QString firstDecisionError;
+    // Objective 17: a record that cannot be restored at all was previously
+    // dropped in complete silence. Records are never dropped silently.
+    int unrestorableRecords = 0;
+    QString firstRecordError;
 
     for (const QJsonValue &value : outputs) {
         if (!value.isObject()) {
+            ++unrestorableRecords;
+            if (firstRecordError.isEmpty()) {
+                firstRecordError =
+                    QStringLiteral("a render record entry is not an object");
+            }
             continue;
         }
         ReframeCommandOutcome outcome;
@@ -923,6 +949,11 @@ void Application::restoreReframeOutputsFromJson(const QJsonArray &outputs)
                 }
             }
             m_reframeOutputs.append(outcome);
+        } else {
+            ++unrestorableRecords;
+            if (firstRecordError.isEmpty()) {
+                firstRecordError = error;
+            }
         }
     }
 
@@ -932,6 +963,14 @@ void Application::restoreReframeOutputsFromJson(const QJsonArray &outputs)
                            "edit decision and cannot be replayed: %2")
                 .arg(unreadableDecisions)
                 .arg(firstDecisionError));
+    }
+
+    if (unrestorableRecords > 0) {
+        emit backgroundCompleted(
+            QStringLiteral("%1 persisted render record(s) could not be restored "
+                           "and were skipped: %2")
+                .arg(unrestorableRecords)
+                .arg(firstRecordError));
     }
 }
 
@@ -962,6 +1001,127 @@ void Application::resetReframeReplayRenderer()
         // No detector, no frame provider, no natural-language parser.
         return ReframePipeline::renderPlan(plan, sourcePath, outputPath, nullptr);
     };
+}
+
+RevisionResult Application::reviseEditDecision(int index,
+                                               const QString &revisedInstruction,
+                                               const QString &outputPath)
+{
+    RevisionResult result;
+
+    if (index < 0 || index >= m_reframeOutputs.size()) {
+        result.error = QStringLiteral("There is no such reframe output to revise.");
+        return result;
+    }
+
+    const ReframeCommandOutcome &parent = m_reframeOutputs.at(index);
+    if (!parent.hasEditDecision()) {
+        result.error = parent.editDecisionError().isEmpty()
+            ? QStringLiteral("This render record has no edit decision, so it cannot "
+                             "be revised.")
+            : parent.editDecisionError();
+        return result;
+    }
+
+    const QString revised = revisedInstruction.trimmed();
+    if (revised.isEmpty()) {
+        result.error = QStringLiteral("Enter a revised instruction.");
+        return result;
+    }
+    if (outputPath.trimmed().isEmpty()) {
+        result.error = QStringLiteral("Enter an output path for the revised render.");
+        return result;
+    }
+    if (QFileInfo(outputPath.trimmed()).absoluteFilePath()
+        == QFileInfo(parent.outputPath).absoluteFilePath()) {
+        result.error = QStringLiteral(
+                           "The revised render must not overwrite the record it "
+                           "revises: %1")
+                           .arg(parent.outputPath);
+        return result;
+    }
+
+    // A revision is built on the source the parent was made against; if that
+    // source has drifted, the revision is refused rather than silently made
+    // against a different file.
+    const EditDecision parentDecision = parent.editDecision();
+    QString sourceDetail;
+    if (parentDecision.checkSource(&sourceDetail)
+        != EditDecision::SourceStatus::Matches) {
+        result.error = QStringLiteral("Cannot revise: %1").arg(sourceDetail);
+        return result;
+    }
+
+    qCInfo(reelcraftDecision) << "revision-requested for record" << index
+                              << "parent" << parentDecision.decisionHash();
+
+    // Reuse the existing free-text pipeline unchanged. parentDecision is a copy,
+    // so the record it came from is untouched.
+    if (!runReframeCommandInternal(revised, parent.startMs, parent.endMs, outputPath,
+                                   &parentDecision)) {
+        result.error = m_lastReframeOutcome.error.isEmpty()
+            ? QStringLiteral("The revision failed.")
+            : m_lastReframeOutcome.error;
+        return result;
+    }
+
+    result.ok = true;
+    result.newRecordIndex = m_reframeOutputs.size() - 1;
+    return result;
+}
+
+DecisionProvenance Application::decisionProvenance(int index) const
+{
+    DecisionProvenance view;
+    if (index < 0 || index >= m_reframeOutputs.size()) {
+        view.error = QStringLiteral("There is no such reframe output.");
+        return view;
+    }
+
+    const ReframeCommandOutcome &record = m_reframeOutputs.at(index);
+    if (!record.hasEditDecision()) {
+        view.error = record.editDecisionError().isEmpty()
+            ? QStringLiteral("This render record has no edit decision.")
+            : record.editDecisionError();
+        return view;
+    }
+
+    const EditDecision decision = record.editDecision();
+    view.available = true;
+    view.origin = decision.origin();
+    view.instruction = decision.instruction();
+    view.parentDecisionHash = decision.parentDecisionHash();
+    view.hasParent = decision.hasParentDecision();
+
+    // Referential lineage validation. A syntactically valid hash is NOT proof of a
+    // valid lineage relationship: the parent has to actually exist among the
+    // records this application holds.
+    if (view.hasParent) {
+        for (const ReframeCommandOutcome &candidate : m_reframeOutputs) {
+            if (candidate.hasEditDecision()
+                && candidate.editDecision().decisionHash()
+                    == view.parentDecisionHash) {
+                view.parentResolved = true;
+                break;
+            }
+        }
+    }
+
+    QString sourceDetail;
+    view.sourceStatus =
+        EditDecision::sourceStatusToString(decision.checkSource(&sourceDetail));
+    view.sourceDetail = sourceDetail;
+
+    const ReframePlan plan = decision.plan();
+    view.keyframeCount = plan.keyframes().size();
+    view.segmentCount = plan.segments().size();
+    view.planStartMs = plan.sourceRange().startMs;
+    view.planEndMs = plan.sourceRange().endMs;
+    view.outputWidth = plan.output().width;
+    view.outputHeight = plan.output().height;
+    view.outputFps = plan.output().fps;
+    view.planFrameCount = plan.frameCount();
+    return view;
 }
 
 ReplayResult Application::replayEditDecision(int index, const QString &outputPath)

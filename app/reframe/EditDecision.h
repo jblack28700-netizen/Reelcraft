@@ -3,6 +3,7 @@
 #include <QByteArray>
 #include <QDateTime>
 #include <QJsonObject>
+#include <QLoggingCategory>
 #include <QString>
 
 #include "core/MediaItem.h"
@@ -34,13 +35,20 @@
 // that reached a non-empty output path. Early validation failures produce no
 // decision.
 //
-// Forward constraint (Objective 17+): persisted decisions are IMMUTABLE. A
-// revision is expressed as a NEW decision that references the prior one, never as
-// a mutation of a stored artifact.
+// Forward constraint (Objective 17, now implemented): persisted decisions are
+// IMMUTABLE. A revision is expressed as a NEW decision that references the prior
+// one through a single optional parentDecisionHash (a chain, never a graph), and
+// no mutator exists that changes a stored artifact.
 class EditDecision
 {
 public:
-    static constexpr int CurrentSchemaVersion = 1;
+    // Objective 16 introduced v1. Objective 17 introduced v2, which adds the
+    // OPTIONAL "origin" and "parentDecisionHash" fields. v1 decisions remain fully
+    // readable: the gate accepts every version in 1..CurrentSchemaVersion, and a
+    // loaded decision RETAINS the version it was loaded with, so a v1 decision
+    // re-serializes byte-identically (keeping its digest) instead of being silently
+    // upgraded in place.
+    static constexpr int CurrentSchemaVersion = 2;
 
     // The media a decision was made against. Stores facts only; the file itself
     // is always opened read-only and is never written by anything here.
@@ -81,6 +89,13 @@ public:
                                  const QString &instruction,
                                  const QDateTime &createdUtc = QDateTime::currentDateTimeUtc());
 
+    // Builds a REVISION: a brand new immutable decision formed from a creator's
+    // free-text instruction, whose single parent is the decision being revised.
+    // The parent is only read; nothing about it is modified.
+    static EditDecision revisedFrom(const EditDecision &parent, const ReframePlan &plan,
+                                    const MediaItem &media, const QString &instruction,
+                                    const QDateTime &createdUtc = QDateTime::currentDateTimeUtc());
+
     static QString sourceStatusToString(SourceStatus status);
 
     int schemaVersion() const { return m_schemaVersion; }
@@ -88,6 +103,24 @@ public:
     QString instruction() const { return m_instruction; }
     SourceReference source() const { return m_source; }
     ReframePlan plan() const { return m_plan; }
+
+    // --- Objective 17: provenance and single-parent lineage -----------------
+    // How the decision was FORMED. Replay deliberately does NOT stamp a new
+    // origin: a replayed record carries the same decision, so origin describes
+    // how the decision was made, not how the record was produced.
+    QString origin() const { return m_origin; }
+    QString parentDecisionHash() const { return m_parentDecisionHash; }
+    bool hasParentDecision() const { return !m_parentDecisionHash.isEmpty(); }
+
+    // The only two origin values in Objective 17.
+    static QString originCommand();
+    static QString originCreatorRevision();
+
+    // True for the exact origin vocabulary above; an unrecognized non-empty
+    // origin is a malformed artifact, not an unknown-but-tolerable value.
+    static bool isValidOrigin(const QString &origin);
+    // 64 lowercase hex characters.
+    static bool isValidDecisionHash(const QString &hash);
 
     // Version in range, a valid source reference, and a valid plan.
     bool isValid(QString *error = nullptr) const;
@@ -113,8 +146,11 @@ public:
     // missing, non-numeric, <= 0 or greater than CurrentSchemaVersion; when the
     // source reference is missing/malformed; when the plan is missing or fails
     // ReframePlan::isValid(); or when a PRESENT decisionHash disagrees with the
-    // recomputed digest. A missing decisionHash is tolerated (it is derived, not
-    // authoritative) and recomputed on demand.
+    // recomputed digest; when origin is present but not in the known vocabulary; or
+    // when parentDecisionHash is present but not 64 lowercase hex. A missing
+    // decisionHash is tolerated (it is derived, not authoritative) and recomputed
+    // on demand. Referential lineage (does the parent actually exist?) cannot be
+    // decided by a single artifact and is validated by whoever consumes lineage.
     static bool readFromJsonObject(const QJsonObject &object, EditDecision *out,
                                    QString *error = nullptr);
 
@@ -126,6 +162,13 @@ private:
     int m_schemaVersion = CurrentSchemaVersion;
     QDateTime m_createdUtc;
     QString m_instruction;
+    // Objective 17. Both are omitted from the payload when empty, which is what
+    // keeps v1 decisions byte-identical (and therefore hash-valid) on re-save.
+    QString m_origin;
+    QString m_parentDecisionHash;
     SourceReference m_source;
     ReframePlan m_plan;
 };
+
+// Structured logging for the decision lifecycle (Objective 17).
+Q_DECLARE_LOGGING_CATEGORY(reelcraftDecision)
