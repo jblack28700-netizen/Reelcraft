@@ -37,6 +37,7 @@ SOURCES += \
     ../app/reframe/TemporalEditPlan.cpp \
     ../app/reframe/ReframePipeline.cpp \
     ../app/reframe/ReframeRenderer.cpp \
+    ../app/reframe/ReframeStreamFrameProvider.cpp \
     ../app/target/EquirectProjection.cpp \
     ../app/target/EquirectViewPlan.cpp \
     ../app/target/ProcessTargetDetector.cpp \
@@ -94,6 +95,7 @@ HEADERS += \
     ../app/reframe/TemporalEditPlan.h \
     ../app/reframe/ReframePipeline.h \
     ../app/reframe/ReframeRenderer.h \
+    ../app/reframe/ReframeStreamFrameProvider.h \
     ../app/target/EquirectProjection.h \
     ../app/target/EquirectViewPlan.h \
     ../app/target/ProcessTargetDetector.h \

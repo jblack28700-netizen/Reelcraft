@@ -1748,3 +1748,45 @@ Make real equirectangular 360 media observable inside Reelcraft: continuous play
 
 - Decision 036 recorded (source-playback architecture: separate pipeline, single event-loop driver, bounded proxy stream, seek-by-reopen, frame-rate pacing, audio deferred). Decisions 017-035 preserved.
 
+
+## 2026-09-18 — Phase 4 Objective 20: Persistent Render Decoding and Deterministic Throughput
+
+### Objective
+
+The human-authorized scope (Decision 037) carried one core requirement: **FFmpeg process creation must no longer scale one-for-one with the number of rendered output frames.** The previous render path asked `FfmpegSeekFrameProvider` for each output frame independently, and that provider spawns one FFmpeg process per request — a real render of N frames created O(N) decoders.
+
+### What was built
+
+- `app/reframe/ReframeStreamFrameProvider.{h,cpp}` (new): a `ReframeFrameProvider` that holds a persistent `FfmpegFrameSource` open at an anchor timestamp and replays forwards from it. A request inside a bounded window is answered by reading the next frame from the already-open stream; only an anchor costs a process.
+- The bounded sequential window (`kMaxSequentialSpanMs = 3000`) is the mechanism that keeps the cursor honest: a far-forward jump re-anchors rather than decoding hundreds of frames to reach the target, and re-anchoring also re-aligns the cursor with the true source timeline.
+- The positioned seek path is retained deliberately as the fallback and as the geometry-discovery path. An unknown frame rate, invalid input, an unreadable source, the end of the media, or any stream failure falls back to it, so the worst case is the old cost and never a different frame.
+- `ReframePipeline` now constructs the streaming provider for real sources, reading the source frame rate once through the existing `FfprobeDurationProbe` seam.
+- Both `.pro` files gained the new source and header.
+
+### Verification
+
+- 6 new tests: streaming/seek frame equality across 20 timestamps, process count independent of frame count (60 consecutive requests => at most 3 stream opens, exactly 1 geometry decode), jumps and fallback (backwards, far-forward, unknown frame rate), invalid input and end of source, streaming/seek render equivalence, and frame-source lifecycle safety.
+- `reframeRenderEquivalenceStreamingVersusSeek` asserts identical frame counts, identical decoded frames, and **byte-identical MP4 containers** for continuous, trimmed and multiple disjoint temporal segments (148 s).
+- Targeted re-run of all six on a fully consistent build: 6 passed / 0 failed / 0 stack smashing.
+- Full model-free suite at the checkpoint: **431 passed / 0 failed / 9 skipped** (563 s).
+- Core requirement measured with a counting `REELCRAFT_FFMPEG` wrapper on `reframePipelineRendersRealVideoEndToEnd` (real 360 source, 6 output frames): FFmpeg process creations **9 -> 5**, of which exactly one is the render decode stream; the remainder are the test's own fixture encoding and verification decodes. No decoder process scales with the frame count.
+
+### Failure recovery — the two blockers, and what actually caused them
+
+Two blocking defects appeared during this objective: an intermittent `*** stack smashing detected ***` SIGABRT (exit 134) that killed three of the new tests, and a deterministic frame-selection mismatch at the far-forward request t=5500. Both were investigated to root cause rather than worked around.
+
+- The crash was localised to the test binary, not the provider: a standalone media-layer repro (open a stream, optionally read, then close, and destroy without closing) passed cleanly in every case, which exonerated `FfmpegFrameSource` and `QProcess` teardown. An `LD_PRELOAD` interposer for `__stack_chk_fail` was built to capture a backtrace, but by the time it was used the crash no longer reproduced.
+- The decisive evidence was artefact-level: between the failing and the passing runs **the only thing that changed was `tests/test_project.o`**, recompiled incidentally when the temporary repro test was added, plus the relink. The provider object and every other object were untouched.
+- Root cause confirmed by inspecting the generated makefile: `tests/Makefile` was generated at 11:03:22, before the new header's last modification at 11:17:00, and its rule for `test_project.o` listed `ReframePipeline.h` but **not `ReframeStreamFrameProvider.h`** — even though `test_project.cpp` includes it. Editing the header therefore never recompiled the translation unit that instantiates `ReframeStreamFrameProvider` **on the stack**, so the test binary mixed two layouts of the class; the constructor wrote past the caller-reserved frame and smashed the stack canary, and the adjacent test locals (`FfmpegSeekFrameProvider seek`, the clip path) were corrupted into the spurious t=5500 mismatch.
+- Fix: regenerate `tests/Makefile` with `qmake`, after which the same rule lists the header. Verified by rebuilding and re-running: all six tests pass, twice each, no stack smashing. Recorded in KNOWN_ISSUES.md and DEVELOPMENT_ENVIRONMENT.md as an operational requirement, because a stale makefile silently produces binaries that mix object revisions.
+
+### Boundary notes / not implemented
+
+- No change to what is rendered: the streaming path is byte-identical to the seek path, proven at container level.
+- No audio, perception, tracking, camera-path generation, auto-reframing, parser, plan, decision-artifact, export or UI change, and no change to the Objective 19 1024x512 playback proxy.
+- Suite cost recorded honestly: the focused real-FFmpeg provider tests add roughly 280 s, taking the full suite to about 563 s.
+
+### Decisions
+
+- Decision 037 recorded (persistent render decoding architecture: anchored stream with a bounded sequential window, seek fallback, frame-identity contract, per-source frame rate). Decisions 017-036 preserved.
+

@@ -2,7 +2,7 @@
 
 ## Current Version
 
-0.2.52
+0.2.58
 
 ## Current Branch
 
@@ -81,7 +81,7 @@ Status: Partially implemented — deterministic reframing vertical slice complet
 
 Status: Implemented and continuously verified.
 
-A Qt Test suite covers project state, viewer/media, the media-source seam and frame pump, player/timing, the 360 reframing engine (plan validation/round-trip, camera interpolation, rendering determinism, intent parsing, plan building, and a real FFmpeg end-to-end render), and target resolution (equirect/view geometry, seam and pitch boundaries, view coverage, deterministic tracking, resolver behavior, the subprocess detector protocol, the track planner, and a model-free detection -> plan -> render path). Current result: 295 passed, 0 failed, 1 skipped (~46 s). The single skip is the real-detector integration test, which runs only when a detector helper, model, and clip are configured; the normal suite stays model-free.
+A Qt Test suite covers project state, viewer/media, the media-source seam and frame pump, player/timing, the 360 reframing engine (plan validation/round-trip, camera interpolation, rendering determinism, intent parsing, plan building, and a real FFmpeg end-to-end render), and target resolution (equirect/view geometry, seam and pitch boundaries, view coverage, deterministic tracking, resolver behavior, the subprocess detector protocol, the track planner, and a model-free detection -> plan -> render path). Current result: 431 passed, 0 failed, 9 skipped (~563 s; the real-FFmpeg render and decode tests dominate). Eight skips are environment-gated real-media/model integrations (real detector, speaker, appearance, real 360 clip, rendered playback, source playback, compound command, application/user command) that run only when the corresponding helper, model and clip variables are configured; the ninth is the child-only slot driven by the fresh-process replay test. The normal suite stays model-free.
 
 ## Technology Direction
 
@@ -1182,4 +1182,21 @@ Status: Complete (2026-09-18). Decision 036.
 - **Audio is not implemented** — deliberately deferred (Decision 036): no audio output exists, `QtMultimedia` was deferred by Decision 017, and an audio subsystem would be a disproportionate expansion. The smallest viable follow-up (an injectable audio-output seam driven by the same position/seek model) is recorded and is its own objective.
 - **Verification:** 9 new model-free tests; targeted regression 44 passed / 0 failed / 0 skipped; real-media validation on a real 360 clip passes (import, equirect use, continuous play, pause, seek, viewpoint change, resume, end of media).
 - Known limitations: playback is silent; an unknown source frame rate falls back to default pacing; the 1024x512 viewing proxy may be too small for the future perception stage.
+
+
+## Phase 4 Objective 20 — Persistent Render Decoding and Deterministic Throughput — Complete
+
+Status: Complete (2026-09-18). Human-authorized scope (Decision 037). Core requirement: **FFmpeg process creation must no longer scale one-for-one with the number of rendered output frames.**
+
+- New `app/reframe/ReframeStreamFrameProvider.{h,cpp}`: the `ReframeFrameProvider` implementation `ReframePipeline` now uses for real sources. It replaces the previous "one FFmpeg process per rendered output frame" behaviour with **one persistent decode stream per anchored span**.
+- **Process count follows anchors, not output frames.** The provider opens a persistent `FfmpegFrameSource` at an anchor timestamp and replays forwards from it; a request inside the bounded window is served by reading the next frame from the already-open stream. Diagnostics `streamOpenCount()`, `anchorCount()`, `streamedFrameCount()` and `seekDecodeCount()` expose the ratio, and the tests assert it directly (60 consecutive requests => at most 3 stream opens and exactly 1 geometry-seeking decode).
+- **Bounded sequential window** (`kMaxSequentialSpanMs = 3000`). A forward advance is replayed from the open stream only while the request stays within the window from the current anchor. A far-forward jump, a backwards jump, a stream failure, or the end of the media re-anchors, which re-aligns the decode cursor instead of decoding arbitrarily far ahead; anchoring remains an O(anchors) cost, never O(frames).
+- **The positioned seek remains the fallback and the geometry-discovery path.** Unknown frame rate, invalid input, an unreadable source, the end of the media, and any stream failure fall back to the seek path, so the worst case is the previous cost and never a different frame. The provider never guesses a frame.
+- **Frame identity with the previous path is the contract, and it is proven.** Raw RGB888 from the persistent stream is normalised to the format the seek path's decoded frame carries, and a far-forward anchor relies on the input-seeked stream's first frame being exactly the frame the positioned seek returns (verified directly against FFmpeg, and now locked by `ffmpegFrameSourceLifecycleIsSafe`).
+- **Source frame rate is read once per source** through the existing `FfprobeDurationProbe` seam; when it is unknown the provider does not stream at all and behaves exactly as before.
+- **Verification.** 5 new streaming-provider tests plus 1 frame-source lifecycle regression test. `reframeRenderEquivalenceStreamingVersusSeek` proves decoded-frame **and byte-identical MP4 container** equality between the streaming and the previous seek provider for continuous, trimmed and multiple disjoint temporal segments (148 s). Targeted re-run of all six on a consistent build: 6 passed / 0 failed / 0 stack smashing. Full suite: **431 passed / 0 failed / 9 skipped** (~563 s).
+- **Core requirement measured** on `reframePipelineRendersRealVideoEndToEnd` (a real 360 render of 6 output frames) with a counting `REELCRAFT_FFMPEG` wrapper: FFmpeg process creations **9 -> 5**, and no decoder process scales with the rendered frame count.
+- Deliberately NOT in this objective: audio, perception/detection/tracking, camera-path generation, auto-reframing, diarization, LLM integration, export presets, equirect export, UI redesign, `EditDecision`/`ReframeIntent` schema changes, `ReframePlan` redesign, and any change to the Objective 19 1024x512 playback proxy.
+- **Build-integrity defect found and fixed during this objective:** `tests/Makefile` predated the new header and did not declare it as a dependency of `test_project.o`, so the test binary could be linked from objects compiled against different revisions of the class. See KNOWN_ISSUES.md and DEVELOPMENT_ENVIRONMENT.md.
+- Architecture decision: Decision 037.
 

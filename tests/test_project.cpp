@@ -44,6 +44,7 @@
 #include "reframe/FfmpegSeekFrameProvider.h"
 #include "reframe/ReframeCommandRunner.h"
 #include "reframe/ReframeFrameProvider.h"
+#include "reframe/ReframeStreamFrameProvider.h"
 #include "reframe/ReframeContract.h"
 #include "reframe/EditDecision.h"
 #include "reframe/ReframeIntent.h"
@@ -1057,6 +1058,13 @@ private slots:
     void sourcePlaybackViewpointStaysUsable();
     void ffprobeDurationProbeReportsFrameRate();
     void mainWindowSourcePlaybackButtonsEmitRequests();
+    // Objective 20: persistent render decoding.
+    void reframeStreamProviderMatchesSeekProvider();
+    void reframeStreamProviderProcessesDoNotScaleWithFrames();
+    void reframeStreamProviderHandlesJumpsAndFallback();
+    void ffmpegFrameSourceLifecycleIsSafe();
+    void reframeStreamProviderRejectsBadInputAndEndOfSource();
+    void reframeRenderEquivalenceStreamingVersusSeek();
     void realSourcePlaybackIntegration();
     void mainWindowPlaybackButtonsEmitRequests();
     void mainWindowShowsPlaybackStateAndPosition();
@@ -10566,7 +10574,352 @@ void ProjectTest::reframeContractAcceptsRealPipelinePlans()
     checkRequest(subject, &detector, &provider, QStringLiteral("subject"));
 }
 
+// ============ Persistent render decoding (Objective 20) ============
+
+namespace {
+
+// Builds a short equirect clip of visually distinct frames at a known rate, so
+// frame selection can be compared exactly between providers.
+bool createProviderTestClip(const QString &directory, int frameCount, int fps,
+                            QString *outPath)
+{
+    const QString ffmpeg = FrameExtractor::defaultExecutablePath();
+    if (ffmpeg.isEmpty() || frameCount <= 0 || fps <= 0) {
+        return false;
+    }
+    for (int i = 0; i < frameCount; ++i) {
+        const QString name =
+            QStringLiteral("/p_%1.png").arg(i, 3, 10, QLatin1Char('0'));
+        if (!buildReviewFrame(180, 90, i).save(directory + name, "PNG")) {
+            return false;
+        }
+    }
+    const QString videoPath = directory + QStringLiteral("/provider_clip.mp4");
+    QProcess process;
+    process.start(ffmpeg, {
+        QStringLiteral("-y"), QStringLiteral("-v"), QStringLiteral("error"),
+        QStringLiteral("-framerate"), QString::number(fps),
+        QStringLiteral("-i"), directory + QStringLiteral("/p_%03d.png"),
+        QStringLiteral("-c:v"), QStringLiteral("libx264"),
+        QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"),
+        QStringLiteral("-g"), QStringLiteral("1"),
+        QStringLiteral("-r"), QString::number(fps),
+        videoPath
+    });
+    if (!process.waitForStarted(15000)) {
+        return false;
+    }
+    process.waitForFinished(60000);
+    for (int i = 0; i < frameCount; ++i) {
+        QFile::remove(directory + QStringLiteral("/p_%1.png")
+                          .arg(i, 3, 10, QLatin1Char('0')));
+    }
+    if (outPath) {
+        *outPath = videoPath;
+    }
+    return QFileInfo::exists(videoPath) && QFileInfo(videoPath).size() > 0;
+}
+
+} // namespace
+
+void ProjectTest::reframeStreamProviderMatchesSeekProvider()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable");
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString clip;
+    QVERIFY(createProviderTestClip(directory.path(), 40, 10, &clip));
+    const QString ffmpeg = FrameExtractor::defaultExecutablePath();
+
+    ReframeStreamFrameProvider stream(clip, ffmpeg, 10.0);
+    FfmpegSeekFrameProvider seek(clip, ffmpeg);
+
+    // Frame/timestamp correctness: for every requested timestamp the streaming
+    // provider must return exactly the frame the positioned seek returns.
+    for (int i = 0; i < 20; ++i) {
+        const qint64 timeMs = i * 100;
+        QImage streamed;
+        QImage seeked;
+        QString streamError;
+        QString seekError;
+        QVERIFY2(stream.frameAt(timeMs, &streamed, &streamError),
+                 qPrintable(QStringLiteral("stream t=%1: %2").arg(timeMs).arg(streamError)));
+        QVERIFY2(seek.frameAt(timeMs, &seeked, &seekError),
+                 qPrintable(QStringLiteral("seek t=%1: %2").arg(timeMs).arg(seekError)));
+        QVERIFY2(streamed == seeked,
+                 qPrintable(QStringLiteral("frame mismatch at t=%1").arg(timeMs)));
+    }
+    QCOMPARE(stream.sourceWidth(), 180);
+    QCOMPARE(stream.sourceHeight(), 90);
+    // Geometry was discovered once; later frames came from the open stream.
+    QCOMPARE(stream.seekDecodeCount(), 1);
+    QVERIFY2(stream.streamedFrameCount() >= 15,
+             qPrintable(QStringLiteral("streamed %1").arg(stream.streamedFrameCount())));
+}
+
+void ProjectTest::reframeStreamProviderProcessesDoNotScaleWithFrames()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable");
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString clip;
+    QVERIFY(createProviderTestClip(directory.path(), 60, 10, &clip));  // 6 s at 10 fps
+
+    ReframeStreamFrameProvider stream(clip, FrameExtractor::defaultExecutablePath(),
+                                      10.0);
+    QImage frame;
+    QString error;
+    const int requests = 60;
+    for (int i = 0; i < requests; ++i) {
+        QVERIFY2(stream.frameAt(i * 100, &frame, &error), qPrintable(error));
+    }
+
+    // The architectural requirement: persistent-stream opens follow anchor points,
+    // not frame count. 60 requests must not mean ~60 processes.
+    QVERIFY2(stream.streamOpenCount() <= 3,
+             qPrintable(QStringLiteral("stream opens %1").arg(stream.streamOpenCount())));
+    QCOMPARE(stream.seekDecodeCount(), 1);
+    QVERIFY2(stream.streamedFrameCount() >= 50,
+             qPrintable(QStringLiteral("streamed %1").arg(stream.streamedFrameCount())));
+    QVERIFY(stream.anchorCount() <= 3);
+}
+
+void ProjectTest::reframeStreamProviderHandlesJumpsAndFallback()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable");
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString clip;
+    QVERIFY(createProviderTestClip(directory.path(), 60, 10, &clip));
+    const QString ffmpeg = FrameExtractor::defaultExecutablePath();
+
+    ReframeStreamFrameProvider stream(clip, ffmpeg, 10.0);
+    FfmpegSeekFrameProvider seek(clip, ffmpeg);
+
+    // A backwards jump must reposition and still return the seek's frame.
+    const auto expectMatch = [&stream, &seek](qint64 timeMs, const QString &label) {
+        QImage streamed;
+        QImage seeked;
+        QString streamError;
+        QString seekError;
+        QVERIFY2(stream.frameAt(timeMs, &streamed, &streamError),
+                 qPrintable(QStringLiteral("%1 t=%2: %3").arg(label).arg(timeMs).arg(streamError)));
+        QVERIFY2(seek.frameAt(timeMs, &seeked, &seekError),
+                 qPrintable(QStringLiteral("%1 seek t=%2: %3").arg(label).arg(timeMs).arg(seekError)));
+        QVERIFY2(streamed == seeked,
+                 qPrintable(QStringLiteral("%1 frame mismatch at t=%2").arg(label).arg(timeMs)));
+    };
+
+    expectMatch(2000, QStringLiteral("forward"));
+    const int anchorsBefore = stream.anchorCount();
+    expectMatch(0, QStringLiteral("backwards"));
+    QVERIFY2(stream.anchorCount() > anchorsBefore,
+             "a backwards jump must reposition the stream");
+
+    // A far-forward jump beyond the sequential window also repositions.
+    const int opensBefore = stream.streamOpenCount();
+    expectMatch(5500, QStringLiteral("far-forward"));
+    QVERIFY(stream.streamOpenCount() > opensBefore);
+
+    // Unknown frame rate: no streaming is attempted and every request is served
+    // by the positioned seek, which preserves the previous behaviour exactly.
+    ReframeStreamFrameProvider noRate(clip, ffmpeg, 0.0);
+    for (int i = 0; i < 4; ++i) {
+        QImage streamed;
+        QImage seeked;
+        QString e1;
+        QString e2;
+        QVERIFY(noRate.frameAt(i * 700, &streamed, &e1));
+        QVERIFY(seek.frameAt(i * 700, &seeked, &e2));
+        QVERIFY(streamed == seeked);
+    }
+    QCOMPARE(noRate.streamOpenCount(), 0);
+    QCOMPARE(noRate.anchorCount(), 4);
+    QCOMPARE(noRate.seekDecodeCount(), 4);
+}
+
+void ProjectTest::ffmpegFrameSourceLifecycleIsSafe()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable");
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString clip;
+    QVERIFY(createProviderTestClip(directory.path(), 20, 10, &clip));
+
+    // A stream closed before it is ever read must tear down cleanly: the streaming
+    // provider opens a stream at an anchor and can reposition without reading it.
+    {
+        FfmpegFrameSource source;
+        QVERIFY(source.open(clip, 180, 90, 200, false));
+        source.close();
+    }
+
+    // Closing after a read, and destroying without an explicit close, are safe too.
+    {
+        FfmpegFrameSource source;
+        QVERIFY(source.open(clip, 180, 90, 200, false));
+        QImage frame;
+        FrameSource::ReadResult result = FrameSource::ReadResult::Error;
+        QVERIFY(source.readNextFrame(10000, &result, &frame));
+        QCOMPARE(result, FrameSource::ReadResult::Ok);
+        source.close();
+    }
+    {
+        FfmpegFrameSource source;
+        QVERIFY(source.open(clip, 180, 90, 0, false));
+        QImage frame;
+        FrameSource::ReadResult result = FrameSource::ReadResult::Error;
+        QVERIFY(source.readNextFrame(10000, &result, &frame));
+    }
+
+    // The stream's first frame after an input seek is the contract a far-forward
+    // anchor depends on: it must be exactly the frame the positioned seek returns
+    // for the same timestamp.
+    const QString ffmpeg = FrameExtractor::defaultExecutablePath();
+    FfmpegSeekFrameProvider seek(clip, ffmpeg);
+    for (const qint64 timeMs : { 200, 1500 }) {
+        FfmpegFrameSource source;
+        QVERIFY2(source.open(clip, 180, 90, timeMs, false),
+                 qPrintable(QStringLiteral("t=%1: open failed").arg(timeMs)));
+        QImage streamed;
+        FrameSource::ReadResult result = FrameSource::ReadResult::Error;
+        QVERIFY2(source.readNextFrame(10000, &result, &streamed),
+                 qPrintable(QStringLiteral("t=%1: read failed").arg(timeMs)));
+        QCOMPARE(result, FrameSource::ReadResult::Ok);
+        QImage seeked;
+        QString seekError;
+        QVERIFY2(seek.frameAt(timeMs, &seeked, &seekError), qPrintable(seekError));
+        QCOMPARE(streamed.size(), seeked.size());
+        QCOMPARE(streamed.convertToFormat(QImage::Format_RGB32),
+                 seeked.convertToFormat(QImage::Format_RGB32));
+        source.close();
+    }
+}
+
+void ProjectTest::reframeStreamProviderRejectsBadInputAndEndOfSource()
+
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable");
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString clip;
+    QVERIFY(createProviderTestClip(directory.path(), 20, 10, &clip));
+
+    ReframeStreamFrameProvider stream(clip, FrameExtractor::defaultExecutablePath(),
+                                      10.0);
+    QImage frame;
+    QString error;
+
+    QVERIFY(!stream.frameAt(0, nullptr, &error));
+    QVERIFY(!error.isEmpty());
+    QVERIFY(!stream.frameAt(-5, &frame, &error));
+    QVERIFY(!error.isEmpty());
+
+    // Requesting a frame past the end of the media fails honestly rather than
+    // returning a stale or approximate frame.
+    const bool beyond = stream.frameAt(60000, &frame, &error);
+    QVERIFY2(!beyond, "a request past the end of the media must fail");
+    QVERIFY(!error.isEmpty());
+
+    // The provider is still usable afterwards.
+    QImage recovered;
+    QString recoverError;
+    QVERIFY2(stream.frameAt(200, &recovered, &recoverError), qPrintable(recoverError));
+}
+
+void ProjectTest::reframeRenderEquivalenceStreamingVersusSeek()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable");
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString clip;
+    QVERIFY(createProviderTestClip(directory.path(), 60, 10, &clip));  // 6 s at 10 fps
+    const QString ffmpeg = FrameExtractor::defaultExecutablePath();
+
+    // Three cases required by the objective: one continuous range, a trimmed
+    // range, and multiple disjoint retained segments.
+    QList<QPair<QString, ReframePlan>> cases;
+    {
+        ReframePlan continuous = makeReframePlan(
+            0, 4000, 160, 90, 5.0,
+            { makeKeyframe(0, 0.0), makeKeyframe(4000, 90.0) });
+        cases.append(qMakePair(QStringLiteral("continuous"), continuous));
+
+        ReframePlan trimmed = makeReframePlan(
+            1500, 3500, 160, 90, 5.0,
+            { makeKeyframe(1500, -20.0), makeKeyframe(3500, 20.0) });
+        cases.append(qMakePair(QStringLiteral("trimmed"), trimmed));
+
+        ReframePlan disjoint = makeReframePlan(
+            0, 4000, 160, 90, 5.0,
+            { makeKeyframe(0, 0.0), makeKeyframe(4000, 60.0) });
+        disjoint.setSegments({ ReframePlan::TimeRange{ 0, 1000 },
+                               ReframePlan::TimeRange{ 2000, 3000 } });
+        cases.append(qMakePair(QStringLiteral("disjoint segments"), disjoint));
+    }
+
+    for (const QPair<QString, ReframePlan> &entry : cases) {
+        const ReframePlan &plan = entry.second;
+        QVERIFY2(plan.isValid(), qPrintable(entry.first));
+        const QString label = entry.first;
+
+        // Previous behaviour: an explicitly injected positioned-seek provider.
+        FfmpegSeekFrameProvider seekProvider(clip, ffmpeg);
+        const QString seekOutput =
+            directory.filePath(label.split(QLatin1Char(' ')).first()
+                               + QStringLiteral("_seek.mp4"));
+        const ReframePipeline::Result before = ReframePipeline::renderPlan(
+            plan, clip, seekOutput, &seekProvider);
+        QVERIFY2(before.ok, qPrintable(label + QStringLiteral(": ") + before.error));
+
+        // New behaviour: the streaming provider is the render default.
+        const QString streamOutput =
+            directory.filePath(label.split(QLatin1Char(' ')).first()
+                               + QStringLiteral("_stream.mp4"));
+        const ReframePipeline::Result after =
+            ReframePipeline::renderPlan(plan, clip, streamOutput, nullptr);
+        QVERIFY2(after.ok, qPrintable(label + QStringLiteral(": ") + after.error));
+
+        // Metadata equivalence.
+        QCOMPARE(after.frameCount, before.frameCount);
+        QCOMPARE(after.frameCount, plan.frameCount());
+        QCOMPARE(after.plan.output().width, before.plan.output().width);
+        QCOMPARE(after.plan.output().height, before.plan.output().height);
+        QCOMPARE(after.plan.segments().size(), before.plan.segments().size());
+
+        // Frame equivalence: the decoded content must be identical.
+        const QByteArray seekFrames = decodeAllFramesRaw(seekOutput);
+        const QByteArray streamFrames = decodeAllFramesRaw(streamOutput);
+        QVERIFY(!seekFrames.isEmpty());
+        QCOMPARE(streamFrames.size(), seekFrames.size());
+        QCOMPARE(QCryptographicHash::hash(streamFrames, QCryptographicHash::Sha256).toHex(),
+                 QCryptographicHash::hash(seekFrames, QCryptographicHash::Sha256).toHex());
+
+        // Stronger: with identical source pixels and identical encoder settings
+        // the containers are byte-identical too. Asserted because it is actually
+        // observed here; the decoded-frame comparison above is the guarantee that
+        // must hold even if a future FFmpeg stops being reproducible.
+        QCOMPARE(QCryptographicHash::hash(readFileBytes(streamOutput),
+                                          QCryptographicHash::Sha256).toHex(),
+                 QCryptographicHash::hash(readFileBytes(seekOutput),
+                                          QCryptographicHash::Sha256).toHex());
+    }
+}
+
 void ProjectTest::mainWindowShowsReframeOutputs()
+
 
 {
     TestMainWindow window;

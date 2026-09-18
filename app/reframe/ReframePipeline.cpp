@@ -6,10 +6,11 @@
 
 #include <memory>
 
+#include "media/FfprobeDurationProbe.h"
 #include "media/FrameExtractor.h"
-#include "reframe/FfmpegSeekFrameProvider.h"
 #include "reframe/ReframePlanBuilder.h"
 #include "reframe/ReframeRenderer.h"
+#include "reframe/ReframeStreamFrameProvider.h"
 
 ReframePipeline::Result ReframePipeline::run(const Request &request)
 {
@@ -100,8 +101,20 @@ ReframePipeline::Result ReframePipeline::renderPlan(
     std::unique_ptr<ReframeFrameProvider> ownedProvider;
     ReframeFrameProvider *frameProvider = provider;
     if (!frameProvider) {
-        ownedProvider = std::make_unique<FfmpegSeekFrameProvider>(sourcePath,
-                                                                  ffmpeg);
+        // Objective 20: ONE persistent decoding process for the whole render,
+        // instead of one FFmpeg process per output frame. The source frame rate
+        // is probed once so the provider can replay frames sequentially; when it
+        // is unknown, or when a request cannot be served sequentially (a
+        // backwards jump, a far-forward jump, or a stream that ended), the
+        // provider falls back to a positioned seek and the result is unchanged.
+        double sourceFps = 0.0;
+        {
+            FfprobeDurationProbe rateProbe;
+            QString rateError;
+            rateProbe.frameRate(sourcePath, &sourceFps, &rateError);
+        }
+        ownedProvider = std::make_unique<ReframeStreamFrameProvider>(
+            sourcePath, ffmpeg, sourceFps);
         frameProvider = ownedProvider.get();
     }
 

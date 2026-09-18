@@ -325,3 +325,33 @@ Point REELCRAFT_TARGET_CLIP at the proxy to run realSourcePlaybackIntegration.
 This is also why source playback streams a bounded 2:1 proxy rather than the native
 resolution (Decision 036): per-frame cost must not scale with the source resolution.
 
+
+## Generated-Makefile Integrity — REQUIRED Build Practice (2026-09-18)
+
+### The hazard
+
+`reelcraft/` and `tests/` each have their own generated `Makefile`, and both compile the same application sources. qmake writes each object's dependency list when it generates the makefile. If a **new** source or header is added to a `.pro` file and qmake is not re-run in that directory, the affected objects keep the dependency list they were generated with — and an existing translation unit that now includes the new header may not list it as a dependency at all.
+
+The result is a binary that links objects compiled against different revisions of the same class. For a class instantiated **on the stack** (as the test suite instantiates `ReframeStreamFrameProvider`), that mismatches the caller's stack frame against the constructor's writes and produces a `*** stack smashing detected ***` SIGABRT. It also produced a deterministic, entirely spurious frame-selection mismatch. Both symptoms vanished with a consistent rebuild, and in this instance the only artefact that changed between the failing and the passing runs was one recompiled object file plus the relink.
+
+This is not a code defect and not a compiler bug: it is a stale generated build file.
+
+### Required practice
+
+- After **adding, renaming or removing** a source or header, run qmake in **both** directories before building:
+
+      cd /data/data/com.termux/files/home/reelcraft
+      /usr/lib/qt6/bin/qmake QMAKE_CC=/usr/bin/gcc QMAKE_CXX=/usr/bin/g++
+      make -j1
+      cd tests
+      /usr/lib/qt6/bin/qmake QMAKE_CC=/usr/bin/gcc QMAKE_CXX=/usr/bin/g++
+      make -j1
+      make -j1
+
+- Run `make` **twice**: the second pass must report no work. A second pass that still builds something means the dependency graph is still settling.
+- `Makefile` files are git-ignored, so this cannot be fixed by committing them; it must be done as part of the build.
+- When a crash or a behaviour change appears in a test binary without a corresponding source change, suspect build consistency first. Establish **which artefact changed** between the passing and failing runs before investigating the code.
+- To verify a specific dependency is present in a generated makefile:
+
+      awk '/^test_project.o:/{f=1} f{print} f&&!/\\$/{exit}' tests/Makefile | grep -c 'ReframeStreamFrameProvider.h'
+

@@ -741,3 +741,15 @@ Date: 2026-09-18
 - **Known limitation:** source playback is silent. Reelcraft still has no audio output, and adding one is a separate objective; source playback was kept extensible for it rather than expanding this one. Rendered output remains silent as before.
 - 9 new tests; targeted regression 44 passed / 0 failed / 0 skipped; real-media validation passed on a real 360 clip. Decision 036 records the architecture.
 
+
+## v0.2.58 — Persistent Render Decoding and Deterministic Throughput
+
+Date: 2026-09-18
+
+- Rendering a 360 source no longer starts a new video decoder for every frame it produces. The render path keeps one decoding stream open across the frames it renders and reads forwards from it, so the number of decoder processes follows the number of edit anchors rather than the number of output frames.
+- What is rendered is unchanged: the new path produces exactly the same frames and the same output files as before, including for trimmed edits and for edits built from several separate time ranges. This is verified by comparing decoded frames and the output files themselves.
+- A far jump forward in the source re-opens the stream at that position instead of decoding through everything in between, and every case the streaming path cannot serve — an unknown frame rate, an unreadable source, the end of the media — falls back to the previous frame-accurate seek path. No frame is ever guessed.
+- Source frame rate is read once per source, and when it cannot be determined rendering behaves exactly as it did before.
+- Measured on a real 360 render of six output frames, FFmpeg process creations fell from 9 to 5, with no decoder process scaling with the frame count.
+- 6 new tests; full suite 431 passed / 0 failed / 9 skipped. Decision 037 records the architecture.
+

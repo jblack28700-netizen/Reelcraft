@@ -553,3 +553,28 @@ survive a project reopen, and a damaged record is reported rather than recovered
 Persisting accept/reject status (with its own schema and versioning decision) and a
 retention/compaction policy are both future objectives. Neither is in scope for Objective 17.
 
+
+# Issue — A generated makefile can silently mix object revisions (2026-09-18)
+
+### Status
+
+Fixed and verified; the underlying hazard is operational and must be respected by future objectives.
+
+### Description
+
+`tests/Makefile` was generated (11:03:22) before `app/reframe/ReframeStreamFrameProvider.h` was last modified (11:17:00), and its dependency rule for `test_project.o` listed `ReframePipeline.h` but **not** the new provider header — even though `test_project.cpp` includes it and instantiates the class **on the stack**. Because the dependency was absent, changing the provider header never recompiled the translation unit whose stack frame must match the class layout, so the linked test binary combined two revisions of the same class. The observable symptoms were a `*** stack smashing detected ***` SIGABRT and a deterministic but spurious frame-selection mismatch, both in tests that had nothing wrong with them.
+
+The mechanism was identified by elimination and artefact evidence rather than by guessing: a standalone media-layer repro cleared `FfmpegFrameSource` and `QProcess` teardown; an `LD_PRELOAD` interposer for `__stack_chk_fail` was prepared to capture a backtrace; and the decisive fact was that between the failing and the passing runs the **only** changed artefact was `tests/test_project.o` plus the relink.
+
+### Impact
+
+- High when it occurs and hard to diagnose from the symptom: a stack-canary abort or a wrong result that is entirely an artefact of the build tree, in code that is correct.
+- It invalidated two Objective 20 blocker diagnoses until the artefact evidence was examined, and it would silently invalidate any future result obtained from a partially rebuilt tree.
+- Not a product defect: no shipped behaviour depends on it, and a fully consistent build reproduces neither symptom.
+
+### Planned Resolution
+
+- Done: `tests/Makefile` regenerated with `qmake`; its `test_project.o` rule now lists `ReframeStreamFrameProvider.h`. Rebuild and re-run confirmed all six affected tests pass repeatedly with no stack smashing.
+- Standing rule (recorded in `DEVELOPMENT_ENVIRONMENT.md`): run `qmake` in **both** `reelcraft/` and `tests/` after adding or renaming source or header files, and re-run `make` twice so the second pass builds nothing.
+- Standing rule: a stack-canary abort or a behaviour change that appears without a corresponding source change should first be treated as a build-consistency problem — check that the artefact that changed is the one you think changed — before being treated as a product defect.
+

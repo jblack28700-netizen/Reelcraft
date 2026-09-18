@@ -482,11 +482,41 @@ Make real equirectangular 360 media observable: import it, play it continuously,
 - 9 new tests; targeted regression 44 passed / 0 failed / 0 skipped.
 - Real-media validation passed on a real 360 clip.
 
+
+## 360 Reframing Objective 20 — Persistent Render Decoding and Deterministic Throughput — Complete
+
+Status: **Complete — implemented and verified (2026-09-18).**
+
+### Objective
+
+Human-authorized scope (Decision 037). Core requirement: **FFmpeg process creation must no longer scale one-for-one with the number of rendered output frames**, without changing what is rendered.
+
+### Scope (implemented)
+
+- `app/reframe/ReframeStreamFrameProvider.{h,cpp}`: a `ReframeFrameProvider` that keeps a persistent `FfmpegFrameSource` open per anchored span and serves subsequent requests by reading forward from it.
+- A bounded sequential window (3000 ms) so a far-forward jump re-anchors instead of decoding arbitrarily far ahead; backwards jumps, stream failure, media end and an unknown frame rate all re-anchor.
+- The positioned seek path is retained as the fallback and the geometry-discovery path, so the worst case is the previous cost and never a different frame.
+- Decoded-frame identity with the previous path: the stream's RGB888 frames are normalised to the seek path's decoded format.
+- Source frame rate read once per source through the existing ffprobe seam.
+- New source and header added to both `reelcraft.pro` and `tests/tests.pro`.
+
+### Verification
+
+- 6 new tests (streaming/seek frame equality, process count independent of frame count, jumps and fallback, invalid input and end of source, streaming/seek render equivalence, frame-source lifecycle).
+- `reframeRenderEquivalenceStreamingVersusSeek`: identical frame counts, identical decoded frames, and **byte-identical MP4 containers** for continuous, trimmed and multiple disjoint temporal segments.
+- Targeted re-run of all six: 6 passed / 0 failed / 0 stack smashing.
+- Full suite: **431 passed / 0 failed / 9 skipped**.
+- Measured core requirement: FFmpeg process creations **9 -> 5** on `reframePipelineRendersRealVideoEndToEnd`.
+
+Focused-test wall times on this device (recorded, not gates): lifecycle 19 s, matches-seek 53 s, process-count 15 s, jumps 37 s, invalid-input 9 s, render equivalence 148 s.
+
+---
+
 ## Next Objective — NOT SCOPED
 
 The established product direction is that Reelcraft must first become a working 360 video editor, with 360 reframing as the central problem. Leading candidates, in the light of Objective 19:
 
-- **render throughput and audio in the output** (the render path decodes one FFmpeg process per frame and writes silent video);
+- **audio in the rendered output** (renders are still silent; Objective 20 removed the per-frame decoder process but added no audio);
 - **the trajectory-to-camera-path stage** (dense tracking plus a deterministic smoothing/framing layer), which is where reframing quality is actually won;
 - **creator review and revision surface** over persisted decisions (`decisionProvenance()` and `reviseEditDecision()` exist as APIs with no UI);
 - **speaker/dialogue capability**, which first needs a licensing-and-capability evaluation before any engineering.

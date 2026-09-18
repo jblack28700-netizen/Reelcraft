@@ -1343,3 +1343,34 @@ The product direction is that Reelcraft must first become a working 360 video ed
 - Known limitation: the source frame rate is discovered by an ffprobe call at each open (start and each seek). An unknown rate falls back to the default pacing, so playback speed can differ from the source rate when ffprobe is unavailable or reports nothing.
 - No parser, plan, decision-artifact, renderer, export or perception change. Decisions 017-035 are preserved.
 
+
+---
+
+# Decision 037 — Persistent Render Decoding Architecture
+
+**Status:** Accepted (2026-09-18, 360 Reframing Objective 20)
+
+## Context
+
+Reelcraft must first become a working 360 video editor, and the reframing engine is the part that does the work. Rendering a reframe means decoding one source frame per output frame, and the provider the pipeline used (`FfmpegSeekFrameProvider`) satisfies every request by spawning one FFmpeg process with an input seek. A render of N frames therefore created O(N) decoder processes. On the development device this dominated the cost of every real render and made longer renders progressively worse, and it is the reason Objective 20 was scoped with a single measurable requirement rather than a general "make rendering faster".
+
+The constraint that shapes every choice below is that this must be a **throughput** change and not a **behaviour** change. The deterministic render contract (Decision 018) says the renderer executes an already-validated plan; a render that is faster but produces different frames would silently invalidate every persisted decision and every equivalence guarantee Reelcraft has accumulated.
+
+## Decisions
+
+- **Continuity is exploited where the work actually is.** `ReframeRenderer::render()` requests timestamps monotonically non-decreasing because `plan.frameTimeMs()` walks the plan's ordered segments, so consecutive requests are normally adjacent frames of the same stream. The provider therefore keeps one `FfmpegFrameSource` open at an **anchor** and answers subsequent requests by reading forward from it. Process creation follows anchors, not frames.
+- **The forward replay window is bounded (3000 ms), and a jump beyond it re-anchors.** Unbounded replay would let a single far-forward request decode everything in between, which is worse than the old behaviour for exactly the request pattern that motivated streaming. Re-anchoring also re-aligns the cursor with the true source timeline, which is what makes frame selection stable after a jump. Anchoring stays an O(anchors) cost, never O(frames).
+- **The positioned seek path is retained as the fallback and as the geometry-discovery path, and the provider never guesses.** An unknown frame rate, invalid input, an unreadable source, the end of the media, or any stream failure falls back to the seek path, so the worst case is the previous cost and never a different frame. Geometry is learned from the first anchor's seeked frame because a rawvideo stream carries no dimensions.
+- **Frame identity with the previous path is a contract, not a coincidence.** The persistent stream delivers `Format_RGB888` while the seek path delivers the PNG-decoded format, and a mismatch here changed rendered output during development; frames are therefore normalised to the seek path's format before delivery. The far-forward anchor additionally depends on an input-seeked stream's first frame being exactly the frame the positioned seek returns at that timestamp — verified directly against FFmpeg and locked by a test.
+- **The source frame rate is read once per source through the existing ffprobe seam (Decision 027), and an unknown rate disables streaming entirely.** Pacing the sequential cursor requires a frame step; inventing one would shift frame selection. With no rate the provider behaves exactly as it did before.
+- **The provider is the only thing that changed.** `ReframePlan`, `CameraPath`, `ReframeRenderer`, `ReframePipeline::renderPlan`, the decision artifact and every persisted schema are untouched, so persisted decisions remain replayable and byte-comparable.
+
+## Consequences
+
+- The core requirement is met and measured: on a real 360 render of 6 output frames, FFmpeg process creations fell from 9 to 5, and no decoder process scales with the frame count. The structural assertion is tested directly (60 consecutive requests => at most 3 stream opens, exactly 1 geometry decode).
+- Output equivalence is proven, not assumed: streaming and seek rendering produce identical decoded frames and byte-identical MP4 containers for continuous, trimmed and multiple disjoint temporal segments.
+- The streaming path is an optimisation with a conservative failure mode. Any source it cannot stream — an unknown frame rate above all — keeps the previous behaviour exactly, which is why the fallback is stated as part of the architecture rather than as an implementation detail.
+- Suite cost is recorded honestly: the focused real-FFmpeg provider tests add roughly 280 s and the full suite now runs about 563 s.
+- A build-integrity defect surfaced while debugging this objective and is fixed and recorded: a generated makefile predated the new header and did not declare it as a dependency of the translation unit that instantiates the provider on the stack, so a header change never recompiled it and the binary mixed two revisions of the class. The failure mode (stack-canary abort plus a spurious frame mismatch) is recorded in `KNOWN_ISSUES.md`, and the operational requirement in `DEVELOPMENT_ENVIRONMENT.md`.
+- Not in this objective: audio, perception/detection/tracking, camera-path generation, auto-reframing, export presets, equirect export, UI, `EditDecision`/`ReframeIntent` schema changes, `ReframePlan` redesign, and any change to the Objective 19 1024x512 playback proxy. Decisions 017-036 are preserved.
+
