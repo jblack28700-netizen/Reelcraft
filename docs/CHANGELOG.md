@@ -790,3 +790,15 @@ Date: 2026-09-18
 - Nothing about how subjects are detected, tracked or identified changed, and nothing about how edits are stored or replayed changed.
 - 1 new test measuring five sampling densities; targeted regression 46 passed / 0 failed / 0 skipped. Decision 044 records the design.
 
+
+## v0.2.62 — Following a subject costs far less to compute
+
+Date: 2026-09-18
+
+- Following a subject no longer starts a fresh video decoder for every position it samples. One decoder is now kept running and reused across the whole trajectory, so following is both faster and lighter.
+- Measured on the development device, resolving a six-position trajectory went from six decoder launches in about fifteen seconds to three launches in about ten seconds, with exactly the same result. Real 360 footage follows the same pattern, and the saving grows the more finely the subject is sampled.
+- The frames used are identical to the ones used before — this changes how they are fetched, not what is seen — so the resulting edit and camera movement are unchanged.
+- If the footage's frame rate cannot be determined, or the reusable decoder cannot be used for any reason, Reelcraft falls back to the previous behaviour automatically rather than failing.
+- Nothing about how subjects are detected, tracked or identified changed, and no stored edit or project data changed.
+- 51 targeted regression tests passed with none failing. Decision 045 records the design.
+

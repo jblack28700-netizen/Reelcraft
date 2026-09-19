@@ -2,7 +2,7 @@
 
 ## Current Version
 
-0.2.61
+0.2.62
 
 ## Current Branch
 
@@ -81,7 +81,7 @@ Status: Partially implemented — deterministic reframing vertical slice complet
 
 Status: Implemented and continuously verified.
 
-A Qt Test suite covers project state, viewer/media, the media-source seam and frame pump, player/timing, the 360 reframing engine (plan validation/round-trip, camera interpolation, rendering determinism, intent parsing, plan building, and a real FFmpeg end-to-end render), and target resolution (equirect/view geometry, seam and pitch boundaries, view coverage, deterministic tracking, resolver behavior, the subprocess detector protocol, the track planner, and a model-free detection -> plan -> render path). Current result: 451 passed, 0 failed, 9 skipped (~686 s; the real-FFmpeg render, decode and analysis tests dominate). Eight skips are environment-gated real-media/model integrations (real detector, speaker, appearance, real 360 clip, rendered playback, source playback, compound command, application/user command) that run only when the corresponding helper, model and clip variables are configured; the ninth is the child-only slot driven by the fresh-process replay test. The normal suite stays model-free.
+A Qt Test suite covers project state, viewer/media, the media-source seam and frame pump, player/timing, the 360 reframing engine (plan validation/round-trip, camera interpolation, rendering determinism, intent parsing, plan building, and a real FFmpeg end-to-end render), and target resolution (equirect/view geometry, seam and pitch boundaries, view coverage, deterministic tracking, resolver behavior, the subprocess detector protocol, the track planner, and a model-free detection -> plan -> render path). Current result: 452 passed, 0 failed, 9 skipped (~718 s; the real-FFmpeg render, decode and analysis tests dominate). Eight skips are environment-gated real-media/model integrations (real detector, speaker, appearance, real 360 clip, rendered playback, source playback, compound command, application/user command) that run only when the corresponding helper, model and clip variables are configured; the ninth is the child-only slot driven by the fresh-process replay test. The normal suite stays model-free.
 
 ## Technology Direction
 
@@ -1253,4 +1253,18 @@ Status: Complete (2026-09-18). Decision 044.
 - Deliberately unchanged: no perception threshold, detector, cover-view association, identity semantic, planner, renderer, persisted schema or parser change. The Objective 23 duplicate-identity (merge-distance) finding is preserved untouched.
 - **Verification:** 1 new test (`reframeCommandRunnerFollowSamplingDensity`) that measures and asserts five densities, the cap, the 1:1 observation/keyframe mapping, the spacing, the invariant angular span, the follow-only scoping (an aim command over the same range still takes exactly five samples and one keyframe) and the explicit-timestamp override; plus the four Objective 23 follow tests on real and synthetic media. Targeted regression across the affected area: **46 passed / 0 failed / 0 skipped**.
 - **Recorded follow-up (not done):** where no frame provider is injected, every sample is still its own decoder process (~2.5 s each on this device). Reusing a persistent decoder for resolution is a resolution-seam change and belongs to its own objective.
+
+
+## Phase 4 Objective 25 — Persistent Decoder Reuse for Trajectory Resolution — Complete
+
+Status: Complete (2026-09-18). Decision 045.
+
+- **The cost, from source evidence.** Objective 24 raised follow sampling to as many as 24 trajectory samples, and resolution opened **one FFmpeg process per sample** (`FfmpegSeekFrameProvider` → `FrameExtractor::extractFrameAt`). An invocation costs ~2.5 s on this device whatever the frame size — a 360x180 frame costs the same as a 4K one — because process start-up and proot's syscall cost dominate, so resolution cost grew linearly with sampling density at a large fixed price per sample.
+- The default resolution provider is now `ReframeStreamFrameProvider` — the provider the render path has used since Objective 20 (Decision 037) — built with a frame rate read once through the existing `FfprobeDurationProbe` seam, mirroring `ReframePipeline::renderPlan`. **No new seam, type or dependency**: it is already a `ReframeFrameProvider`, so only the default implementation behind the resolution seam changed.
+- Correctness is inherited: Objective 20 proved the streaming provider's frames byte-identical to the positioned seek path's. Failure degrades to the previous behaviour — an unknown frame rate, a far-forward or backwards request, a stream that fails or ends, or a failed stream open all fall back to the positioned seek, so the worst case is the previous cost and never a different frame.
+- **Measured** (same source, timestamps and follow command; every FFmpeg invocation counted through a wrapper): **6 samples → 6 processes / 15.2–16.0 s (seek) versus 3 processes / 9.9–10.1 s (persistent)**, with identical observation counts, keyframe counts, keyframe timestamps and exactly equal keyframe yaw/pitch values. The real-media follow test (8 samples) fell **37.6 s → 26.8 s**.
+- The persistent path's process count is bounded by *anchors* (one geometry decode plus one stream open per bounded window) rather than by sample count, so the saving grows with density; at the shipped maximum of 24 samples the ratio is roughly six to one.
+- **Verification:** 1 new test measuring both paths under a counting wrapper and asserting exact trajectory equality plus a material process reduction; targeted regression including the Objective 20 stream-provider equivalence, jump/fallback and lifecycle tests (which cover the reuse mechanism's failure and cleanup paths): **51 passed / 0 failed / 0 skipped**.
+- **Recorded caveat:** within a bounded window the stream decodes the frames between samples at native resolution. That is cheaper than a separate invocation because the per-invocation cost is start-up rather than decoding, but no direct 4K measurement was possible here (the suite uses a small proxy, not the 779 MB original). **Recorded cost:** one extra ffprobe call per resolution pass.
+- Deliberately unchanged: follow sampling behaviour (`followSampleIntervalMs` 250 ms, `followResolveSamplesMax` 24), the explicit `resolveTimestamps` override, aim/direction sampling, subject identity resolution, detector and tracker thresholds, `TargetTrackPlanner`, camera-path semantics, the renderer, the parser, every persisted schema, injected/test frame providers, and original-media immutability. The Objective 23 duplicate-identity finding is untouched.
 

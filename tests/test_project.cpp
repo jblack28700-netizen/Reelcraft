@@ -1087,6 +1087,7 @@ private slots:
     void reframeCommandRunnerFollowFallsBackWhenTrackUnusable();
     void reframePipelineFollowsMovingSubjectOnRealMedia();
     void reframeCommandRunnerFollowSamplingDensity();
+    void reframeResolutionReusesDecoderProcesses();
     void realSourcePlaybackIntegration();
     void mainWindowPlaybackButtonsEmitRequests();
     void mainWindowShowsPlaybackStateAndPosition();
@@ -17031,6 +17032,175 @@ void ProjectTest::reframeCommandRunnerFollowSamplingDensity()
         ReframeCommandRunner::prepare(explicitTimes, &detector, &provider);
     QVERIFY2(explicitResult.ok, qPrintable(explicitResult.error));
     QCOMPARE(explicitResult.plan.keyframes().size(), 5);
+}
+
+
+
+// ===========================================================================
+// Persistent decoder reuse for trajectory resolution (Objective 25)
+// ===========================================================================
+
+namespace {
+
+// Writes an FFmpeg wrapper that records every invocation and then runs the real
+// executable, so a test can count decoder processes without changing the code
+// under test. FrameExtractor::defaultExecutablePath() honours REELCRAFT_FFMPEG,
+// and FfmpegFrameSource resolves the same way, so both paths are counted.
+QString writeCountingFfmpegWrapper(const QString &directory,
+                                   const QString &realFfmpeg, QString *outLogPath)
+{
+    const QString logPath = directory + QStringLiteral("/ffmpeg_calls.txt");
+    const QString wrapperPath = directory + QStringLiteral("/count_ffmpeg.sh");
+    QFile file(wrapperPath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        return QString();
+    }
+    file.write("#!/bin/bash\n");
+    file.write(QStringLiteral("echo \"$*\" >> '%1'\n").arg(logPath).toUtf8());
+    file.write(QStringLiteral("exec '%1' \"$@\"\n").arg(realFfmpeg).toUtf8());
+    file.close();
+    QFile::setPermissions(wrapperPath, QFile::ReadOwner | QFile::WriteOwner
+                                          | QFile::ExeOwner | QFile::ReadGroup
+                                          | QFile::ExeGroup);
+    if (outLogPath) {
+        *outLogPath = logPath;
+    }
+    return wrapperPath;
+}
+
+int countRecordedCalls(const QString &logPath)
+{
+    QFile file(logPath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return 0;
+    }
+    int count = 0;
+    while (!file.atEnd()) {
+        if (!file.readLine().trimmed().isEmpty()) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+} // namespace
+
+void ProjectTest::reframeResolutionReusesDecoderProcesses()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable in this environment");
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString sourcePath;
+    QVERIFY(createMovingTargetEquirectClip(
+        directory.path(), FrameExtractor::defaultExecutablePath(), 8, 2,
+        &sourcePath));
+
+    const QString realFfmpeg = FrameExtractor::defaultExecutablePath();
+    QString logPath;
+    const QString wrapper =
+        writeCountingFfmpegWrapper(directory.path(), realFfmpeg, &logPath);
+    QVERIFY(!wrapper.isEmpty());
+    QFile::remove(logPath);
+
+    // Whether the sequential cursor can run at all depends on the source frame
+    // rate, which is read through the existing ffprobe seam. The reduction is
+    // only asserted when this environment can report one; the trajectory
+    // equivalence below is asserted either way.
+    double probedFps = 0.0;
+    QString probeError;
+    const bool haveFrameRate =
+        FfprobeDurationProbe().frameRate(sourcePath, &probedFps, &probeError);
+
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+
+    ReframeCommandRequest request;
+    request.sourcePath = sourcePath;
+    request.instruction = QStringLiteral("follow the person");
+    request.defaultRange = ReframePlan::TimeRange{ 0, 3500 };
+    request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+    request.sourceDurationMs = 4000;
+    request.resolveConfig = smallResolverConfig();
+    request.resolveConfig.tracker.mergeDistanceDeg = 24.0;
+    // Bounded so this test stays affordable; the density itself is measured by
+    // reframeCommandRunnerFollowSamplingDensity.
+    request.followResolveSamplesMax = 6;
+
+    // (1) The behaviour this objective replaces: one decoder process per sample,
+    // measured by injecting the positioned seek provider explicitly.
+    QFile::remove(logPath);
+    QElapsedTimer timer;
+    timer.start();
+    ReframeCommandResult seekResult;
+    {
+        FfmpegSeekFrameProvider seekProvider(sourcePath, wrapper);
+        seekResult =
+            ReframeCommandRunner::prepare(request, &detector, &seekProvider);
+    }
+    const qint64 seekMs = timer.elapsed();
+    const int seekProcesses = countRecordedCalls(logPath);
+    QVERIFY2(seekResult.ok, qPrintable(seekResult.error));
+
+    // (2) The default path: one persistent decoder reused across the samples.
+    QFile::remove(logPath);
+    qputenv("REELCRAFT_FFMPEG", wrapper.toUtf8());
+    timer.restart();
+    const ReframeCommandResult reusedResult =
+        ReframeCommandRunner::prepare(request, &detector, nullptr);
+    const qint64 reusedMs = timer.elapsed();
+    qunsetenv("REELCRAFT_FFMPEG");
+    const int reusedProcesses = countRecordedCalls(logPath);
+    QVERIFY2(reusedResult.ok, qPrintable(reusedResult.error));
+
+    int seekObservations = 0;
+    for (const TargetTrack &track : seekResult.tracks) {
+        seekObservations += track.size();
+    }
+    int reusedObservations = 0;
+    for (const TargetTrack &track : reusedResult.tracks) {
+        reusedObservations += track.size();
+    }
+
+    qInfo("resolution decode: seek %d process(es) in %lld ms (%d observations, "
+          "%d keyframes); persistent %d process(es) in %lld ms (%d observations, "
+          "%d keyframes)",
+          seekProcesses, static_cast<long long>(seekMs), seekObservations,
+          static_cast<int>(seekResult.plan.keyframes().size()), reusedProcesses,
+          static_cast<long long>(reusedMs), reusedObservations,
+          static_cast<int>(reusedResult.plan.keyframes().size()));
+
+    // Correctness first: identical timestamps must resolve to identical frames,
+    // so the trajectory and the resulting plan must match exactly.
+    QVERIFY(!seekResult.plan.keyframes().isEmpty());
+    QCOMPARE(reusedObservations, seekObservations);
+    QCOMPARE(reusedResult.plan.keyframes().size(),
+             seekResult.plan.keyframes().size());
+    for (int i = 0; i < seekResult.plan.keyframes().size(); ++i) {
+        QCOMPARE(reusedResult.plan.keyframes().at(i).timeMs,
+                 seekResult.plan.keyframes().at(i).timeMs);
+        QCOMPARE(reusedResult.plan.keyframes().at(i).yawDeg,
+                 seekResult.plan.keyframes().at(i).yawDeg);
+        QCOMPARE(reusedResult.plan.keyframes().at(i).pitchDeg,
+                 seekResult.plan.keyframes().at(i).pitchDeg);
+    }
+
+    // And the decode work must cost materially fewer processes.
+    QVERIFY2(seekProcesses >= 6,
+             qPrintable(QStringLiteral("the seek path launched only %1 process(es)")
+                            .arg(seekProcesses)));
+    if (haveFrameRate) {
+        QVERIFY2(reusedProcesses < seekProcesses,
+                 qPrintable(QStringLiteral("persistent path launched %1 process(es) "
+                                           "vs the seek path's %2")
+                                .arg(reusedProcesses)
+                                .arg(seekProcesses)));
+    } else {
+        qInfo("frame rate unavailable in this environment (%s); process-count "
+              "reduction not asserted",
+              qPrintable(probeError));
+    }
 }
 
 

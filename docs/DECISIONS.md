@@ -1566,3 +1566,44 @@ Decision 043 connected the resolved subject trajectory to the camera path, but t
 - Cost is one frame decode plus one detection pass per sample, bounded at 24 per follow command. Where no frame provider is injected, each sample is still its own decoder process — the recorded follow-up, and a resolution-seam change that belongs to its own objective rather than this one.
 - No perception threshold, detector, cover-view association, identity semantic, planner, renderer or persisted-schema change. The Objective 23 duplicate-identity finding (merge distance) is untouched and still awaits its own Decision 019 investigation.
 
+
+---
+
+# Decision 045 — Trajectory Resolution Reuses the Persistent Decoding Stream
+
+**Status:** Accepted (2026-09-18, 360 Reframing Objective 25)
+
+## Context
+
+Decision 044 raised follow-command sampling to as many as 24 trajectory samples. Resolution then opened **one FFmpeg process per sample** (`FfmpegSeekFrameProvider` → `FrameExtractor::extractFrameAt`), so the cost of a follow command scaled with its sampling density at a fixed cost per sample.
+
+That fixed cost is not decoding. Measured on this device, a single-frame decode of a 360x180 clip costs about the same as one of a 4K source (~2.5 s), because the dominant term is process start-up and the syscall cost of the proot container (~1 ms for `getpid()`, ~3.4 ms for a `stat()`), not the pixel work. Reducing the number of invocations is therefore the lever, exactly as Objective 20 found for rendering.
+
+## Decision
+
+- **The default trajectory-resolution provider becomes `ReframeStreamFrameProvider`** — the provider the render path already uses (Decision 037) — constructed with a source frame rate read once through the existing `FfprobeDurationProbe` seam. This mirrors `ReframePipeline::renderPlan`, which has used the same pattern since Objective 20.
+- **No new seam, type, interface or dependency.** `ReframeStreamFrameProvider` is already a `ReframeFrameProvider`, so the replaceable resolution seam is unchanged; only the default implementation behind it changes.
+- **Correctness is inherited, not assumed.** Objective 20 proved the streaming provider's frames byte-identical to the positioned seek path's, and its bounded-window and re-anchor logic is what keeps frame selection aligned with the source timeline. Detection therefore sees the same pixels it saw before.
+- **Failure degrades to the previous behaviour.** The provider falls back to the positioned seek whenever it cannot stream — an unknown frame rate, a far-forward or backwards request, an unreadable or ended source, a failed stream open. An unknown frame rate means nothing is streamed and every request is served exactly as before, so the worst case is the previous cost, never a different frame.
+- **The renderer and playback are not involved.** Resolution keeps its own provider instance; nothing about the render path changes.
+
+## Measured
+
+Same source, same timestamps, same follow command, six samples, counting every FFmpeg invocation through a wrapper:
+
+| | decoder processes | resolution time | observations | keyframes |
+|---|---|---|---|---|
+| positioned seek (previous default) | 6 | 15.2–16.0 s | 6 | 6 |
+| persistent stream (new default) | **3** | **9.9–10.1 s** | 6 | 6 |
+
+Observations, keyframe count, keyframe timestamps and every keyframe's yaw and pitch are **exactly equal** between the two; the assertions compare them exactly rather than approximately. The real-media follow test (eight samples) fell from 37.6 s to 26.8 s.
+
+The persistent path's process count is bounded by *anchors* — one geometry decode, plus one stream open per bounded window — rather than by sample count, so the saving grows with sampling density; the six-sample measurement understates it, and at the shipped maximum of 24 samples the ratio is roughly six to one.
+
+## Consequences
+
+- A dense follow command no longer pays a process per sample. The fixed costs are one ffprobe call for the frame rate and one geometry decode; both amortise across the samples.
+- **Recorded caveat:** within a bounded window the stream decodes the frames between samples at native resolution. That is cheaper than a separate invocation because the per-invocation cost is start-up rather than decoding — the 360x180 and 4K figures above are the evidence for that — but no direct measurement on a 4K 360 source was possible here, because the suite deliberately uses a small proxy rather than the 779 MB original.
+- **Recorded cost:** trajectory resolution now performs one extra ffprobe call per pass.
+- Nothing about perception, thresholds, cover-view association, identity semantics, the planner, camera-path semantics, the renderer, the parser or any persisted schema changed, and the Objective 23 duplicate-identity finding still awaits its own Decision 019 investigation.
+

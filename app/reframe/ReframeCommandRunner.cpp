@@ -6,10 +6,12 @@
 #include <memory>
 
 #include "media/FrameExtractor.h"
+#include "media/FfprobeDurationProbe.h"
 #include "reframe/ReframeContract.h"
 #include "reframe/FfmpegSeekFrameProvider.h"
 #include "reframe/ReframePipeline.h"
 #include "reframe/ReframePlanBuilder.h"
+#include "reframe/ReframeStreamFrameProvider.h"
 #include "target/SpeakerEvidenceAnalyzer.h"
 #include "target/SpeakerReframePlanner.h"
 #include "target/SpeakerTargetAssociator.h"
@@ -259,8 +261,33 @@ ReframeCommandResult ReframeCommandRunner::prepare(
                         "resolution.");
                     return result;
                 }
-                ownedProvider = std::make_unique<FfmpegSeekFrameProvider>(
-                    request.sourcePath, ffmpeg);
+                // Objective 25: resolve the trajectory through ONE persistent
+                // decoding process instead of one FFmpeg process per sample.
+                //
+                // Resolving N timestamps used to cost N FFmpeg invocations. On
+                // this device an invocation costs ~2.5 s whatever the frame size,
+                // because process start-up dominates under proot, so a follow
+                // command's denser sampling (up to 24 samples) multiplied that
+                // fixed cost. ReframeStreamFrameProvider is the provider the
+                // render path already uses: it keeps one stream open at an anchor
+                // and reads forward, re-anchoring when a request moves beyond its
+                // bounded window, and it falls back to the positioned seek path
+                // whenever streaming cannot serve a request. Objective 20 proved
+                // its frames byte-identical to the seek path's.
+                //
+                // The source frame rate is read once (through the existing
+                // ffprobe seam) because the sequential cursor needs a frame step.
+                // When it is unknown the provider streams nothing and every
+                // request goes to the positioned seek exactly as before, so the
+                // worst case is the previous behaviour, never a different frame.
+                double sourceFps = 0.0;
+                {
+                    FfprobeDurationProbe rateProbe;
+                    QString rateError;
+                    rateProbe.frameRate(request.sourcePath, &sourceFps, &rateError);
+                }
+                ownedProvider = std::make_unique<ReframeStreamFrameProvider>(
+                    request.sourcePath, ffmpeg, sourceFps);
                 frameProvider = ownedProvider.get();
             }
 

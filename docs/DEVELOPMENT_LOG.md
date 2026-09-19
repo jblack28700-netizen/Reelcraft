@@ -1931,3 +1931,52 @@ A second measured effect: sampling density also protects association. A three-ti
 
 - Decision 044 recorded. Decisions 017-043 preserved.
 
+
+## 2026-09-18 — Phase 4 Objective 25: Persistent Decoder Reuse for Trajectory Resolution
+
+### Objective
+
+Objective 24 raised follow sampling to as many as 24 trajectory samples, and resolution paid one FFmpeg process per sample. Reduce that decode/process overhead without changing sampling behaviour, perception, the planner, the renderer or any persisted schema.
+
+### What inspection found
+
+`ReframeCommandRunner::prepare()` built an `FfmpegSeekFrameProvider` when no provider was injected; every `frameAt` call went through `FrameExtractor::extractFrameAt`, which constructs and destroys a `QProcess` per call. `TargetResolver::resolveSequence` calls it once per timestamp, so a follow command opened up to 24 processes. The cost per invocation is essentially fixed — a 360x180 frame and a 4K frame both cost ~2.5 s — because process start-up and the proot container's syscall cost dominate, so process count, not pixels, was the lever.
+
+Meanwhile `ReframeStreamFrameProvider` already existed as a `ReframeFrameProvider`: one persistent stream per anchor, forward reads, a bounded re-anchor window, a positioned-seek fallback, and frames proven byte-identical to the seek path by Objective 20. `ReframePipeline::renderPlan` already constructs it from a frame rate read through `FfprobeDurationProbe`.
+
+### What was built
+
+- The default resolution provider is now `ReframeStreamFrameProvider`, constructed exactly as `ReframePipeline::renderPlan` does it: probe the frame rate once through the existing seam, then hand over to the streaming provider. Two includes and roughly twenty lines in the command runner.
+- No new seam, type, interface or dependency; the replaceable resolution seam is untouched and only its default implementation changed.
+
+### Measurement
+
+With every FFmpeg invocation counted through a recording wrapper, on the same source, timestamps and follow command (six samples):
+
+| provider | processes | resolution time | observations | keyframes |
+|---|---|---|---|---|
+| positioned seek (previous default) | 6 | 15.2–16.0 s | 6 | 6 |
+| persistent stream (new default) | 3 | 9.9–10.1 s | 6 | 6 |
+
+Keyframe count, timestamps and every yaw/pitch value are **exactly** equal between the two paths. The real-media follow test dropped from 37.6 s to 26.8 s. The persistent path's process count is bounded by anchors rather than samples, so the benefit grows with density.
+
+### Failure and cleanup coverage
+
+No new failure mechanism was introduced: the reuse path is the one Objective 20 already tested. `reframeStreamProviderMatchesSeekProvider` (frame equality), `reframeStreamProviderHandlesJumpsAndFallback` (far-forward, backwards, unknown frame rate), `reframeStreamProviderRejectsBadInputAndEndOfSource` (missing input, premature end of media) and `ffmpegFrameSourceLifecycleIsSafe` (opened-but-unread, closed twice, destroyed without close) all pass unchanged, and the new test adds the resolution-level integration: same timestamps, same frames, same plan, fewer processes.
+
+### Verification
+
+- 1 new test; targeted regression of 51 tests including all follow tests, the Objective 20 stream-provider suite, the contract/builder/parser areas, the application command path and the real-video render test: **51 passed / 0 failed / 0 skipped**.
+- Full model-free suite run at the checkpoint.
+
+### Boundary notes / not implemented
+
+- Follow sampling behaviour, the explicit `resolveTimestamps` override, aim and direction sampling, subject identity resolution, detector and tracker thresholds, `TargetTrackPlanner`, camera-path semantics, the renderer, the parser, all persisted schemas, injected frame providers and original-media immutability are unchanged.
+- Recorded caveat: within a bounded window the stream decodes intervening frames at native resolution. Reasoning says this is still cheaper, because the per-invocation cost is start-up rather than decoding (a 360x180 frame and a 4K frame cost the same per invocation), but it was not measured on a 4K source here.
+- Recorded cost: one extra ffprobe call per resolution pass.
+- The Objective 23 duplicate-identity finding and any smoothing/framing work remain out of scope.
+
+### Decisions
+
+- Decision 045 recorded. Decisions 017-044 preserved.
+

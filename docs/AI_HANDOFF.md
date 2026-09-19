@@ -116,6 +116,18 @@ Recorded follow-up, deliberately not done here: resolution still opens one decod
 
 
 
+Trajectory resolution now runs through the **persistent decoding stream** (Decision 045, Objective 25). When no frame provider is injected, `ReframeCommandRunner::prepare()` constructs `ReframeStreamFrameProvider` with a frame rate read once through `FfprobeDurationProbe` — the same pattern `ReframePipeline::renderPlan` has used since Objective 20 — instead of `FfmpegSeekFrameProvider`. Nothing else about the resolution seam changed: it is still a `ReframeFrameProvider`, still replaceable, and an injected provider is still used verbatim and never routed through FFmpeg.
+
+Why: on this device a single FFmpeg invocation costs ~2.5 s **whatever the frame size** (a 360x180 frame and a 4K frame measure the same), because process start-up and proot's syscall cost dominate. Process count is the lever, not pixels — worth remembering before optimising any other decode path here. Measured with a counting wrapper: six samples cost six processes / 15.2 s on the seek path and three processes / 10 s on the persistent path, with identical observations, keyframes and exactly equal keyframe angles. The persistent provider's process count is bounded by anchors (one geometry decode plus one stream open per bounded window), not by sample count, so the saving grows with density.
+
+Do not regress this: the follow sampling behaviour (`followSampleIntervalMs` 250 ms, `followResolveSamplesMax` 24), the explicit `resolveTimestamps` override, aim/direction sampling, injected-provider behaviour and the fallback semantics must all stay as they are, and `reframeResolutionReusesDecoderProcesses` plus the Objective 20 stream-provider tests (frame equality, jumps and fallback, bad input and end of source, lifecycle) lock them down. Failure handling is inherited, not new: an unknown frame rate, a failed stream or the end of the media falls back to the positioned seek, so the worst case is the old cost and never a different frame.
+
+Two measured caveats: within a bounded window the stream decodes intervening frames at native resolution (reasoned to be cheaper, since per-invocation cost is start-up rather than decoding, but not measured on a 4K source here), and resolution now performs one extra ffprobe call per pass.
+
+Still open and untouched: the Objective 23 duplicate-identity / `mergeDistanceDeg` finding (its own Decision 019 investigation), and the deterministic smoothing/framing layer over the trajectory.
+
+
+
 ---
 
 # 4. Current Development Camera

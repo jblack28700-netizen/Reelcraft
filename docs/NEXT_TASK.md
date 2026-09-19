@@ -568,8 +568,8 @@ The established product direction is that Reelcraft must first become a working 
 
 - **the Analysis -> Reasoning boundary** (editorial reasoning over persisted analysis evidence), which is the stage Decision 039 defines as producing only the existing validated ReframePlan;
 - **audio in the rendered output** (renders are still silent; Objective 20 removed the per-frame decoder process but added no audio);
-- **follow quality** (a deterministic smoothing/framing layer over the trajectory): Objective 23 connected the resolved trajectory to the camera path and Objective 24 gave it its own sampling resolution, so what remains is smoothing and framing rather than connectivity or density. It also inherits the recorded covering-view merge-distance finding;
-- **resolution decode cost**: a follow command still opens one decoder process per trajectory sample when no frame provider is injected, which is now the main cost of a denser follow path;
+- **follow quality** (a deterministic smoothing/framing layer over the trajectory): Objective 24 gave the follow path its own sampling resolution and Objective 25 made trajectory resolution reuse one decoder, so what remains for follow quality is smoothing and framing rather than connectivity, density or decode cost. It also inherits the recorded covering-view merge-distance finding;
+
 - **creator review and revision surface** over persisted decisions (`decisionProvenance()` and `reviseEditDecision()` exist as APIs with no UI);
 - **speaker/dialogue capability**, which first needs a licensing-and-capability evaluation before any engineering.
 
