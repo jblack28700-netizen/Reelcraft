@@ -1639,3 +1639,60 @@ Inspection also settled two placement questions. `TargetTrackPlanner::planTrack`
 - No perception, threshold, identity, sampling-density, decode, parser, renderer, camera-path or persisted-schema change. Aim, direction, speaker and multi-move commands never reach this planner and are untouched.
 - Cost is negligible: it operates on already-resolved keyframes and adds no decode, detection or allocation beyond two small lists.
 
+
+
+---
+
+# Decision 047 — Covering-View Duplicates Are Consolidated by Overlapping Angular Footprints, Not by a Larger Merge Distance
+
+**Status:** Accepted (2026-09-18, 360 Reframing Objective 27)
+
+## Context
+
+Decision 019 gave the 360 tracker a deterministic duplicate-consolidation step: observations whose spherical centroids lie within a flat, person-tuned `mergeDistanceDeg` (default **8°**) are treated as one identity. Objective 23 found the case that rule cannot handle and recorded it as a finding rather than acting on it: **one real subject reported by two overlapping covering views with centroids further apart than the merge distance**, which left two identities and made every reference to that subject resolve honestly as *ambiguous*. Objectives 24, 25 and 26 each recorded that the finding was deliberately untouched and awaited its own Decision 019 investigation.
+
+The covering-view plan (`EquirectViewPlan::coveringViews`) renders overlapping tangent views so that nothing on the sphere falls outside every view — that is what "covering" means — so **a subject near a view boundary is necessarily seen twice**: once by the view that owns its centre, and once as a partial silhouette at the edge of its neighbour. `EquirectProjection::detectionToDirection` maps a detection box centre to a direction, so a **clipped** box reports a centre pulled toward the clipping view's own axis. Where that happens the two reports of a single subject can sit further apart than a person-sized threshold while being, geometrically, the same person.
+
+## Investigation
+
+The failure was reproduced from the real geometry rather than from an assumption, by driving the production covering-view plan, renderer, detector and projection by hand and reading the **raw per-view detections** for a single synthetic subject that straddles a boundary:
+
+| report | yaw | pitch | yawRadius | pitchRadius | view |
+|---|---|---|---|---|---|
+| complete | 6.20° | 0.00° | 11.68° | 11.86° | yaw 0° |
+| clipped sliver | 15.82° | 0.26° | **1.35°** | 6.95° | yaw 60° |
+
+Duplicate separation **9.61°** against a person-tuned merge distance of **8.0°** — exactly the Objective 23 measurement, now explained: the sliver's yaw half-extent has collapsed (1.35° against 11.68°), because the clipping view sees only a thin edge of the subject, and its truncated centroid is displaced toward that view's axis. **The pair is one subject, but the displacement is a property of where the view boundary cut the box, not of where the subject is.**
+
+The decisive observation is that `detectionToDirection` **already reports each detection's angular half-extents** (`yawRadiusDeg` / `pitchRadiusDeg`). A truthful detector states how big the thing looks; a clipped report states a small footprint, and a small footprint far away is what a *different* object looks like. The information needed to tell "one subject, seen twice" from "two subjects" was therefore already on the observation; only the merge test was ignoring it.
+
+## Decision
+
+- **The duplicate-consolidation test becomes: same target if the centroids are within `mergeDistanceDeg` *or* if their yaw footprints reach each other** — that is, if `separation <= a.yawRadiusDeg + b.yawRadiusDeg`. It is implemented as one named predicate, `sameTargetAcrossCoveringViews` in `app/target/SphericalTargetTracker.cpp`, with all other merge behaviour unchanged: footprint size remains the survivor tie-breaker, and association, ordering, gating and track assignment are exactly as before.
+- **The global merge distance is NOT raised.** Tuning `mergeDistanceDeg` from 8° to 24° was the Objective 23 workaround; it declares that people are never more than 24° apart, which is false, and it merges genuinely separate people everywhere on the sphere to repair a displacement that only occurs at a view boundary. The default stays **8.0°**, and the suite workarounds that had set 24° were **removed**.
+- **The extension cannot fire on an arbitrary threshold.** It is conditioned on a *reported size*: at least one observation must be large enough that its own angular extent reaches the other's centre. Two observations of zero radius (injected doubles, unit-style observations) satisfy only the original distance test, so no existing synthetic behaviour changes by accident.
+- **Scope is deliberately narrow.** Only the **yaw** footprint is used, because yaw is the axis along which covering views are laid out and along which the measured clipping occurs (pitch rows are 62.5° apart and no pitch-axis duplicate was demonstrated). The smallest rule the evidence supports was chosen over the more general "combined 2D footprint" rule, because a wider rule merges more and the evidence does not require it.
+- **Nothing else in perception is touched.** No change to `EquirectViewPlan` or its coverage, to `EquirectProjection` or its geometry, to the detector or its boxes, to view counts or fields of view, to the association gate, to identity selection or reference semantics, to sampling density, to planning or smoothing, to the renderer, to FFmpeg or decoding, or to any persisted schema. No new dependency and no model.
+- **The old workaround is deleted, not preserved.** Removing the `mergeDistanceDeg = 24.0` overrides means the Objective 23 follow tests, the Objective 24 density test, the Objective 25 decoder-reuse test and the Objective 26 smoothing tests now run at the **shipped default**, so the suite no longer depends on a threshold the product does not use.
+
+## Rationale
+
+The two candidate fixes were "widen the threshold" and "use the footprint the observation already carries". The first is wrong on its own terms: the required distance is unbounded — it grows with the subject's apparent size and shrinks with the subject's distance from the view boundary — so any constant is either insufficient for a large nearby subject or destructive for small distant ones. The second is the property that actually distinguishes the cases: *a clipped report is small*, and two independent objects whose reported extents overlap are not separable by centroid distance in the first place.
+
+It was also verified that the fix is not a disguised threshold increase: a contrast block in the new test raises `mergeDistanceDeg` to 24° and shows it merging two **separate** subjects that the default now keeps apart — the behaviour that motivated rejecting the threshold route.
+
+## Consequences
+
+- **Genuine multi-person ambiguity is preserved, and is asserted.** Two 3°-radius subjects at yaw −6° and +6° (12° apart, distinct colours, both labelled a person) still resolve as **2 identities** at the default: the reported extents (3° + 3° = 6°) do not reach across the 12° separation. Two subjects 80° apart still resolve as **2**. A single subject still resolves as **1**.
+- **One subject seen by two covering views is now one identity**: the reproduced case yields **2 raw per-view detections** and exactly **1 identity** at the shipped 8° default, at yaw ≈ 6.20° with a yaw footprint above 10° — the complete detection, not the sliver.
+- Behaviour is deterministic and repeatable: the merge is re-run on a freshly constructed resolver inside the same test and produces identical identities.
+- **Contract change, recorded:** `SphericalTargetTracker::mergeNearDuplicates` no longer decides duplicates by distance alone; its decision is now *distance or overlapping yaw footprints*. Anything asserting the old distance-only semantics must be read against this decision.
+- Four suite-level workarounds were deleted rather than left in place, so the default path — not a test-only threshold — is what the follow, density, decoder-reuse, smoothing and real-media pipeline tests now exercise.
+- The Objective 23 duplicate-identity finding is **closed**, and the notes in Decisions 043, 044, 045 and 046 that leave it open are superseded by this decision; their historical text is preserved unchanged.
+
+## Verification
+
+- 3 new tests: the exact failure mode reproduced from raw per-view detections (2 raw reports, one complete at an 11.68° yaw half-extent and one sliver at 1.35°, separation 9.61° > 8.0°; then 1 identity after consolidation, with a determinism repeat); **non-over-merging** (nearby distinctly-coloured subjects stay separate, the 24° threshold contrast merges them, a single subject stays single, distant subjects stay separate); and follow resolution at the **default** merge distance on a moving subject.
+- Targeted regression over the perception, tracking, planning, camera-path, command-runner, resolution, streaming-provider and real-media pipeline tests: **73 passed / 0 failed / 0 skipped** (240 s).
+- The real-media follow pipeline and the decoder-reuse test both pass **with the 24° overrides removed**, which is the evidence that the fix, not a test setting, is doing the work.
+

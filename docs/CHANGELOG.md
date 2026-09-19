@@ -815,3 +815,16 @@ Date: 2026-09-18
 - Nothing about how subjects are detected or identified changed, no stored edit or project data changed, and following costs no extra decoding.
 - 4 new tests; targeted regression 62 passed / 0 failed / 0 skipped. Decision 046 records the design.
 
+
+
+## v0.2.64 — Someone standing near the edge of a camera angle is now one person
+
+Date: 2026-09-18
+
+- Reelcraft now recognises the same person when two of its viewing angles see them at once. Previously, a subject standing near the boundary between two angles could be counted twice, because the second angle only saw a thin edge of them and reported the position of that edge rather than the position of the person. The result was that asking Reelcraft to follow someone in that spot could refuse, saying it could not tell which person was meant.
+- The fix uses information the system already had. Each detection reports how large the subject appears, so a duplicate is now recognised when the two reports overlap in size as well as position — the situation that only arises when one view has caught part of a subject another view has already seen whole.
+- Two people standing close together are still treated as two people. This was verified directly: two subjects twelve degrees apart remain separate, two subjects far apart remain separate, and a single subject remains one.
+- The threshold at which two positions are considered the same person was deliberately **not** widened. Widening it would have solved this case by declaring that people are never more than a certain distance apart, which is not true, and would have merged genuinely separate people elsewhere in the frame.
+- Four tests that had been carrying a wider setting to work around this problem no longer do, so the behaviour that ships is the behaviour the test suite checks.
+- Nothing else about how subjects are detected, tracked or identified changed, no stored edit or project data changed, and following resolves at the normal settings. 3 new tests; targeted regression 73 passed / 0 failed / 0 skipped. Decision 047 records the design.
+

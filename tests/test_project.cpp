@@ -1089,6 +1089,9 @@ private slots:
     void reframeCommandRunnerFollowSamplingDensity();
     void reframeResolutionReusesDecoderProcesses();
     void targetTrackPlannerSmoothsJitterAndPreservesMotion();
+    void targetResolverReproducesCoveringViewDuplicate();
+    void coveringViewMergeDoesNotOverMerge();
+    void followResolvesWithDefaultMergeDistance();
     void targetTrackPlannerSmoothingHandlesYawWraparound();
     void targetTrackPlannerSmoothingPreservesTimingBoundsAndDeterminism();
     void followSmoothingLeavesAimAndDirectionCommandsUnchanged();
@@ -16817,13 +16820,8 @@ void ProjectTest::reframePipelineFollowsMovingSubjectOnRealMedia()
     request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
     request.sourceDurationMs = 4000;
     request.resolveConfig = smallResolverConfig();
-    // The fixture's subject is a 24-degree-wide synthetic cap, far larger than a
-    // person. The same cap is visible in two overlapping cover views, and the two
-    // spherical centroids of a target that large sit further apart than the
-    // tracker's person-tuned 8-degree merge distance, which leaves two parallel
-    // tracks and makes the reference honestly ambiguous. Widening the merge
-    // distance for this fixture keeps one identity for one subject.
-    request.resolveConfig.tracker.mergeDistanceDeg = 24.0;
+    // No merge-distance workaround: covering-view consolidation collapses the
+    // clipped duplicate at the default person-tuned distance (Objective 27).
     // Density is bounded for this test only: every sample costs a separate
     // decoder process on this device (~2.5 s each), and the shipped default
     // density is measured model-free by
@@ -16902,12 +16900,7 @@ void ProjectTest::reframeCommandRunnerFollowSamplingDensity()
     base.defaultRange = ReframePlan::TimeRange{ 0, 4000 };
     base.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
     base.resolveConfig = smallResolverConfig();
-    // Same fixture-scale allowance the real-media follow test documents: this
-    // synthetic subject is far larger than a person, so the two cover views that
-    // see it report centroids further apart than the person-tuned merge distance.
-    // That is a perception question (Objective 23 finding) and is deliberately not
-    // what this test measures.
-    base.resolveConfig.tracker.mergeDistanceDeg = 24.0;
+
 
     struct DensityCase
     {
@@ -17127,7 +17120,6 @@ void ProjectTest::reframeResolutionReusesDecoderProcesses()
     request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
     request.sourceDurationMs = 4000;
     request.resolveConfig = smallResolverConfig();
-    request.resolveConfig.tracker.mergeDistanceDeg = 24.0;
     // Bounded so this test stays affordable; the density itself is measured by
     // reframeCommandRunnerFollowSamplingDensity.
     request.followResolveSamplesMax = 6;
@@ -17449,7 +17441,6 @@ void ProjectTest::followSmoothingLeavesAimAndDirectionCommandsUnchanged()
     base.defaultRange = ReframePlan::TimeRange{ 0, 4000 };
     base.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
     base.resolveConfig = smallResolverConfig();
-    base.resolveConfig.tracker.mergeDistanceDeg = 24.0;
 
     // Aim commands never reach the trajectory planner, so smoothing cannot
     // touch them: still exactly one fixed direction.
@@ -17484,6 +17475,205 @@ void ProjectTest::followSmoothingLeavesAimAndDirectionCommandsUnchanged()
                  - first.plan.keyframes().first().yawDeg > 40.0,
              "smoothing flattened the follow span");
     QVERIFY(first.plan.isValid());
+}
+
+
+
+void ProjectTest::targetResolverReproducesCoveringViewDuplicate()
+{
+    // Objective 23 geometry: a subject close to the boundary between two covering
+    // views, large enough that the neighbouring view still sees a clipped sliver
+    // of it. The disk is 24 degrees across at yaw 5.7, and the covering rows place
+    // views 60 degrees apart.
+    const QImage frame = buildTargetEquirect(
+        360, 180, { EquirectDisk{ 5.7, 0.0, 12.0, QColor(255, 0, 0) } });
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+    const TargetQuery query{ QStringLiteral("person"), QString(), 0.35 };
+
+    // (1) Every raw per-view detection, obtained by running the covering views and
+    // the detector directly -- exactly what the resolver does, but before any
+    // consolidation. This is the geometry that produced the Objective 23 finding.
+    QList<TargetObservation> rawObservations;
+    {
+        const QList<PerspectiveView> views =
+            EquirectViewPlan::coveringViews(smallResolverConfig().viewPlan);
+        for (const PerspectiveView &view : views) {
+            QImage viewImage;
+            QVERIFY(EquirectView::render(frame, view.yawDeg, view.pitchDeg, 0.0,
+                                        view.fieldOfViewDeg, view.width,
+                                        view.height, &viewImage));
+            QList<TargetDetection> detections;
+            QString detectError;
+            QVERIFY2(detector.detect(viewImage, query, &detections, &detectError),
+                     qPrintable(detectError));
+            for (const TargetDetection &detection : detections) {
+                SphericalDirection center;
+                double yawRadius = 0.0;
+                double pitchRadius = 0.0;
+                QVERIFY(EquirectProjection::detectionToDirection(
+                    view, detection.boundingBox, &center, &yawRadius, &pitchRadius));
+                TargetObservation observation;
+                observation.timeMs = 0;
+                observation.label = detection.label;
+                observation.confidence = detection.confidence;
+                observation.yawDeg = center.yawDeg;
+                observation.pitchDeg = center.pitchDeg;
+                observation.yawRadiusDeg = yawRadius;
+                observation.pitchRadiusDeg = pitchRadius;
+                observation.source = QStringLiteral("%1@yaw%2")
+                                         .arg(detector.name())
+                                         .arg(view.yawDeg, 0, 'f', 1);
+                rawObservations.append(observation);
+            }
+        }
+    }
+    qInfo("covering-view raw detections: %d",
+          static_cast<int>(rawObservations.size()));
+    for (const TargetObservation &observation : rawObservations) {
+        qInfo("  yaw=%.2f pitch=%.2f yawRadius=%.2f pitchRadius=%.2f src=%s",
+              observation.yawDeg, observation.pitchDeg, observation.yawRadiusDeg,
+              observation.pitchRadiusDeg, qPrintable(observation.source));
+    }
+    QCOMPARE(rawObservations.size(), 2);
+
+    // The duplication is a COMPLETE detection plus a clipped sliver from the
+    // neighbouring view: the sliver's box is truncated by the view edge, so its
+    // centre is biased toward that view's axis and the two land just outside a
+    // person-tuned distance. The measured numbers are locked in here.
+    const TargetObservation &complete = rawObservations.at(0).yawRadiusDeg
+        >= rawObservations.at(1).yawRadiusDeg ? rawObservations.at(0)
+                                              : rawObservations.at(1);
+    const TargetObservation &sliver = rawObservations.at(0).yawRadiusDeg
+        >= rawObservations.at(1).yawRadiusDeg ? rawObservations.at(1)
+                                              : rawObservations.at(0);
+    QVERIFY2(complete.yawRadiusDeg > 10.0,
+             qPrintable(QStringLiteral("complete detection radius %1")
+                            .arg(complete.yawRadiusDeg)));
+    QVERIFY2(sliver.yawRadiusDeg < 3.0,
+             qPrintable(QStringLiteral("sliver detection radius %1")
+                            .arg(sliver.yawRadiusDeg)));
+    const double separation = EquirectProjection::angularDistanceDeg(
+        SphericalDirection{ complete.yawDeg, complete.pitchDeg },
+        SphericalDirection{ sliver.yawDeg, sliver.pitchDeg });
+    qInfo("duplicate separation %.2f deg vs person-tuned threshold %.1f deg",
+          separation, smallResolverConfig().tracker.mergeDistanceDeg);
+    QVERIFY2(separation > smallResolverConfig().tracker.mergeDistanceDeg,
+             "the duplicate is no longer outside the person-tuned distance");
+
+    // (2) At the person-tuned default distance the pair must collapse to ONE
+    // identity, and the survivor must be the complete detection rather than the
+    // clipped sliver: the consolidation already prefers the larger footprint.
+    TargetResolver defaultResolver(smallResolverConfig());
+    QList<TargetObservation> defaultObservations;
+    QString error;
+    QVERIFY2(defaultResolver.resolveFrame(frame, 0, query, &detector,
+                                          &defaultObservations, &error),
+             qPrintable(error));
+    qInfo("default mergeDistanceDeg=%.1f keeps %d",
+          smallResolverConfig().tracker.mergeDistanceDeg,
+          static_cast<int>(defaultObservations.size()));
+    QCOMPARE(defaultObservations.size(), 1);
+    QVERIFY(qAbs(defaultObservations.at(0).yawDeg - 6.20) < 1.0);
+    QVERIFY(defaultObservations.at(0).yawRadiusDeg > 10.0);
+
+    // Deterministic: a fresh resolver sees the same thing.
+    TargetResolver repeatResolver(smallResolverConfig());
+    QList<TargetObservation> repeatObservations;
+    QVERIFY2(repeatResolver.resolveFrame(frame, 0, query, &detector,
+                                         &repeatObservations, &error),
+             qPrintable(error));
+    QCOMPARE(repeatObservations.size(), defaultObservations.size());
+    QCOMPARE(repeatObservations.at(0).yawDeg, defaultObservations.at(0).yawDeg);
+    QCOMPARE(repeatObservations.at(0).yawRadiusDeg,
+             defaultObservations.at(0).yawRadiusDeg);
+}
+
+
+
+void ProjectTest::coveringViewMergeDoesNotOverMerge()
+{
+    // Two separate, person-sized subjects 12 degrees apart. Their footprints do
+    // not overlap, so they must remain two identities even though they are closer
+    // together than the 24 degree distance Objective 23 used as a workaround.
+    const QImage frame = buildTargetEquirect(
+        360, 180, { EquirectDisk{ -6.0, 0.0, 3.0, QColor(255, 0, 0) },
+                    EquirectDisk{ 6.0, 0.0, 3.0, QColor(0, 0, 255) } });
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+    detector.addSpec(QColor(0, 0, 255), QStringLiteral("person"));
+    const TargetQuery query{ QStringLiteral("person"), QString(), 0.35 };
+
+    TargetResolver resolver(smallResolverConfig());
+    QList<TargetObservation> observations;
+    QString error;
+    QVERIFY2(resolver.resolveFrame(frame, 0, query, &detector, &observations, &error),
+             qPrintable(error));
+    qInfo("nearby separate subjects kept: %d", static_cast<int>(observations.size()));
+    QCOMPARE(observations.size(), 2);
+    // Both are preserved with their own directions, not collapsed to a midpoint.
+    QVERIFY(qAbs(observations.at(0).yawDeg) > 2.0);
+    QVERIFY(qAbs(observations.at(1).yawDeg) > 2.0);
+    QVERIFY(qAbs(observations.at(0).yawDeg - observations.at(1).yawDeg) > 8.0);
+
+    // The contrast that shows this is not simply a larger threshold: a distance
+    // arbitrary enough to swallow the covering-view duplicate also swallows two
+    // genuinely separate people, which is why the correction is footprint-based.
+    TargetResolveConfig looseConfig = smallResolverConfig();
+    looseConfig.tracker.mergeDistanceDeg = 24.0;
+    TargetResolver looseResolver(looseConfig);
+    QList<TargetObservation> looseObservations;
+    QVERIFY2(looseResolver.resolveFrame(frame, 0, query, &detector,
+                                        &looseObservations, &error),
+             qPrintable(error));
+    QCOMPARE(looseObservations.size(), 1);
+
+    // A single ordinary subject is still exactly one identity.
+    const QImage single = buildTargetEquirect(
+        360, 180, { EquirectDisk{ 0.0, 0.0, 8.0, QColor(255, 0, 0) } });
+    TargetResolver singleResolver(smallResolverConfig());
+    QList<TargetObservation> singleObservations;
+    QVERIFY2(singleResolver.resolveFrame(single, 0, query, &detector,
+                                         &singleObservations, &error),
+             qPrintable(error));
+    QCOMPARE(singleObservations.size(), 1);
+
+    // Genuinely separated people are still two identities.
+    const QImage twoPeople = buildTargetEquirect(
+        360, 180, { EquirectDisk{ -40.0, 0.0, 8.0, QColor(255, 0, 0) },
+                    EquirectDisk{ 40.0, 0.0, 8.0, QColor(0, 0, 255) } });
+    TargetResolver twoResolver(smallResolverConfig());
+    QList<TargetObservation> twoObservations;
+    QVERIFY2(twoResolver.resolveFrame(twoPeople, 0, query, &detector,
+                                      &twoObservations, &error),
+             qPrintable(error));
+    QCOMPARE(twoObservations.size(), 2);
+}
+
+void ProjectTest::followResolvesWithDefaultMergeDistance()
+{
+    // The Objective 23 workaround widened the tracker merge distance to 24 degrees
+    // because the covering-view duplicate sat just outside the person-tuned 8. The
+    // follow path must now resolve at the DEFAULT distance, with no ambiguity.
+    MovingTargetEquirectProvider provider(360, 180, -40.0, 40.0, 4000);
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+
+    ReframeCommandRequest request;
+    request.instruction = QStringLiteral("follow the person");
+    request.defaultRange = ReframePlan::TimeRange{ 0, 4000 };
+    request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+    request.resolveConfig = smallResolverConfig();
+
+    const ReframeCommandResult result =
+        ReframeCommandRunner::prepare(request, &detector, &provider);
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QCOMPARE(result.resolvedTargets.size(), 1);
+    QVERIFY(result.unresolvedReferences.isEmpty());
+    QVERIFY2(result.plan.keyframes().size() >= 3,
+             qPrintable(QStringLiteral("follow produced %1 keyframe(s)")
+                            .arg(result.plan.keyframes().size())));
+    QVERIFY(result.plan.isValid());
 }
 
 

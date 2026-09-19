@@ -2023,3 +2023,55 @@ Investigated and deliberately left centred. The follow path aims directly at the
 
 - Decision 046 recorded, including the contract note that `planTrack` now returns a smoothed trajectory rather than one passing exactly through each observation. Decisions 017-045 preserved.
 
+
+
+## 2026-09-18 — Phase 4 Objective 27: Covering-View Duplicate Identity
+
+### Objective
+
+Close the Objective 23 finding that Decisions 043-046 each recorded and deliberately left alone: a single subject seen by two overlapping covering views can be reported with centroids further apart than the tracker's person-tuned merge distance, so the tracker keeps two identities and every reference to that subject honestly refuses as *ambiguous*. Determine the **smallest correct architectural fix** that handles duplicate representations caused by 360 covering views **without** incorrectly merging genuinely separate people.
+
+### What inspection found
+
+The failure was not re-derived from theory; it was reproduced from the real geometry by driving the production covering-view plan, renderer, detector and projection by hand and reading the **raw per-view detections** for a single synthetic subject straddling a view boundary:
+
+| report | yaw | pitch | yawRadius | pitchRadius | source view |
+|---|---|---|---|---|---|
+| complete | 6.20° | 0.00° | 11.68° | 11.86° | yaw 0° |
+| clipped sliver | 15.82° | 0.26° | **1.35°** | 6.95° | yaw 60° |
+
+Separation **9.61°** against a merge distance of **8.0°** — the Objective 23 number, now explained. The covering plan deliberately overlaps its views, so a subject near a boundary is necessarily seen twice, and the neighbour sees a **clipped** silhouette whose box centre is pulled toward that neighbour's own axis. That displacement is a property of where the boundary cut the box, not of where the subject is — and it is unbounded, which is why no fixed distance can absorb it.
+
+The decisive fact was already in the data: `detectionToDirection` reports each detection's angular half-extents. The clipped report's yaw half-extent has collapsed (1.35° against 11.68°). The information that separates "one subject seen twice" from "two subjects" was on the observation; only the merge test was ignoring it.
+
+A diagnostic premise also had to be corrected during the work: setting `mergeDistanceDeg = 0` no longer exposes raw per-view detections once the footprint rule exists (the rule applies regardless), so the reproduction test iterates the covering views itself rather than trying to switch the fix off.
+
+### What was built
+
+- One named predicate in `app/target/SphericalTargetTracker.cpp`: `sameTargetAcrossCoveringViews(a, b, mergeDistanceDeg)` — same target if `separation <= mergeDistanceDeg` **or** if `separation <= a.yawRadiusDeg + b.yawRadiusDeg`. The merge loop calls it instead of the inline distance test; nothing else about merging changed (footprint size is still the survivor tie-breaker; association, ordering, gating and track assignment are untouched).
+- The **default merge distance is unchanged at 8.0°**. The alternative — raising the constant to 24°, which was the Objective 23 workaround — was rejected explicitly: it asserts that people are never more than 24° apart, which is false, and it merges separate people everywhere on the sphere to repair a boundary-local displacement.
+- Only the **yaw** footprint is used: yaw is the axis along which covering views are laid out and along which the measured clipping occurs. The smallest rule the evidence supports was preferred over a general combined-footprint rule.
+- A zero-radius observation cannot trigger the extension, so injected doubles and unit-style observations behave exactly as before.
+
+### Measurement
+
+- The reproduction now asserts both sides: **2 raw per-view detections** (complete at an 11.68° yaw half-extent, sliver at 1.35°; separation 9.61° > 8.0°) and **exactly 1 identity** at the shipped default, at yaw ≈ 6.20° with a footprint above 10° — the complete detection survives, and a freshly constructed resolver reproduces it identically.
+- **Non-over-merging is asserted against the fix's own failure mode**: two 3°-radius subjects 12° apart (distinct colours, both labelled a person) stay **2 identities** at the default and still resolve as **2** at ±40°; a single 8°-radius subject resolves as **1**. A contrast block raising `mergeDistanceDeg` to 24° merges the nearby pair, which demonstrates the rejected route is not what is doing the work.
+- Follow resolution at the **default** merge distance now succeeds on a moving subject (`ok`, one resolved target, no unresolved references, multi-keyframe valid plan).
+
+### Verification
+
+- 3 new tests: `targetResolverReproducesCoveringViewDuplicate`, `coveringViewMergeDoesNotOverMerge`, `followResolvesWithDefaultMergeDistance`.
+- **All four Objective 23 `mergeDistanceDeg = 24.0` workarounds were removed** from the suite (real-media follow, density, resolution-decode, smoothing runner) and those tests pass at the shipped default, so the fix rather than a test setting is doing the work. The only remaining 24.0 is the deliberate contrast inside the new non-over-merge test.
+- Targeted regression across perception, tracking, planning, camera paths, the command runner, resolution, the streaming provider and the real-media pipeline: **73 passed / 0 failed / 0 skipped** (240 s).
+- Full model-free suite run at the checkpoint.
+
+### Boundary notes / not implemented
+
+- No change to covering-view coverage, fields of view or view counts; no change to projection geometry; no detector change; no association-gate, identity-selection or reference-semantics change; no sampling-density change (Objective 24 untouched); no smoothing change (Objective 26 untouched); no renderer, FFmpeg, decoder or persisted-schema change; no new dependency and no model. Source media stays read-only.
+- Nothing was tuned to make the 9.6° case pass: the case is a consequence of the rule, and the rule is the footprint the detector already reported.
+
+### Decisions
+
+- Decision 047 recorded, including the explicit contract change that `mergeNearDuplicates` no longer decides duplicates by distance alone. Decisions 017-046 preserved; the Objective 23 finding recorded in Decisions 043-046 as open is closed by this objective, with their historical text left unchanged.
+

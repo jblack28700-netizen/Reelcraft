@@ -16,6 +16,44 @@ SphericalDirection directionOf(const TargetObservation &observation)
     return { observation.yawDeg, observation.pitchDeg };
 }
 
+// Objective 27: are these two same-frame observations the SAME target, or two?
+//
+// One target that straddles the boundary between two covering views is reported
+// twice: once complete by the view it sits in, and once as a clipped sliver by
+// the neighbouring view. The sliver's bounding box is truncated by the view
+// edge, so its centre -- and therefore the spherical direction derived from it
+// -- is biased toward that view's axis. Measured on the reproducing fixture the
+// two land 9.61 degrees apart with yaw radii of 11.68 and 1.35 degrees, i.e. the
+// duplicate sits just outside a person-tuned 8 degree distance.
+//
+// A distance alone therefore cannot separate "one target seen twice" from "two
+// targets": the clipped duplicate is not merely close, it is contained in the
+// other observation's footprint, and the two footprints overlap. That is the
+// test used here in addition to the distance:
+//
+//   * the caller's mergeDistanceDeg still applies unchanged, so person-sized
+//     targets behave exactly as before; and
+//   * beyond it, two observations are one target when their angular footprints
+//     overlap, computed on the yaw radii because the covering views are
+//     distributed in yaw and a yaw separation is what the duplicate produces.
+//
+// This deliberately is NOT a raised global threshold: the extension can only
+// merge two observations when at least one of them reports an extent big enough
+// to reach the other's centre, so an observation that reports no extent (zero
+// radius) cannot trigger it at all, and two separate people whose reported
+// footprints do not overlap are unaffected by it however the distance is set.
+bool sameTargetAcrossCoveringViews(const TargetObservation &a,
+                                   const TargetObservation &b,
+                                   double mergeDistanceDeg)
+{
+    const double separation =
+        EquirectProjection::angularDistanceDeg(directionOf(a), directionOf(b));
+    if (separation <= mergeDistanceDeg) {
+        return true;
+    }
+    return separation <= a.yawRadiusDeg + b.yawRadiusDeg;
+}
+
 } // namespace
 
 SphericalTargetTracker::SphericalTargetTracker(Config config)
@@ -78,9 +116,8 @@ QList<TargetObservation> SphericalTargetTracker::mergeNearDuplicates(
             if (!labelsCompatible(candidate.label, existing.label)) {
                 continue;
             }
-            if (EquirectProjection::angularDistanceDeg(directionOf(candidate),
-                                                       directionOf(existing))
-                <= mergeDistanceDeg) {
+            if (sameTargetAcrossCoveringViews(candidate, existing,
+                                              mergeDistanceDeg)) {
                 duplicate = true;
                 break;
             }

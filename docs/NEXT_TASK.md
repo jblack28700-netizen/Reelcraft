@@ -141,6 +141,40 @@ The pipeline ran end to end but a follow instruction produced a locked-off shot.
 - 4 new tests: intent classification; model-free moving-subject follow path (multi-keyframe, monotonic, endpoint-accurate) with a paired aim control; honest fallback on an unusable track; real 360 media end-to-end render that decodes to a valid MP4.
 - Targeted regression across the affected area: **45 passed / 0 failed / 0 skipped**.
 
+## 360 Reframing Objective 27 — Covering-View Duplicate Identity — Complete
+
+Status: **Complete — implemented and verified (2026-09-18).**
+
+### Objective
+
+Close the Objective 23 finding (recorded as open by Decisions 043-046): one subject reported by two overlapping covering views with centroids further apart than the person-tuned merge distance keeps two identities, so references to it honestly resolve as ambiguous. Find the **smallest correct architectural fix** for duplicate representations caused by covering views that does **not** incorrectly merge genuinely separate people.
+
+### What inspection found
+
+Replaying the production covering-view plan, renderer, detector and projection by hand for a single subject on a view boundary gives **2 raw per-view detections**: a complete one (yaw 6.20°, yawRadius **11.68°**) and a clipped sliver (yaw 15.82°, yawRadius **1.35°**), centres **9.61°** apart against an 8.0° merge distance. The clipped box's centre is pulled toward its viewing axis, and the displacement is unbounded in the subject's apparent size — so no fixed distance can absorb it.
+
+### Scope (implemented)
+
+- `sameTargetAcrossCoveringViews` in `app/target/SphericalTargetTracker.cpp`: same target if `separation <= mergeDistanceDeg` **or** `separation <= a.yawRadiusDeg + b.yawRadiusDeg`. All other merge behaviour (survivor tie-break by footprint, ordering, gating, track assignment) is unchanged.
+- `mergeDistanceDeg` stays **8.0°**; the extension is conditioned on a reported footprint, so zero-radius observations are unaffected.
+- Only the yaw footprint is used (the axis covering views are laid out along and the axis the clipping was measured on).
+
+### Verification
+
+- 3 new tests: the exact failure mode from raw per-view detections (2 raw reports, 1 identity at the default, determinism repeat); **non-over-merging** (nearby 3°-radius subjects 12° apart stay 2; ±40° stay 2; single subject stays 1; a 24° contrast merges the nearby pair, proving the fix is not a bigger threshold); and follow resolution succeeding at the **default** merge distance.
+- All four Objective 23 `mergeDistanceDeg = 24.0` suite workarounds removed; the affected tests (real-media follow, density, decoder reuse, smoothing) pass at the shipped default.
+- Targeted regression across perception, tracking, planning, camera paths, command runner, resolution, streaming provider and the real-media pipeline: **73 passed / 0 failed / 0 skipped** (240 s).
+- Full model-free suite run at the checkpoint.
+
+### Boundary
+
+No coverage, projection, detector, gate, identity, sampling (Obj 24), smoothing (Obj 26), renderer, FFmpeg/decoder or persisted-schema change; no new dependency and no model.
+
+### Decision
+
+- Decision 047 (contract change: duplicate consolidation is no longer distance-only). Decisions 017-046 preserved.
+
+---
 ---
 
 ## Next Objective (Phase 3, Objective 5) — NOT STARTED (deferred behind the 360 priority)
@@ -568,7 +602,7 @@ The established product direction is that Reelcraft must first become a working 
 
 - **the Analysis -> Reasoning boundary** (editorial reasoning over persisted analysis evidence), which is the stage Decision 039 defines as producing only the existing validated ReframePlan;
 - **audio in the rendered output** (renders are still silent; Objective 20 removed the per-frame decoder process but added no audio);
-- **the covering-view duplicate-identity finding from Objective 23** (two cover views reporting one subject with centroids further apart than the tracker merge distance), which needs its own Decision 019 perception investigation and is deliberately untouched;
+- **the covering-view duplicate-identity finding from Objective 23** (two cover views reporting one subject with centroids further apart than the tracker merge distance) — **CLOSED by Objective 27 (Decision 047)**, which consolidates duplicates by the overlapping angular footprint the detection already reports; the merge distance was deliberately left at 8.0°.
 
 - **creator review and revision surface** over persisted decisions (`decisionProvenance()` and `reviseEditDecision()` exist as APIs with no UI);
 - **speaker/dialogue capability**, which first needs a licensing-and-capability evaluation before any engineering.

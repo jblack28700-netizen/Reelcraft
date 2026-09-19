@@ -140,6 +140,15 @@ Still open and untouched: the Objective 23 duplicate-identity / `mergeDistanceDe
 
 
 
+Trajectory duplicates from **covering views** are now consolidated by the footprint each observation already reports (Decision 047, Objective 27), closing the Objective 23 finding that Decisions 043-046 each recorded as open. `SphericalTargetTracker` now merges two observations when their centroids are within `mergeDistanceDeg` **or** when `separation <= a.yawRadiusDeg + b.yawRadiusDeg`, through the predicate `sameTargetAcrossCoveringViews` in `app/target/SphericalTargetTracker.cpp`. `mergeDistanceDeg` itself is **unchanged (8.0°)**.
+
+Why this rule and not a wider threshold: the covering plan overlaps its views deliberately, so a subject near a boundary is seen twice, and the neighbour sees a **clipped** silhouette whose box centre is pulled toward that neighbour's axis. Measured on the reproduction: one report at yaw 6.20° / yawRadius **11.68°**, the other at yaw 15.82° / yawRadius **1.35°**, centres **9.61°** apart. The displacement is a property of where the boundary cut the box and it is **unbounded** — it grows with apparent size — so no constant can absorb it without falsely declaring that people are never that far apart. Raising `mergeDistanceDeg` to 24° was the Objective 23 workaround and it is exactly what this objective removed.
+
+Rules to preserve. First, **do not "fix" this by raising the merge distance**: the new test's contrast block raises it to 24° and shows it merging two genuinely separate subjects, which the default now keeps apart. Second, **over-merging is the risk this change was judged on**, and it is asserted: two 3°-radius subjects 12° apart stay **2 identities**, subjects at ±40° stay **2**, a single subject stays **1**. Third, the extension is conditioned on reported size, so a **zero-radius** observation (injected doubles, synthetic unit observations) can only ever satisfy the original distance test — keep it that way, or injected behaviour changes silently. Fourth, only the **yaw** footprint is used, deliberately: yaw is the axis covering views are laid out along and the axis the clipping was measured on.
+
+The four `mergeDistanceDeg = 24.0` overrides that Objections 23-26 carried in the suite have been **deleted**, so the follow, sampling-density, decoder-reuse, smoothing and real-media pipeline tests now run at the shipped default. If one of them fails, suspect the default path, not a missing override. (The only remaining 24.0 in the suite is the deliberate contrast inside `coveringViewMergeDoesNotOverMerge`.)
+
+Nothing else changed: no covering-view coverage, field of view, view count, projection geometry, detector, association-gate, identity-selection, sampling-density (Objective 24), smoothing (Objective 26), renderer, FFmpeg/decoder or persisted-schema change; no new dependency and no model.
 ---
 
 # 4. Current Development Camera
