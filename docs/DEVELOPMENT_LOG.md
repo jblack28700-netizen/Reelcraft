@@ -1980,3 +1980,46 @@ No new failure mechanism was introduced: the reuse path is the one Objective 20 
 
 - Decision 045 recorded. Decisions 017-044 preserved.
 
+
+## 2026-09-18 — Phase 4 Objective 26: Deterministic Follow Trajectory Smoothing
+
+### Objective
+
+Objectives 23-25 made the follow path connected, densely sampled and cheap to resolve. Improve its quality as camera movement with a deterministic smoothing layer over the already-resolved trajectory, without touching perception, sampling, the renderer or any persisted schema.
+
+### What inspection found
+
+`TargetTrackPlanner` emitted one keyframe per resolved observation carrying the detected direction verbatim, and `CameraPath::stateAt` interpolates linearly between keyframes along the shortest yaw path. So the follow path was piecewise linear through the raw detections: velocity discontinuous at every keyframe, every detector wobble visible in the camera, and denser sampling (Objective 24) only made the wobbles smaller rather than absent.
+
+Placement was settled by two facts. `planTrack` is called **only** by the follow path in `ReframeCommandRunner` — the speaker planner builds its own keyframes — so smoothing there cannot reach any other command. And the planner's stated job is to convert a resolved track into the reframing representation, which is exactly where trajectory shaping belongs; a separate layer would have added an abstraction with one caller.
+
+### What was built
+
+- `TargetTrackPlanner::Config::smoothingWindow` (default 5; 1 disables) and a deterministic, model-free smoothing step applied after keyframe construction and before plan validation.
+- The window is **centred and shrinks symmetrically** at the ends rather than being clipped one-sided. That single choice delivers three properties: constant-velocity motion is reproduced exactly (no lag, no flattening), no smoothed value can leave the range of the values averaged (no overshoot), and keyframe times, count and ordering are untouched (start/end timing and span preserved by construction).
+- Yaw is unwrapped into a continuous angle before averaging and re-normalised afterwards, so the circular boundary is handled correctly. Pitch is averaged linearly and clamped.
+
+### Measurement
+
+On a synthetic wobble of ±20 degrees per sample the largest angular step between consecutive keyframes falls from **40.0 to 4.0 degrees**. A linear ramp is reproduced to within 1e-9 — the strongest available evidence that the smoothing does not delay or flatten genuine motion — and this is corroborated by the pre-existing `targetTrackPlannerBuildsFollowPlan` test, whose observations are a linear ramp, passing unchanged. A stationary subject is reproduced exactly. A trajectory crossing ±180 degrees keeps every step at 8.0 degrees and every direction beyond 150 degrees, instead of folding toward zero as a naive average of the raw sawtooth would.
+
+### Framing
+
+Investigated and deliberately left centred. The follow path aims directly at the subject, and "follow the person", "keep me centered" and "keep X centered" all mean centred framing; introducing a lead-room or rule-of-thirds offset would change the meaning of those commands. The framing envelope therefore remains the keyframe field of view, and the subject stays inside it because a centred average never moves the camera further from the subject than the raw extremes did.
+
+### Verification
+
+- 4 new tests: jitter versus motion-preservation versus stationary versus short track; yaw wraparound; timing, bounds and determinism (including rendering both the raw and the smoothed plan); and runner-level aim/direction/follow non-regression with a deterministic-repeat comparison.
+- Targeted regression including the camera-path wraparound and interpolation tests, the Objective 20/25 decoder tests, the real-media follow pipeline and the application command path: **62 passed / 0 failed / 0 skipped**.
+- Full model-free suite run at the checkpoint.
+
+### Boundary notes / not implemented
+
+- Aim, direction, speaker and multi-move commands are untouched; they never reach this planner.
+- No change to perception, thresholds, cover-view association, identity semantics, sampling density, decoding, the renderer, the parser or any persisted schema; no new dependency and no model.
+- No cinematic behaviour was invented: framing stays centred and no easing, interpolation redesign or lead-room policy was added. Cost is negligible — no decode, detection or FFmpeg work is added.
+
+### Decisions
+
+- Decision 046 recorded, including the contract note that `planTrack` now returns a smoothed trajectory rather than one passing exactly through each observation. Decisions 017-045 preserved.
+

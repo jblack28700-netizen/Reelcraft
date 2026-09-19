@@ -1088,6 +1088,10 @@ private slots:
     void reframePipelineFollowsMovingSubjectOnRealMedia();
     void reframeCommandRunnerFollowSamplingDensity();
     void reframeResolutionReusesDecoderProcesses();
+    void targetTrackPlannerSmoothsJitterAndPreservesMotion();
+    void targetTrackPlannerSmoothingHandlesYawWraparound();
+    void targetTrackPlannerSmoothingPreservesTimingBoundsAndDeterminism();
+    void followSmoothingLeavesAimAndDirectionCommandsUnchanged();
     void realSourcePlaybackIntegration();
     void mainWindowPlaybackButtonsEmitRequests();
     void mainWindowShowsPlaybackStateAndPosition();
@@ -17201,6 +17205,285 @@ void ProjectTest::reframeResolutionReusesDecoderProcesses()
               "reduction not asserted",
               qPrintable(probeError));
     }
+}
+
+
+
+// ===========================================================================
+// Deterministic follow trajectory smoothing and framing (Objective 26)
+// ===========================================================================
+
+namespace {
+
+// Builds a follow plan from a synthetic track at a chosen smoothing window, so
+// the raw and smoothed paths can be compared directly.
+bool buildSmoothedPlan(const QList<TargetObservation> &observations,
+                       int smoothingWindow, ReframePlan *outPlan,
+                       QString *outError)
+{
+    TargetTrack track(QStringLiteral("t1"), QStringLiteral("person"));
+    for (const TargetObservation &observation : observations) {
+        track.append(observation);
+    }
+    TargetTrackPlanner::Config config;
+    config.smoothingWindow = smoothingWindow;
+    return TargetTrackPlanner::planTrack(
+        track, ReframePlan::TimeRange{ 0, 2000 },
+        ReframePlan::OutputSpec{ 160, 90, 2.0 }, config, outPlan, outError);
+}
+
+// Largest absolute angular step between consecutive keyframe yaws, taking the
+// shortest way round the circle.
+double maxKeyframeStepDeg(const ReframePlan &plan)
+{
+    double worst = 0.0;
+    const QList<CameraKeyframe> frames = plan.keyframes();
+    for (int i = 1; i < frames.size(); ++i) {
+        const double step = qAbs(EquirectProjection::shortestYawDeltaDeg(
+            frames.at(i - 1).yawDeg, frames.at(i).yawDeg));
+        worst = qMax(worst, step);
+    }
+    return worst;
+}
+
+QList<double> keyframeYaws(const ReframePlan &plan)
+{
+    QList<double> yaws;
+    for (const CameraKeyframe &frame : plan.keyframes()) {
+        yaws.append(frame.yawDeg);
+    }
+    return yaws;
+}
+
+QList<qint64> keyframeTimes(const ReframePlan &plan)
+{
+    QList<qint64> times;
+    for (const CameraKeyframe &frame : plan.keyframes()) {
+        times.append(frame.timeMs);
+    }
+    return times;
+}
+
+} // namespace
+
+void ProjectTest::targetTrackPlannerSmoothsJitterAndPreservesMotion()
+{
+    // (a) A constant-velocity trajectory must come through untouched: a centred
+    // average is exact on a linear ramp, which is what proves the smoothing
+    // removes jitter without delaying or flattening genuine motion.
+    QList<TargetObservation> linear;
+    for (int i = 0; i < 7; ++i) {
+        linear.append(makeTargetObservation(i * 250, i * 10.0, i * 2.0));
+    }
+    ReframePlan rawLinear;
+    ReframePlan smoothLinear;
+    QString error;
+    QVERIFY2(buildSmoothedPlan(linear, 1, &rawLinear, &error), qPrintable(error));
+    QVERIFY2(buildSmoothedPlan(linear, 5, &smoothLinear, &error), qPrintable(error));
+    QCOMPARE(smoothLinear.keyframes().size(), rawLinear.keyframes().size());
+    for (int i = 0; i < rawLinear.keyframes().size(); ++i) {
+        QVERIFY2(qAbs(smoothLinear.keyframes().at(i).yawDeg
+                      - rawLinear.keyframes().at(i).yawDeg) < 1e-9,
+                 qPrintable(QStringLiteral("linear ramp keyframe %1 moved from %2 to %3")
+                                .arg(i)
+                                .arg(rawLinear.keyframes().at(i).yawDeg)
+                                .arg(smoothLinear.keyframes().at(i).yawDeg)));
+        QVERIFY(qAbs(smoothLinear.keyframes().at(i).pitchDeg
+                     - rawLinear.keyframes().at(i).pitchDeg) < 1e-9);
+    }
+
+    // (b) Sample-to-sample wobble is what smoothing is for.
+    QList<TargetObservation> jitter;
+    const double wobble[] = { 0.0, 20.0, -20.0, 20.0, -20.0, 20.0, 0.0 };
+    for (int i = 0; i < 7; ++i) {
+        jitter.append(makeTargetObservation(i * 250, wobble[i], 0.0));
+    }
+    ReframePlan rawJitter;
+    ReframePlan smoothJitter;
+    QVERIFY2(buildSmoothedPlan(jitter, 1, &rawJitter, &error), qPrintable(error));
+    QVERIFY2(buildSmoothedPlan(jitter, 5, &smoothJitter, &error), qPrintable(error));
+    const double rawStep = maxKeyframeStepDeg(rawJitter);
+    const double smoothStep = maxKeyframeStepDeg(smoothJitter);
+    qInfo("follow smoothing: jitter max step %.1f deg -> %.1f deg", rawStep, smoothStep);
+    QVERIFY2(smoothStep < rawStep / 4.0,
+             qPrintable(QStringLiteral("smoothing only reduced the max step from "
+                                       "%1 to %2 degrees")
+                            .arg(rawStep)
+                            .arg(smoothStep)));
+    // No overshoot: every smoothed direction stays inside the raw envelope.
+    for (const double yaw : keyframeYaws(smoothJitter)) {
+        QVERIFY2(qAbs(yaw) <= 20.0 + 1e-9,
+                 qPrintable(QStringLiteral("smoothed yaw %1 overshot the raw "
+                                           "envelope").arg(yaw)));
+    }
+    // Endpoints are pinned, so timing and direction are untouched.
+    QCOMPARE(smoothJitter.keyframes().first().yawDeg,
+             rawJitter.keyframes().first().yawDeg);
+    QCOMPARE(smoothJitter.keyframes().last().yawDeg,
+             rawJitter.keyframes().last().yawDeg);
+
+    // (c) A stationary subject stays perfectly still.
+    QList<TargetObservation> stationary;
+    for (int i = 0; i < 7; ++i) {
+        stationary.append(makeTargetObservation(i * 250, 12.0, -3.0));
+    }
+    ReframePlan smoothStationary;
+    QVERIFY2(buildSmoothedPlan(stationary, 5, &smoothStationary, &error),
+             qPrintable(error));
+    for (const CameraKeyframe &frame : smoothStationary.keyframes()) {
+        QVERIFY(qAbs(frame.yawDeg - 12.0) < 1e-9);
+        QVERIFY(qAbs(frame.pitchDeg + 3.0) < 1e-9);
+    }
+
+    // (d) A short follow command has too few keyframes to smooth and must be
+    // returned exactly as it was.
+    QList<TargetObservation> shortTrack;
+    shortTrack.append(makeTargetObservation(0, 5.0, 0.0));
+    shortTrack.append(makeTargetObservation(250, 25.0, 0.0));
+    ReframePlan rawShort;
+    ReframePlan smoothShort;
+    QVERIFY2(buildSmoothedPlan(shortTrack, 1, &rawShort, &error), qPrintable(error));
+    QVERIFY2(buildSmoothedPlan(shortTrack, 5, &smoothShort, &error), qPrintable(error));
+    QCOMPARE(keyframeYaws(smoothShort), keyframeYaws(rawShort));
+}
+
+void ProjectTest::targetTrackPlannerSmoothingHandlesYawWraparound()
+{
+    // A subject walking across the +/-180 degree boundary. Averaging the raw
+    // sawtooth values would fold 178 and -178 to 0 -- a 180 degree error -- so
+    // the sequence must be unwrapped before it is averaged.
+    QList<TargetObservation> crossing;
+    const double yaws[] = { 170.0, 178.0, -178.0, -170.0, -162.0 };
+    for (int i = 0; i < 5; ++i) {
+        crossing.append(makeTargetObservation(i * 250, yaws[i], 0.0));
+    }
+
+    ReframePlan smoothPlan;
+    QString error;
+    QVERIFY2(buildSmoothedPlan(crossing, 5, &smoothPlan, &error), qPrintable(error));
+
+    // The camera must keep travelling the short way round: every step stays small.
+    const double step = maxKeyframeStepDeg(smoothPlan);
+    qInfo("follow smoothing: wraparound max step %.3f deg", step);
+    QVERIFY2(step < 10.0,
+             qPrintable(QStringLiteral("wraparound produced a %1 degree step")
+                            .arg(step)));
+
+    // And the smoothed path must stay near the boundary, never folding to 0.
+    for (const double yaw : keyframeYaws(smoothPlan)) {
+        QVERIFY2(qAbs(yaw) > 150.0,
+                 qPrintable(QStringLiteral("smoothed yaw %1 folded away from the "
+                                           "boundary").arg(yaw)));
+    }
+
+    // The rendered camera follows the same short way round.
+    const double middle =
+        CameraPath::stateAt(smoothPlan, 500).yawDeg;
+    QVERIFY(qAbs(middle) > 150.0);
+
+    // Endpoints keep their exact directions, on the correct side of the boundary.
+    QVERIFY(qAbs(smoothPlan.keyframes().first().yawDeg - 170.0) < 1e-9);
+    QVERIFY(qAbs(smoothPlan.keyframes().last().yawDeg + 162.0) < 1e-9);
+}
+
+void ProjectTest::targetTrackPlannerSmoothingPreservesTimingBoundsAndDeterminism()
+{
+    QList<TargetObservation> track;
+    const double yaws[] = { 0.0, 18.0, -14.0, 22.0, -20.0, 12.0, 0.0 };
+    const double pitches[] = { 80.0, 88.0, -88.0, 89.0, -85.0, 84.0, 80.0 };
+    for (int i = 0; i < 7; ++i) {
+        track.append(makeTargetObservation(i * 250, yaws[i], pitches[i]));
+    }
+
+    ReframePlan rawPlan;
+    ReframePlan smoothPlan;
+    QString error;
+    QVERIFY2(buildSmoothedPlan(track, 1, &rawPlan, &error), qPrintable(error));
+    QVERIFY2(buildSmoothedPlan(track, 5, &smoothPlan, &error), qPrintable(error));
+
+    // Timing, count and ordering are never touched by smoothing.
+    QCOMPARE(keyframeTimes(smoothPlan), keyframeTimes(rawPlan));
+    QCOMPARE(smoothPlan.keyframes().size(), rawPlan.keyframes().size());
+    QCOMPARE(smoothPlan.sourceRange().startMs, rawPlan.sourceRange().startMs);
+    QCOMPARE(smoothPlan.sourceRange().endMs, rawPlan.sourceRange().endMs);
+    QVERIFY(smoothPlan.isValid());
+
+    // Pitch stays inside the camera-path bounds the planner already enforces.
+    for (const CameraKeyframe &frame : smoothPlan.keyframes()) {
+        QVERIFY2(qAbs(frame.pitchDeg) <= 90.0,
+                 qPrintable(QStringLiteral("pitch %1 left [-90, 90]")
+                                .arg(frame.pitchDeg)));
+    }
+
+    // Deterministic: the same input produces byte-identical keyframes.
+    ReframePlan repeat;
+    QVERIFY2(buildSmoothedPlan(track, 5, &repeat, &error), qPrintable(error));
+    QCOMPARE(repeat.toJsonObject(), smoothPlan.toJsonObject());
+
+    // Both the raw and the smoothed path render without error.
+    StaticEquirectProvider provider(buildTargetEquirect(
+        360, 180, { EquirectDisk{ 0.0, 0.0, 12.0, QColor(255, 0, 0) } }));
+    for (const ReframePlan &plan : { rawPlan, smoothPlan }) {
+        QImage frame;
+        QString renderError;
+        QVERIFY2(ReframeRenderer::render(
+                     plan, &provider,
+                     [&frame](int, qint64, const QImage &image) {
+                         frame = image;
+                         return true;
+                     },
+                     nullptr, &renderError),
+                 qPrintable(renderError));
+        QVERIFY(!frame.isNull());
+        QCOMPARE(frame.size(), QSize(160, 90));
+    }
+}
+
+void ProjectTest::followSmoothingLeavesAimAndDirectionCommandsUnchanged()
+{
+    MovingTargetEquirectProvider provider(360, 180, -40.0, 40.0, 4000);
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+
+    ReframeCommandRequest base;
+    base.defaultRange = ReframePlan::TimeRange{ 0, 4000 };
+    base.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+    base.resolveConfig = smallResolverConfig();
+    base.resolveConfig.tracker.mergeDistanceDeg = 24.0;
+
+    // Aim commands never reach the trajectory planner, so smoothing cannot
+    // touch them: still exactly one fixed direction.
+    ReframeCommandRequest aim = base;
+    aim.instruction = QStringLiteral("look at the person");
+    const ReframeCommandResult aimResult =
+        ReframeCommandRunner::prepare(aim, &detector, &provider);
+    QVERIFY2(aimResult.ok, qPrintable(aimResult.error));
+    QCOMPARE(aimResult.plan.keyframes().size(), 1);
+
+    // Explicit directions are unchanged as well.
+    ReframeCommandRequest direction = base;
+    direction.instruction = QStringLiteral("pan right");
+    const ReframeCommandResult directionResult =
+        ReframeCommandRunner::prepare(direction, nullptr, nullptr);
+    QVERIFY2(directionResult.ok, qPrintable(directionResult.error));
+    QCOMPARE(directionResult.plan.keyframes().size(), 1);
+    QVERIFY(qAbs(CameraPath::stateAt(directionResult.plan, 0).yawDeg - 90.0) < 1e-9);
+
+    // The follow path is smoothed, still spans the subject's movement, keeps its
+    // endpoints and stays deterministic.
+    ReframeCommandRequest follow = base;
+    follow.instruction = QStringLiteral("follow the person");
+    const ReframeCommandResult first =
+        ReframeCommandRunner::prepare(follow, &detector, &provider);
+    const ReframeCommandResult second =
+        ReframeCommandRunner::prepare(follow, &detector, &provider);
+    QVERIFY2(first.ok, qPrintable(first.error));
+    QVERIFY(first.plan.keyframes().size() >= 3);
+    QCOMPARE(first.plan.toJsonObject(), second.plan.toJsonObject());
+    QVERIFY2(first.plan.keyframes().last().yawDeg
+                 - first.plan.keyframes().first().yawDeg > 40.0,
+             "smoothing flattened the follow span");
+    QVERIFY(first.plan.isValid());
 }
 
 

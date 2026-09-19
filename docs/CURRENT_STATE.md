@@ -2,7 +2,7 @@
 
 ## Current Version
 
-0.2.62
+0.2.63
 
 ## Current Branch
 
@@ -81,7 +81,7 @@ Status: Partially implemented — deterministic reframing vertical slice complet
 
 Status: Implemented and continuously verified.
 
-A Qt Test suite covers project state, viewer/media, the media-source seam and frame pump, player/timing, the 360 reframing engine (plan validation/round-trip, camera interpolation, rendering determinism, intent parsing, plan building, and a real FFmpeg end-to-end render), and target resolution (equirect/view geometry, seam and pitch boundaries, view coverage, deterministic tracking, resolver behavior, the subprocess detector protocol, the track planner, and a model-free detection -> plan -> render path). Current result: 452 passed, 0 failed, 9 skipped (~718 s; the real-FFmpeg render, decode and analysis tests dominate). Eight skips are environment-gated real-media/model integrations (real detector, speaker, appearance, real 360 clip, rendered playback, source playback, compound command, application/user command) that run only when the corresponding helper, model and clip variables are configured; the ninth is the child-only slot driven by the fresh-process replay test. The normal suite stays model-free.
+A Qt Test suite covers project state, viewer/media, the media-source seam and frame pump, player/timing, the 360 reframing engine (plan validation/round-trip, camera interpolation, rendering determinism, intent parsing, plan building, and a real FFmpeg end-to-end render), and target resolution (equirect/view geometry, seam and pitch boundaries, view coverage, deterministic tracking, resolver behavior, the subprocess detector protocol, the track planner, and a model-free detection -> plan -> render path). Current result: 456 passed, 0 failed, 9 skipped (~718-813 s; the real-FFmpeg render, decode and analysis tests dominate, and the wall time varies widely with device load). Eight skips are environment-gated real-media/model integrations (real detector, speaker, appearance, real 360 clip, rendered playback, source playback, compound command, application/user command) that run only when the corresponding helper, model and clip variables are configured; the ninth is the child-only slot driven by the fresh-process replay test. The normal suite stays model-free.
 
 ## Technology Direction
 
@@ -1267,4 +1267,18 @@ Status: Complete (2026-09-18). Decision 045.
 - **Verification:** 1 new test measuring both paths under a counting wrapper and asserting exact trajectory equality plus a material process reduction; targeted regression including the Objective 20 stream-provider equivalence, jump/fallback and lifecycle tests (which cover the reuse mechanism's failure and cleanup paths): **51 passed / 0 failed / 0 skipped**.
 - **Recorded caveat:** within a bounded window the stream decodes the frames between samples at native resolution. That is cheaper than a separate invocation because the per-invocation cost is start-up rather than decoding, but no direct 4K measurement was possible here (the suite uses a small proxy, not the 779 MB original). **Recorded cost:** one extra ffprobe call per resolution pass.
 - Deliberately unchanged: follow sampling behaviour (`followSampleIntervalMs` 250 ms, `followResolveSamplesMax` 24), the explicit `resolveTimestamps` override, aim/direction sampling, subject identity resolution, detector and tracker thresholds, `TargetTrackPlanner`, camera-path semantics, the renderer, the parser, every persisted schema, injected/test frame providers, and original-media immutability. The Objective 23 duplicate-identity finding is untouched.
+
+
+## Phase 4 Objective 26 — Deterministic Follow Trajectory Smoothing — Complete
+
+Status: Complete (2026-09-18). Decision 046.
+
+- **Baseline, from inspection.** `TargetTrackPlanner` emitted one keyframe per resolved observation carrying the detected direction verbatim, and `CameraPath::stateAt` interpolates linearly between keyframes along the shortest yaw path. The follow path was therefore piecewise linear through the raw detections: velocity discontinuous at every keyframe, with every detector wobble appearing directly in the camera movement. `planTrack` is called only by the follow path, so this is entirely contained.
+- **Smoothing now happens inside `TargetTrackPlanner`**, via a new `Config::smoothingWindow` (default 5; 1 disables). The window is **centred and shrinks symmetrically at the ends**, which gives three asserted properties: constant-velocity motion is reproduced **exactly** (the pre-existing linear-ramp planner test passes unchanged), no smoothed value can leave the range of the values averaged (no overshoot), and keyframe **times, count and ordering are untouched** (start/end timing and span preserved by construction).
+- **Yaw is averaged on the circle** — the sequence is unwrapped before averaging and re-normalised after — so a trajectory crossing ±180° takes the short way round instead of folding toward zero.
+- **Framing deliberately stays centred.** "follow the person" / "keep me centered" / "keep X centered" all mean centred framing, so no lead-room or offset policy was invented; the framing envelope remains the keyframe field of view, and the subject stays inside it because a centred average never moves the camera further from the subject than the raw extremes did.
+- **Measured:** on a synthetic ±20°-per-sample wobble the largest step between consecutive keyframes falls from **40.0° to 4.0°**; a linear ramp is unchanged to within 1e-9; a stationary subject stays exactly still; a wraparound trajectory keeps every step ≤ **8.0°** with every direction beyond 150°.
+- **Unchanged by construction and by test:** aim commands ("look at the person" — still one fixed keyframe), explicit directions ("pan right" — still one keyframe at 90°), speaker and multi-move commands (they use other planners), Objective 24 sampling behaviour, all perception and thresholds, the renderer, the parser and every persisted schema.
+- **Verification:** 4 new tests (jitter versus motion-preservation versus stationary versus short-track; wraparound; timing/bounds/determinism validity incl. rendering both the raw and smoothed plans; runner-level aim/direction/follow non-regression with a deterministic-repeat check). Targeted regression including the camera-path wraparound tests, the Objective 20/25 decoder tests, and the real-media follow pipeline: **62 passed / 0 failed / 0 skipped**.
+- **Cost:** negligible — it operates on already-resolved keyframes and introduces no decode, detection or FFmpeg work.
 

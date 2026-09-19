@@ -5,6 +5,71 @@
 #include <algorithm>
 #include <cmath>
 
+namespace {
+
+// Objective 26: deterministic, model-free smoothing of the resolved trajectory.
+//
+// The renderer interpolates linearly between keyframes, so a path built straight
+// from discrete observations has a velocity discontinuity at every keyframe and
+// inherits every sample-to-sample wobble of the detection. A centred moving
+// average over the yaw/pitch sequence removes that without introducing lag,
+// overshoot or timing changes -- see Config::smoothingWindow for why the window
+// shrinks symmetrically rather than being clipped at the ends.
+void smoothKeyframeDirections(QList<CameraKeyframe> *keyframes, int window)
+{
+    if (!keyframes) {
+        return;
+    }
+    const int count = keyframes->size();
+    const int radius = window / 2;
+    if (radius < 1 || count < 3) {
+        return;
+    }
+
+    // Unwrap yaw into a continuous angle first, so averaging happens on the
+    // circle: 179 -> -179 must read as +2 degrees, not -358.
+    QList<double> unwrappedYaw;
+    QList<double> pitches;
+    unwrappedYaw.reserve(count);
+    pitches.reserve(count);
+    for (int i = 0; i < count; ++i) {
+        const CameraKeyframe &frame = keyframes->at(i);
+        if (i == 0) {
+            unwrappedYaw.append(EquirectProjection::normalizeYawDeg(frame.yawDeg));
+        } else {
+            unwrappedYaw.append(
+                unwrappedYaw.at(i - 1)
+                + EquirectProjection::shortestYawDeltaDeg(
+                      unwrappedYaw.at(i - 1), frame.yawDeg));
+        }
+        pitches.append(frame.pitchDeg);
+    }
+
+    for (int i = 0; i < count; ++i) {
+        // Symmetric shrink: the window never extends further on one side than the
+        // other, so the average stays centred on i and the endpoints keep a
+        // one-element window (their own value).
+        const int offset = qMin(radius, qMin(i, count - 1 - i));
+        const int from = i - offset;
+        const int to = i + offset;
+
+        double yawSum = 0.0;
+        double pitchSum = 0.0;
+        for (int j = from; j <= to; ++j) {
+            yawSum += unwrappedYaw.at(j);
+            pitchSum += pitches.at(j);
+        }
+        const double divisor = static_cast<double>(to - from + 1);
+
+        CameraKeyframe frame = keyframes->at(i);
+        frame.yawDeg = EquirectProjection::normalizeYawDeg(yawSum / divisor);
+        frame.pitchDeg = EquirectProjection::clampPitchDeg(pitchSum / divisor);
+        (*keyframes)[i] = frame;
+    }
+}
+
+} // namespace
+
 bool TargetTrackPlanner::planTrack(const TargetTrack &track,
                                    const ReframePlan::TimeRange &range,
                                    const ReframePlan::OutputSpec &output,
@@ -80,6 +145,10 @@ bool TargetTrackPlanner::planTrack(const TargetTrack &track,
     if (keyframes.isEmpty()) {
         return fail(QStringLiteral("Target track produced no keyframes."));
     }
+
+    // Objective 26: smooth the resolved trajectory in place. Times, ordering and
+    // the number of keyframes are untouched, so nothing downstream changes shape.
+    smoothKeyframeDirections(&keyframes, config.smoothingWindow);
 
     ReframePlan plan;
     plan.setSourceRange(range);

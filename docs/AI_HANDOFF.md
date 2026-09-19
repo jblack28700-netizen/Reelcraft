@@ -128,6 +128,18 @@ Still open and untouched: the Objective 23 duplicate-identity / `mergeDistanceDe
 
 
 
+Follow paths are now **smoothed** inside `TargetTrackPlanner` (Decision 046, Objective 26), controlled by `Config::smoothingWindow` (default 5; **1 disables**). The window is **centred and shrinks symmetrically at the ends** — that detail carries three properties the follow path depends on, all of which are asserted: constant-velocity motion is reproduced exactly (no lag, no flattening), no smoothed value can leave the range of the values averaged (no overshoot), and keyframe times/count/ordering are never touched (start/end timing and span preserved). Yaw is unwrapped before averaging and re-normalised after, so the ±180° boundary is traversed the short way; pitch is averaged linearly and clamped.
+
+Two rules before touching this. First, **it belongs in the planner** and only there: `planTrack` is called by the follow path alone — the speaker planner builds its own keyframes — so smoothing there cannot leak into aim, direction, speaker or multi-move commands, and a separate layer would be an abstraction with one caller. If a future change makes another command reach this planner, smoothing becomes a shared behaviour and must be reconsidered explicitly. The second rule is the synthetic-window choice: do not replace the symmetric shrink with a clipped window, because a one-sided neighbourhood is exactly what introduces lag, and `targetTrackPlannerSmoothsJitterAndPreservesMotion` (where a linear ramp must come through unchanged) plus the pre-existing `targetTrackPlannerBuildsFollowPlan` would both catch it.
+
+**Framing is deliberately centred and must stay that way.** "follow the person", "keep me centered" and "keep X centered" all mean centred framing; a lead-room or rule-of-thirds offset would silently change what those commands ask for. The framing envelope remains the keyframe field of view. Do not add cinematic behaviour here without a decision that changes the command semantics.
+
+Measured: a ±20°-per-sample wobble drops from a 40° maximum step between keyframes to 4°, while a linear ramp and a stationary subject are unchanged. Cost is negligible — no decode, detection or FFmpeg work is added.
+
+Still open and untouched: the Objective 23 duplicate-identity / `mergeDistanceDeg` finding (its own Decision 019 investigation).
+
+
+
 ---
 
 # 4. Current Development Camera

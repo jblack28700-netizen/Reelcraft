@@ -802,3 +802,16 @@ Date: 2026-09-18
 - Nothing about how subjects are detected, tracked or identified changed, and no stored edit or project data changed.
 - 51 targeted regression tests passed with none failing. Decision 045 records the design.
 
+
+## v0.2.63 — Follow camera movement is smoother
+
+Date: 2026-09-18
+
+- The camera now moves more smoothly when following a subject. It previously tracked the detected position of the subject exactly, sample by sample, so any wobble in the detection appeared as a wobble in the camera, and the movement changed speed abruptly at every sample.
+- The smoothing is deliberately built so that it cannot make the camera lag or drift: a subject moving steadily across the frame is followed exactly as before, and a subject standing still produces a perfectly steady camera. Only jitter is removed.
+- Following a subject who walks around behind the camera — across the point where the view wraps around — continues the short way round instead of spinning the long way.
+- Following is still centred framing. "Follow the person" and "keep me centered" behave exactly as they always have.
+- Instructions that aim at something rather than follow it are untouched, as are explicit camera directions.
+- Nothing about how subjects are detected or identified changed, no stored edit or project data changed, and following costs no extra decoding.
+- 4 new tests; targeted regression 62 passed / 0 failed / 0 skipped. Decision 046 records the design.
+

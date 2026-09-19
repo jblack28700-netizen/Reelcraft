@@ -1607,3 +1607,35 @@ The persistent path's process count is bounded by *anchors* — one geometry dec
 - **Recorded cost:** trajectory resolution now performs one extra ffprobe call per pass.
 - Nothing about perception, thresholds, cover-view association, identity semantics, the planner, camera-path semantics, the renderer, the parser or any persisted schema changed, and the Objective 23 duplicate-identity finding still awaits its own Decision 019 investigation.
 
+
+---
+
+# Decision 046 — Follow Trajectories Are Smoothed by a Centred Circular Average Inside the Planner
+
+**Status:** Accepted (2026-09-18, 360 Reframing Objective 26)
+
+## Context
+
+Objectives 23-25 made the follow path connected, densely sampled and cheap to resolve. What remained was its quality as camera movement. `TargetTrackPlanner` emitted one keyframe per resolved observation, carrying the detected direction verbatim, and `CameraPath::stateAt` interpolates linearly between keyframes along the shortest yaw path. The follow path was therefore **piecewise linear through the raw detections**: its velocity is discontinuous at every keyframe, and every sample-to-sample wobble of the detector appears directly in the camera movement. Denser sampling (Decision 044) reduced the size of each wobble but not its presence.
+
+Inspection also settled two placement questions. `TargetTrackPlanner::planTrack` is called **only** by the follow path in `ReframeCommandRunner` — the speaker planner builds its own keyframes — so smoothing there cannot affect any other command. And the planner's stated job is exactly "convert a resolved target track into the existing deterministic reframing representation", which is where trajectory shaping belongs; a separate layer would have added an abstraction with a single caller.
+
+## Decision
+
+- **Smoothing happens inside `TargetTrackPlanner`**, controlled by a new `Config::smoothingWindow` (default 5; 1 disables). It is deterministic, model-free, uses only the already-resolved trajectory, and depends on nothing from the detector, identity resolution, decoding or the renderer.
+- **The window is centred and shrinks SYMMETRICALLY at the ends** rather than being clipped one-sided. Three properties follow, and each is asserted:
+  - the average is never taken over a one-sided neighbourhood, so the path is **not delayed**, and a constant-velocity (linear) trajectory is reproduced **exactly** — smoothing removes discrete jitter without flattening genuine motion. The pre-existing `targetTrackPlannerBuildsFollowPlan` test, whose observations are a linear ramp, passes unchanged and is the independent evidence for this;
+  - every smoothed value lies inside the range of the raw values it averaged, so smoothing **cannot overshoot**; and
+  - keyframe **times, count and ordering are never altered**, so start/end timing, trajectory direction and total angular span survive by construction.
+- **Yaw is averaged on the circle.** The sequence is unwrapped into a continuous angle before averaging and re-normalised afterwards, so a transition across the ±180° boundary is the short way round. Averaging the raw sawtooth would fold 178° and −178° to 0° — a 180° error — which is the failure this requirement exists to prevent.
+- **Framing stays centred; no offset policy is introduced.** The follow path aims directly at the subject, and that is what the command semantics say: "follow the person", "keep me centered" and "keep X centered" all mean centred framing. Inventing a lead-room or rule-of-thirds offset would change the meaning of those commands, so the framing envelope remains the keyframe field of view and the subject stays inside it because a centred average never moves the camera further from the subject than the raw extremes did.
+
+## Consequences
+
+- Follow camera movement is smoothed without any change of shape downstream: the same number of keyframes at the same times, with directions that no longer carry sample-to-sample jitter.
+- Measured on a synthetic wobble of ±20° per sample: the largest angular step between consecutive keyframes falls from **40.0° to 4.0°**, while a linear ramp comes through unchanged to within 1e-9 and a stationary subject stays exactly still.
+- Yaw wraparound is handled: a trajectory crossing the boundary keeps every step at 8.0° and every direction beyond 150°, instead of folding toward zero.
+- **Contract note:** `planTrack`'s output is now a *smoothed* trajectory rather than one passing exactly through each observation. The change is small, bounded, and cannot move a direction outside the raw envelope, but it is a genuine change to what that function returns and is recorded as such here.
+- No perception, threshold, identity, sampling-density, decode, parser, renderer, camera-path or persisted-schema change. Aim, direction, speaker and multi-move commands never reach this planner and are untouched.
+- Cost is negligible: it operates on already-resolved keyframes and adds no decode, detection or allocation beyond two small lists.
+
