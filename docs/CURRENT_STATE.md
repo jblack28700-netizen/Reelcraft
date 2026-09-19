@@ -2,7 +2,7 @@
 
 ## Current Version
 
-0.2.60
+0.2.61
 
 ## Current Branch
 
@@ -81,7 +81,7 @@ Status: Partially implemented — deterministic reframing vertical slice complet
 
 Status: Implemented and continuously verified.
 
-A Qt Test suite covers project state, viewer/media, the media-source seam and frame pump, player/timing, the 360 reframing engine (plan validation/round-trip, camera interpolation, rendering determinism, intent parsing, plan building, and a real FFmpeg end-to-end render), and target resolution (equirect/view geometry, seam and pitch boundaries, view coverage, deterministic tracking, resolver behavior, the subprocess detector protocol, the track planner, and a model-free detection -> plan -> render path). Current result: 450 passed, 0 failed, 9 skipped (~671 s; the real-FFmpeg render, decode and analysis tests dominate). Eight skips are environment-gated real-media/model integrations (real detector, speaker, appearance, real 360 clip, rendered playback, source playback, compound command, application/user command) that run only when the corresponding helper, model and clip variables are configured; the ninth is the child-only slot driven by the fresh-process replay test. The normal suite stays model-free.
+A Qt Test suite covers project state, viewer/media, the media-source seam and frame pump, player/timing, the 360 reframing engine (plan validation/round-trip, camera interpolation, rendering determinism, intent parsing, plan building, and a real FFmpeg end-to-end render), and target resolution (equirect/view geometry, seam and pitch boundaries, view coverage, deterministic tracking, resolver behavior, the subprocess detector protocol, the track planner, and a model-free detection -> plan -> render path). Current result: 451 passed, 0 failed, 9 skipped (~686 s; the real-FFmpeg render, decode and analysis tests dominate). Eight skips are environment-gated real-media/model integrations (real detector, speaker, appearance, real 360 clip, rendered playback, source playback, compound command, application/user command) that run only when the corresponding helper, model and clip variables are configured; the ninth is the child-only slot driven by the fresh-process replay test. The normal suite stays model-free.
 
 ## Technology Direction
 
@@ -1239,4 +1239,18 @@ Status: Complete (2026-09-18). Human-authorized increment toward the working 360
 - Architecture decision: Decision 043.
 
 Next: the rest of the documented trajectory-to-camera-path candidate (denser tracking plus a deterministic smoothing/framing layer), which is now about follow *quality* rather than connectivity.
+
+
+## Phase 4 Objective 24 — Follow Trajectory Sampling Density — Complete
+
+Status: Complete (2026-09-18). Decision 044.
+
+- **The limitation, from source evidence.** Objective 23 connected the trajectory to the camera path, but the trajectory was sampled with a single budget shared by every subject command — `ReframeCommandRequest::maxResolveSamples`, default 5. Five samples is ample for aiming and far too sparse for tracking: the path moved in five steps across the whole instruction.
+- `ReframeCommandRequest` gained `followSampleIntervalMs` (default **250 ms**) and `followResolveSamplesMax` (default **24**), used **instead of** `maxResolveSamples` only when the instruction follows a subject. Aim, direction and speaker commands are unchanged, and an explicit `resolveTimestamps` list still wins over both.
+- Expressed as an **interval rather than a count**, so temporal resolution does not degrade with clip duration (a fixed count would give a 2.5 s step on a 60 s clip), with a maximum that bounds the decode and detection cost at 24 samples per follow command.
+- **Measured on a fixed 4 s fixture** (subject sweeping 80°): the old 5-sample budget yields 5 observations and 5 keyframes at 1000 ms spacing; the new default yields **17 observations and 17 keyframes at 250 ms spacing**; 40 samples yield 40 keyframes at 103 ms. **The angular span is 78.7° at every density**, proving density changes temporal resolution only, never the trajectory. Density maps one-for-one to keyframes.
+- Denser sampling also **improves association**: smaller per-step motion keeps a moving subject inside the tracker's association gate (measured: 40° steps split the subject into separate identities; 20° steps do not).
+- Deliberately unchanged: no perception threshold, detector, cover-view association, identity semantic, planner, renderer, persisted schema or parser change. The Objective 23 duplicate-identity (merge-distance) finding is preserved untouched.
+- **Verification:** 1 new test (`reframeCommandRunnerFollowSamplingDensity`) that measures and asserts five densities, the cap, the 1:1 observation/keyframe mapping, the spacing, the invariant angular span, the follow-only scoping (an aim command over the same range still takes exactly five samples and one keyframe) and the explicit-timestamp override; plus the four Objective 23 follow tests on real and synthetic media. Targeted regression across the affected area: **46 passed / 0 failed / 0 skipped**.
+- **Recorded follow-up (not done):** where no frame provider is injected, every sample is still its own decoder process (~2.5 s each on this device). Reusing a persistent decoder for resolution is a resolution-seam change and belongs to its own objective.
 

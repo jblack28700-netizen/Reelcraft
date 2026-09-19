@@ -778,3 +778,15 @@ Date: 2026-09-18
 - Nothing else changed: rendering, playback, replay and saved decisions behave exactly as before, and renders remain reproducible.
 - 4 new tests cover the behaviour, including an end-to-end run on real 360 footage in which the subject walks across the sphere; the rendered result is decoded back to confirm it is a valid video. Targeted regression 45 passed / 0 failed / 0 skipped.
 
+
+## v0.2.61 — Follow camera paths move more smoothly
+
+Date: 2026-09-18
+
+- When Reelcraft follows a subject, the camera now tracks that subject's movement several times more finely than before. Previously a follow instruction sampled the subject's position only a handful of times across the whole clip, so the camera moved in a few large jumps regardless of how long the section was.
+- How finely the subject is sampled is now a property of following specifically. Instructions that aim at something — "look at the car" — behave exactly as before, with the same accuracy and the same cost.
+- The sampling is measured in time rather than in a fixed number of looks, so a longer section does not become coarser, and it is capped so that following cannot become disproportionately expensive on a long clip.
+- Measured on a fixed test subject sweeping across the frame: a four-second follow section now produces seventeen camera positions at quarter-second spacing, where it previously produced five at one-second spacing. The path covers exactly the same movement — only its resolution changed.
+- Nothing about how subjects are detected, tracked or identified changed, and nothing about how edits are stored or replayed changed.
+- 1 new test measuring five sampling densities; targeted regression 46 passed / 0 failed / 0 skipped. Decision 044 records the design.
+

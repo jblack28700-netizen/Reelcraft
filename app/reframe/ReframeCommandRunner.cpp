@@ -40,6 +40,22 @@ QList<qint64> deriveTimestamps(const ReframePlan::TimeRange &range, int samples)
     return timestamps;
 }
 
+// How many trajectory samples a FOLLOW instruction may take across its range:
+// one every followSampleIntervalMs, bounded by the caller's maximum, and never
+// fewer than two so both ends of the range are covered. Deterministic, and a
+// pure function of the request and the range.
+int followSampleCountFor(const ReframePlan::TimeRange &range,
+                         const ReframeCommandRequest &request)
+{
+    const qint64 intervalMs = qMax<qint64>(1, request.followSampleIntervalMs);
+    const int cap = qMax(2, request.followResolveSamplesMax);
+    const qint64 count = range.durationMs() / intervalMs + 1;
+    if (count < 2) {
+        return 2;
+    }
+    return count > cap ? cap : static_cast<int>(count);
+}
+
 // Objective 11: does the reference ask for the active speaker?
 bool isSpeakerReference(const QString &reference)
 {
@@ -250,8 +266,12 @@ ReframeCommandResult ReframeCommandRunner::prepare(
 
             QList<qint64> timestamps = request.resolveTimestamps;
             if (timestamps.isEmpty()) {
-                timestamps =
-                    deriveTimestamps(range, qMax(1, request.maxResolveSamples));
+                // A follow instruction samples the range at its own temporal
+                // resolution; every other command keeps the existing budget.
+                const int samples = followReference.isEmpty()
+                    ? qMax(1, request.maxResolveSamples)
+                    : followSampleCountFor(range, request);
+                timestamps = deriveTimestamps(range, samples);
             }
             lastResolvedAtMs = timestamps.last();
 

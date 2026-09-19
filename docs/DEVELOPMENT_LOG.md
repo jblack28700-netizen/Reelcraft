@@ -1882,3 +1882,52 @@ The fixture's subject was also reduced from an 18-degree to a 12-degree cap, bec
 
 - Decision 043 recorded (follow instructions execute as a camera path through the resolved track; aim instructions stay a static direction; the builder remains the gate and fallback). Decisions 017-042 preserved.
 
+
+## 2026-09-18 — Phase 4 Objective 24: Follow Trajectory Sampling Density
+
+### Objective
+
+Objective 23 connected the resolved subject trajectory to the camera path; the trajectory itself was still sampled with one budget shared by every subject command. Increase the temporal resolution of the follow path only, without touching perception, thresholds, the planner, the renderer or any persisted schema.
+
+### What inspection found
+
+`ReframeCommandRequest::maxResolveSamples` (default 5) was applied to every subject command through a single call to `deriveTimestamps(range, samples)` in `prepare()`, with an explicit `resolveTimestamps` list as the only override. The budget was therefore already configurable, but not separable by instruction class: raising it globally would have changed aim commands too, both in cost and in the direction they select.
+
+### What was built
+
+- `followSampleIntervalMs` (250 ms) and `followResolveSamplesMax` (24) on `ReframeCommandRequest`, used instead of `maxResolveSamples` only when the command is a follow command (the same `followReference` condition Objective 23 already computes). A small deterministic helper derives the sample count from the range, the interval and the cap.
+- Expressed as an **interval rather than a count**, because a count degrades with duration: 25 samples over a 60-second clip is a 2.5-second step, which is the coarseness the objective exists to remove. The cap bounds the cost at 24 decodes per follow command.
+- Nothing else changed: no perception threshold, detector, cover-view association, identity semantic, planner, renderer, parser or persisted schema.
+
+### Measurement
+
+On a fixed 4-second fixture whose subject sweeps 80 degrees across the range, with one track:
+
+| interval | cap | samples | observations | keyframes | spacing | span |
+|---|---|---|---|---|---|---|
+| 1000 ms | 40 | 5 (old budget) | 5 | 5 | 1000.0 ms | 78.7° |
+| 500 ms | 40 | 9 | 9 | 9 | 500.0 ms | 78.7° |
+| 250 ms | 24 (new default) | 17 | 17 | 17 | 250.0 ms | 78.7° |
+| 100 ms | 40 | 40 | 40 | 40 | 102.6 ms | 78.7° |
+| 100 ms | 12 | 12 | 12 | 12 | 363.6 ms | 78.7° |
+
+Density maps one-for-one to observations and keyframes; spacing follows the interval exactly; **the angular span is identical at every density**, which is the evidence that this changes temporal resolution and not the trajectory. Model-free cost rose from ~0.5 s (5 samples) to ~2.5 s (17 samples) per command in the synthetic fixture, where detection dominates; the real cost in production is one decoder process per sample and is bounded by the cap.
+
+A second measured effect: sampling density also protects association. A three-timestamp override spaced 2000 ms apart moves the subject 40 degrees per step, past the tracker's 25-degree association gate, and the subject splits into separate identities and resolves as ambiguous; the same trajectory at 1000 ms spacing (20 degrees per step) associates cleanly. Density is therefore not only a smoothing concern.
+
+### Verification
+
+- 1 new test measuring five densities and asserting the observation/keyframe mapping, the spacing, the invariant span, the cap, the follow-only scoping (an aim command over the same range still takes exactly five samples and produces one keyframe) and the explicit-timestamp override.
+- Targeted regression across the affected area plus the Objective 23 follow tests and the real-video render test: **46 passed / 0 failed / 0 skipped**.
+- Full model-free suite run at the checkpoint.
+
+### Boundary notes / not implemented
+
+- No smoothing, interpolation or easing; no change to `TargetTrackPlanner`, the renderer, the merge distance, cover-view association or identity semantics. The Objective 23 duplicate-identity finding is preserved for its own Decision 019 investigation.
+- Recorded follow-up: resolution still opens one decoder per sample when no frame provider is injected. Reusing a persistent decoder is a resolution-seam change and belongs to its own objective.
+- The real-media follow test bounds its own density to eight samples, because each sample is a separate decoder process on this device while the shipped default is measured model-free.
+
+### Decisions
+
+- Decision 044 recorded. Decisions 017-043 preserved.
+

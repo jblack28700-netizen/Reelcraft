@@ -1086,6 +1086,7 @@ private slots:
     void reframeCommandRunnerFollowBuildsCameraPath();
     void reframeCommandRunnerFollowFallsBackWhenTrackUnusable();
     void reframePipelineFollowsMovingSubjectOnRealMedia();
+    void reframeCommandRunnerFollowSamplingDensity();
     void realSourcePlaybackIntegration();
     void mainWindowPlaybackButtonsEmitRequests();
     void mainWindowShowsPlaybackStateAndPosition();
@@ -16818,6 +16819,12 @@ void ProjectTest::reframePipelineFollowsMovingSubjectOnRealMedia()
     // tracks and makes the reference honestly ambiguous. Widening the merge
     // distance for this fixture keeps one identity for one subject.
     request.resolveConfig.tracker.mergeDistanceDeg = 24.0;
+    // Density is bounded for this test only: every sample costs a separate
+    // decoder process on this device (~2.5 s each), and the shipped default
+    // density is measured model-free by
+    // reframeCommandRunnerFollowSamplingDensity. Eight samples over 3.5 s is
+    // still denser than the five this objective replaced.
+    request.followResolveSamplesMax = 8;
 
     const ReframeCommandResult result =
         ReframeCommandRunner::run(request, &detector, nullptr);
@@ -16873,6 +16880,157 @@ void ProjectTest::reframePipelineFollowsMovingSubjectOnRealMedia()
     const QByteArray frames = decodeAllFramesRaw(result.outputPath);
     QVERIFY(!frames.isEmpty());
     QVERIFY(result.frameCount > 1);
+}
+
+
+
+void ProjectTest::reframeCommandRunnerFollowSamplingDensity()
+{
+    // The subject walks from -40 to +40 degrees across the range, so the plan's
+    // keyframes are a direct measure of how much of the trajectory was sampled.
+    MovingTargetEquirectProvider provider(360, 180, -40.0, 40.0, 4000);
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+
+    ReframeCommandRequest base;
+    base.instruction = QStringLiteral("follow the person");
+    base.defaultRange = ReframePlan::TimeRange{ 0, 4000 };
+    base.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+    base.resolveConfig = smallResolverConfig();
+    // Same fixture-scale allowance the real-media follow test documents: this
+    // synthetic subject is far larger than a person, so the two cover views that
+    // see it report centroids further apart than the person-tuned merge distance.
+    // That is a perception question (Objective 23 finding) and is deliberately not
+    // what this test measures.
+    base.resolveConfig.tracker.mergeDistanceDeg = 24.0;
+
+    struct DensityCase
+    {
+        qint64 intervalMs;
+        int cap;
+        int expectedSamples;
+    };
+    // 4000 ms range: samples = 4000/interval + 1, bounded by the cap.
+    const DensityCase cases[] = {
+        { 1000, 40, 5 },   // the previous fixed budget, kept reproducible
+        { 500, 40, 9 },    // moderate
+        { 250, 24, 17 },   // the default implemented by Objective 24
+        { 100, 40, 40 },   // dense, bounded by the planner's own 40-keyframe cap
+        { 100, 12, 12 },   // the cost cap actually binding
+    };
+
+    int baselineKeyframes = 0;
+    int defaultKeyframes = 0;
+    for (const DensityCase &density : cases) {
+        ReframeCommandRequest request = base;
+        request.followSampleIntervalMs = density.intervalMs;
+        request.followResolveSamplesMax = density.cap;
+
+        QElapsedTimer timer;
+        timer.start();
+        const ReframeCommandResult result =
+            ReframeCommandRunner::prepare(request, &detector, &provider);
+        const qint64 elapsedMs = timer.elapsed();
+        QVERIFY2(result.ok, qPrintable(result.error));
+
+        const QList<CameraKeyframe> keyframes = result.plan.keyframes();
+        QVERIFY(!keyframes.isEmpty());
+        QVERIFY(result.plan.isValid());
+
+        qint64 observations = 0;
+        for (const TargetTrack &track : result.tracks) {
+            observations += track.size();
+        }
+        const double spacingMs = keyframes.size() > 1
+            ? static_cast<double>(keyframes.last().timeMs - keyframes.first().timeMs)
+                / static_cast<double>(keyframes.size() - 1)
+            : 0.0;
+        const double span = keyframes.last().yawDeg - keyframes.first().yawDeg;
+
+        qInfo("follow density: interval=%lld ms cap=%d -> samples=%d observations=%lld "
+              "keyframes=%d spacing=%.1f ms span=%.1f deg elapsed=%lld ms",
+              static_cast<long long>(density.intervalMs), density.cap,
+              density.expectedSamples, static_cast<long long>(observations),
+              static_cast<int>(keyframes.size()), spacingMs, span,
+              static_cast<long long>(elapsedMs));
+
+        // Density is what varies; the trajectory itself does not.
+        QVERIFY2(static_cast<int>(keyframes.size()) <= density.cap,
+                 qPrintable(QStringLiteral("cap %1 exceeded by %2 keyframes")
+                                .arg(density.cap)
+                                .arg(keyframes.size())));
+        QVERIFY(keyframes.first().yawDeg < -15.0);
+        QVERIFY(keyframes.last().yawDeg > 15.0);
+        QCOMPARE(keyframes.first().timeMs, qint64(0));
+        QCOMPARE(keyframes.last().timeMs, qint64(4000));
+        for (int i = 1; i < keyframes.size(); ++i) {
+            QVERIFY(keyframes.at(i).timeMs > keyframes.at(i - 1).timeMs);
+            QVERIFY(keyframes.at(i).yawDeg >= keyframes.at(i - 1).yawDeg);
+        }
+
+        // The fixture yields one track, so every sample becomes exactly one
+        // observation and exactly one camera keyframe: sampling density
+        // translates one-for-one into temporal resolution of the camera path.
+        QCOMPARE(observations, qint64(density.expectedSamples));
+        QCOMPARE(static_cast<int>(keyframes.size()), density.expectedSamples);
+
+        // Spacing follows the sampling interval over a fixed 4000 ms fixture
+        // range. This is the property the objective exists to improve.
+        const double expectedSpacingMs =
+            4000.0 / static_cast<double>(density.expectedSamples - 1);
+        QVERIFY2(qAbs(spacingMs - expectedSpacingMs) < 1.0,
+                 qPrintable(QStringLiteral("spacing %1 ms, expected %2 ms")
+                                .arg(spacingMs)
+                                .arg(expectedSpacingMs)));
+
+        // Density must not change the trajectory itself: the subject sweeps the
+        // same 80 degrees however finely it is sampled.
+        QVERIFY2(span > 70.0,
+                 qPrintable(QStringLiteral("span %1 deg").arg(span)));
+
+        if (density.intervalMs == 1000) {
+            baselineKeyframes = keyframes.size();
+        }
+        if (density.intervalMs == 250 && density.cap == 24) {
+            defaultKeyframes = keyframes.size();
+        }
+    }
+
+    // The baseline still reproduces the pre-Objective-24 behaviour exactly, and
+    // the new default is meaningfully denser rather than marginally so.
+    QCOMPARE(baselineKeyframes, 5);
+    QVERIFY2(defaultKeyframes >= 3 * baselineKeyframes,
+             qPrintable(QStringLiteral("default produced %1 keyframes vs "
+                                           "baseline %2")
+                                .arg(defaultKeyframes)
+                                .arg(baselineKeyframes)));
+
+    // The denser budget is for FOLLOW instructions only: an aim instruction over
+    // the same range must still take the original five samples.
+    ReframeCommandRequest aim = base;
+    aim.instruction = QStringLiteral("look at the person");
+    const ReframeCommandResult aimResult =
+        ReframeCommandRunner::prepare(aim, &detector, &provider);
+    QVERIFY2(aimResult.ok, qPrintable(aimResult.error));
+    QCOMPARE(aimResult.plan.keyframes().size(), 1);
+    qint64 aimObservations = 0;
+    for (const TargetTrack &track : aimResult.tracks) {
+        aimObservations += track.size();
+    }
+    QCOMPARE(aimObservations, qint64(5));
+
+    // An explicit caller-supplied timestamp list still wins over both budgets:
+    // five timestamps here produce five keyframes, not the follow default's
+    // seventeen. (Spacing matters as well as count: 2000 ms apart moves the
+    // subject 40 degrees per step, past the tracker's 25-degree association
+    // gate, which splits it into separate identities. Sampling density is what
+    // keeps a moving subject associated, not just what smooths the path.)
+    ReframeCommandRequest explicitTimes = base;
+    explicitTimes.resolveTimestamps = { 0, 1000, 2000, 3000, 4000 };
+    const ReframeCommandResult explicitResult =
+        ReframeCommandRunner::prepare(explicitTimes, &detector, &provider);
+    QVERIFY2(explicitResult.ok, qPrintable(explicitResult.error));
+    QCOMPARE(explicitResult.plan.keyframes().size(), 5);
 }
 
 

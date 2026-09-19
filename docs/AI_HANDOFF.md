@@ -106,6 +106,16 @@ Two recorded limitations, neither fixed here. First, a follow path has at most a
 
 
 
+Follow instructions now sample the subject's trajectory at their own temporal resolution (Decision 044, Objective 24). `ReframeCommandRequest::followSampleIntervalMs` (default 250 ms) and `followResolveSamplesMax` (default 24) are used **instead of** `maxResolveSamples` **only** when the command is a follow command; `followSampleCountFor()` derives the count from the range, the interval and the cap. Aim, direction and speaker commands must keep `maxResolveSamples` and their existing behaviour and cost, and an explicit `resolveTimestamps` list must keep winning over both budgets — `reframeCommandRunnerFollowSamplingDensity` locks all three down.
+
+It is an **interval, not a count**, deliberately: a count degrades with duration (25 samples over a 60 s clip is a 2.5 s step) while an interval holds resolution constant and lets the cap bound cost. The shared budget is the thing to avoid re-introducing.
+
+Two measured facts worth keeping. First, density maps one-for-one into camera keyframes, and the **angular span is identical at every density** (78.7° on the fixture) — so this mechanism changes temporal resolution and never the trajectory; if a future change makes the span density-dependent, something else has started happening. Second, density also protects **association**: 2000 ms steps move the fixture subject 40° per step, past the tracker's 25° gate, and the subject splits into separate identities (resolving as honestly ambiguous), while 1000 ms steps associate cleanly. When a follow command refuses as ambiguous, sampling spacing is a legitimate thing to check before suspecting perception.
+
+Recorded follow-up, deliberately not done here: resolution still opens one decoder process per sample when no frame provider is injected (~2.5 s each on this device). Reusing a persistent decoder for resolution is a resolution-seam change and belongs to its own objective. Also still open and untouched: the Objective 23 duplicate-identity / `mergeDistanceDeg` finding, which awaits its own Decision 019 investigation.
+
+
+
 ---
 
 # 4. Current Development Camera

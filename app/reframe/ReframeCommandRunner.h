@@ -64,9 +64,22 @@ struct ReframeCommandRequest
     TargetQuery targetQuery{ QStringLiteral("person"), QString(), 0.35 };
     TargetIdentityRegistry::Config identityConfig;
     // Absolute source timestamps to resolve; when empty they are derived from
-    // the effective range (maxResolveSamples evenly spaced samples).
+    // the effective range, evenly spaced and inclusive of both ends.
     QList<qint64> resolveTimestamps;
     int maxResolveSamples = 5;
+    // Temporal resolution of the trajectory, used INSTEAD of maxResolveSamples
+    // when the instruction FOLLOWS a subject (Objective 24). A follow camera path
+    // is only as dense as the trajectory it is built from: five samples is ample
+    // for AIMING at a subject and far too sparse for TRACKING one, where it
+    // yields a path that moves in five steps across the whole instruction.
+    //
+    // Expressed as an interval rather than a bare count so the path keeps the
+    // same temporal resolution on a long clip instead of degrading with duration,
+    // and bounded by a maximum so a long clip cannot explode the decode and
+    // detection cost. Aim, direction and speaker commands keep maxResolveSamples,
+    // so their behaviour and cost are untouched.
+    qint64 followSampleIntervalMs = 250;
+    int followResolveSamplesMax = 24;
 
     // Optional pre-resolved tracks (Objective 11). When non-empty, prepare()
     // uses them instead of running target resolution. The caller remains

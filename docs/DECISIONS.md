@@ -1531,3 +1531,38 @@ Meanwhile `TargetTrackPlanner::planTrack()` — which converts a resolved track'
 - **Recorded finding (not changed):** on real footage the covering-view detector can report the same subject from two overlapping cover views with centroids further apart than the tracker's default 8-degree merge distance. Observed at 9.6 degrees for a synthetic subject much larger than a person; the tracker then keeps two identities and the command honestly refuses as *ambiguous* rather than guessing. A fixture-sized subject needed a wider `mergeDistanceDeg` to keep one identity. This is a perception-tuning question in Decision 019 territory, deliberately left alone, and is the natural next quality item for follow accuracy.
 - Creator Memory remains an unrecorded future topic; the number 043 was previously referenced prospectively for it in the Objective 21 development log, but no decision was ever recorded under it.
 
+
+---
+
+# Decision 044 — Follow Instructions Sample the Trajectory at Their Own Temporal Resolution
+
+**Status:** Accepted (2026-09-18, 360 Reframing Objective 24)
+
+## Context
+
+Decision 043 connected the resolved subject trajectory to the camera path, but the trajectory itself was still sampled with **one budget shared by every subject command**: `ReframeCommandRequest::maxResolveSamples`, default 5, applied to the whole instruction range. Five samples is ample for *aiming* at a subject — an aim uses a single representative direction — and far too sparse for *tracking* one, where it yields a camera path that moves in five steps across the entire instruction and, measured, can move further per step than the tracker's association gate, splitting one subject into several identities.
+
+## Decision
+
+- **The trajectory's temporal resolution becomes a follow-specific property.** `ReframeCommandRequest` gains `followSampleIntervalMs` (default **250 ms**) and `followResolveSamplesMax` (default **24**), used **instead of** `maxResolveSamples` when the instruction follows a subject.
+- **Expressed as an interval, not a count.** A fixed count degrades with duration — 25 samples over a 60-second clip is a 2.5-second step, which is the same coarseness the objective exists to remove — whereas an interval holds temporal resolution constant and lets the maximum bound the decode and detection cost regardless of clip length.
+- **Scope is the follow path and nothing else.** Aim, direction and speaker commands keep `maxResolveSamples` and their existing behaviour and cost. An explicit caller-supplied `resolveTimestamps` list still wins over both budgets.
+- **The density is evidence-based, not chosen to maximise keyframes.** Measured on a fixed 4-second fixture whose subject sweeps 80 degrees:
+
+  | interval | cap | samples | observations | keyframes | spacing | angular span |
+  |---|---|---|---|---|---|---|
+  | 1000 ms | 40 | 5 (the old budget) | 5 | 5 | 1000.0 ms | 78.7° |
+  | 500 ms | 40 | 9 | 9 | 9 | 500.0 ms | 78.7° |
+  | **250 ms** | **24 (default)** | **17** | **17** | **17** | **250.0 ms** | **78.7°** |
+  | 100 ms | 40 | 40 | 40 | 40 | 102.6 ms | 78.7° |
+  | 100 ms | 12 | 12 | 12 | 12 | 363.6 ms | 78.7° |
+
+  Density translates one-for-one into camera keyframes, spacing follows the interval exactly, and **the angular span is identical at every density** — denser sampling changes temporal resolution and not the trajectory. The cap binds as designed, and 250 ms is chosen because it makes the segment length shorter than the planner's own 40-keyframe ceiling would matter for realistic ranges while bounding a follow command to at most 24 decodes.
+
+## Consequences
+
+- A follow camera path now has roughly 250 ms segments instead of roughly 1000 ms, i.e. about 3.4x the keyframes on the measured fixture, without any change to the trajectory, the planner, the renderer or the persisted plan.
+- Denser sampling also **improves association**: smaller per-step angular motion keeps a moving subject inside the tracker's association gate, so one subject stays one identity. (A related measured fact: with steps of 40 degrees the tracker splits the subject, which is why an explicit three-timestamp list is not a usable override for a fast-moving subject.)
+- Cost is one frame decode plus one detection pass per sample, bounded at 24 per follow command. Where no frame provider is injected, each sample is still its own decoder process — the recorded follow-up, and a resolution-seam change that belongs to its own objective rather than this one.
+- No perception threshold, detector, cover-view association, identity semantic, planner, renderer or persisted-schema change. The Objective 23 duplicate-identity finding (merge distance) is untouched and still awaits its own Decision 019 investigation.
+
