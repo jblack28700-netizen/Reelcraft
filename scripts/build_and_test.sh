@@ -28,7 +28,7 @@ ensure_makefile
 make
 
 echo "Running tests offscreen..."
-# 900s ceiling. The complete suite (446 tests, including the real-FFmpeg render,
+# 900s ceiling. The complete suite (543 test slots, including the real-FFmpeg render,
 # decode and analysis tests added since Objective 19) measures ~720-743 s on this
 # proot device, so the old 240 s value -- written when the suite ran in ~221-241 s
 # -- killed it partway through and made the script exit 124. 900 s leaves ~21%

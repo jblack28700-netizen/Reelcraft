@@ -171,7 +171,7 @@ Do not silently change the environment in ways that could affect reproducibility
 
 - The final production environment is not yet defined.
 - The final production runtime is not yet selected; Phase 1 uses Qt 6 via /usr/lib/qt6/bin/qmake.
-- A minimal Phase 1 Qt Test suite exists (15 tests). Run scripts/build_and_test.sh to build and run offscreen.
+- A Qt Test suite exists and has grown well past its minimal Phase 1 form (15 tests when Phase 1 closed; current count: **543 slots, 530 passing**, 14 by-design skips — see `CURRENT_STATE.md`). Run scripts/build_and_test.sh to build and run offscreen.
 - GPU acceleration strategy is not yet finalized.
 - Local and cloud processing allocation is not yet finalized.
 - Production packaging and deployment are not yet defined.

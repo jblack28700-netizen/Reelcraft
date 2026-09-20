@@ -12,11 +12,22 @@ Issues should be removed or marked resolved only after verification.
 
 # Current Project State
 
-Reelcraft is currently in the documentation and architecture foundation stage.
+> **Corrected 2026-09-20 (Documentation Truth Obj D1).** The paragraph below was written during the
+> documentation-and-architecture foundation stage and is preserved as a historical marker. It no longer
+> describes the project.
+>
+> *Historical, superseded:* "Reelcraft is currently in the documentation and architecture foundation
+> stage. There is no application implementation yet. Therefore, most current limitations are
+> architectural or implementation-planning gaps rather than software defects."
 
-There is no application implementation yet.
+**Current stage:** Phase 4 (360 reframing engine) — 41 objectives complete and verified, on top of an
+implemented deterministic media engine, project/media model, 360 viewer, target resolution, creator
+review, creator revision and constrained lens widening in `app/`, and a model-free regression suite in
+`tests/` re-verified at **530 passed / 0 failed / 14 skipped**.
 
-Therefore, most current limitations are architectural or implementation-planning gaps rather than software defects.
+The limitations recorded in this document are therefore a mix of genuine product gaps and explicit,
+reasoned deferrals — not implementation-planning gaps. `CURRENT_STATE.md` is authoritative for the
+current system state.
 
 ---
 
@@ -24,21 +35,31 @@ Therefore, most current limitations are architectural or implementation-planning
 
 ### Status
 
-Open
+**Resolved (2026-09-20).** The application is implemented.
 
 ### Description
 
-The Reelcraft application itself has not yet been implemented.
+*(Historical — no longer true; see Resolution.)* The Reelcraft application itself has not yet been implemented.
 
 The current repository primarily contains project documentation and architecture planning.
 
 ### Impact
 
-No end-user editing workflow is currently available.
+*(Historical.)* No end-user editing workflow is currently available.
 
 ### Planned Resolution
 
 Begin Phase 1 — Foundation with small, independently verifiable implementation tasks.
+
+### Resolution
+
+**Resolved 2026-09-20 (Documentation Truth Obj D1); the claim had been stale since Phase 1-2.** `app/`
+implements the application: `app/application/Application.{h,cpp}` is the authoritative orchestration
+seam (`class Application : public QObject`, declared at `app/application/Application.h:94`), on top of
+`app/core/` (project and media model), `app/media/` and `app/playback/` (decode seam, frame pump,
+player/timing), `app/viewer/` (equirectangular viewer and viewport state), `app/reframe/` (plan,
+camera path, deterministic renderer, edit decisions, replay) and `app/ui/` (the Qt desktop shell).
+`CURRENT_STATE.md` carries the authoritative subsystem status.
 
 ---
 
@@ -66,19 +87,29 @@ Define the minimum viable project/edit model during the appropriate Phase 1 impl
 
 ### Status
 
-Open
+**Resolved (2026-09-20).** The deterministic media engine is implemented.
 
 ### Description
 
-The deterministic media engine is currently an architectural concept rather than an implemented subsystem.
+*(Historical — no longer true; see Resolution.)* The deterministic media engine is currently an architectural concept rather than an implemented subsystem.
 
 ### Impact
 
-No actual media processing pipeline exists yet.
+*(Historical.)* No actual media processing pipeline exists yet.
 
 ### Planned Resolution
 
 Implement the media-engine foundation incrementally after the core project foundation is established.
+
+### Resolution
+
+**Resolved 2026-09-20 (Documentation Truth Obj D1).** The deterministic media engine exists in `app/`:
+`app/reframe/ReframePlan.*` and `CameraPath.*` (the structured edit plan and its evaluation),
+`app/reframe/ReframeRenderer.*` (deterministic per-frame rendering and H.264/AAC encoding through the
+FFmpeg CLI), `app/reframe/ReframePipeline.*` (orchestration), `app/media/` (persistent decode seam,
+frame pump, duration/stream-facts probe) and `app/viewer/EquirectView.*` (the projection primitive the
+renderer uses). `ARCHITECTURE.md` §23 indexes these seams and §24 maps them to the tests that verify
+them.
 
 ---
 
@@ -146,19 +177,32 @@ Evaluate acceleration options when real media-processing workloads exist and per
 
 ### Status
 
-Open
+**Resolved (2026-09-20)** for import, viewing, orientation and reframing; **360° export remains a separate open gap** (see Resolution).
 
 ### Description
 
-360° video is a first-class architectural requirement, but the actual 360° processing, viewing, and reframing pipeline has not yet been implemented.
+*(Historical — no longer true for viewing and reframing; see Resolution.)* 360° video is a first-class architectural requirement, but the actual 360° processing, viewing, and reframing pipeline has not yet been implemented.
 
 ### Impact
 
-The core 360° creator workflow is not yet functional.
+*(Historical for viewing/reframing.)* The core 360° creator workflow is not yet functional.
 
 ### Planned Resolution
 
 Implement 360° support incrementally, beginning with the foundation required for reliable media representation and viewing.
+
+### Resolution
+
+**Resolved 2026-09-20 (Documentation Truth Obj D1), with one deliberate exception.** The 360° pipeline
+is implemented: equirectangular import and projection (`app/core/MediaItem.*`, `app/viewer/EquirectView.*`,
+`app/viewer/ViewportState.*`), continuous 360 source viewing with look-around and seek
+(`app/application/Application.*` over `app/media/FfmpegFrameSource.*`), spherical target geometry and
+tracking (`app/target/EquirectProjection.*`, `EquirectViewPlan.*`, `SphericalTargetTracker.*`), and
+natural-language reframing to flat output (`app/reframe/`), verified across 41 objectives.
+
+**Nuance, not erased:** the exception is *360/equirect output*. Rendering produces flat video only —
+there is no equirectangular export — and that remains a genuine, separately-tracked limitation in
+`CURRENT_STATE.md` ("No timeline editor … output is flat video only (no 360/equirect export)").
 
 ---
 
@@ -186,19 +230,29 @@ Define and implement the adapter boundary before adding substantial camera-speci
 
 ### Status
 
-Open
+**Resolved (2026-09-20).** The test suite exists and is the project's regression gate.
 
 ### Description
 
-The project does not yet contain an application test suite or automated regression framework.
+*(Historical — no longer true; see Resolution.)* The project does not yet contain an application test suite or automated regression framework.
 
 ### Impact
 
-Implementation work cannot yet rely on automated application-level regression testing.
+*(Historical.)* Implementation work cannot yet rely on automated application-level regression testing.
 
 ### Planned Resolution
 
 Establish testing infrastructure as part of the implementation foundation before substantial feature development.
+
+### Resolution
+
+**Resolved 2026-09-20 (Documentation Truth Obj D1).** `tests/test_project.cpp` is a Qt Test suite with
+**543 test slots** (`QTEST_MAIN(ProjectTest)`), built by `tests/tests.pro` and run offscreen by
+`scripts/build_and_test.sh`. The most recent full run, after the toolchain was reinstalled and both trees
+rebuilt from clean, reported `Totals: 530 passed, 0 failed, 14 skipped, 0 blacklisted` and
+`scripts/checkpoint_check.sh` reports PASS. The 14 skips are by design: 13 environment-gated
+real-media/model integrations and one child-only fresh-process replay slot. See `CURRENT_STATE.md`
+"Test baseline" and `ARCHITECTURE.md` §24 (behaviour → test index).
 
 ---
 
@@ -613,6 +667,52 @@ The mechanism was identified by elimination and artefact evidence rather than by
 - Done: `tests/Makefile` regenerated with `qmake`; its `test_project.o` rule now lists `ReframeStreamFrameProvider.h`. Rebuild and re-run confirmed all six affected tests pass repeatedly with no stack smashing.
 - Standing rule (recorded in `DEVELOPMENT_ENVIRONMENT.md`): run `qmake` in **both** `reelcraft/` and `tests/` after adding or renaming source or header files, and re-run `make` twice so the second pass builds nothing.
 - Standing rule: a stack-canary abort or a behaviour change that appears without a corresponding source change should first be treated as a build-consistency problem — check that the artefact that changed is the one you think changed — before being treated as a product defect.
+
+
+# Issue — checkpoint_check.sh cannot detect a toolchain change (2026-09-20)
+
+### Status
+
+Open — an operational trap, not a defect in the script, which is correct for what it checks. No code
+change is proposed here.
+
+### Description
+
+`scripts/checkpoint_check.sh` verifies build-tree freshness with `make -q`, which compares **source
+mtimes against object mtimes**. That answers "is the tree older than its sources?" and nothing else. It
+cannot answer "were these objects produced by the toolchain installed now?", because an object's
+provenance is not recorded anywhere `make` looks.
+
+Both failure directions were observed in this repository:
+
+- **False negative — reports STALE when nothing is wrong.** After the Objective 41 container was replaced,
+  `qmake` was absent and `make -q` could not evaluate the tree at all: it died on the Makefile-remaking
+  rule (`Makefile:444`, `Error 127`). The check reported `FAIL . tree is STALE` while an independent
+  comparison found **0 objects older than their sources**. The tree was current; the toolchain was missing.
+- **False positive — reports current when a rebuild is required.** After Qt was reinstalled and `qmake`
+  re-run, the pre-existing objects from the *previous container* were still newer than the sources, so a
+  plain `make` printed `Nothing to be done for 'first'` and the check reported `ok . tree is current` —
+  while nothing had been compiled by the installed toolchain at all.
+
+### Impact
+
+- A full rebuild can be silently skipped after a container replacement or a toolchain upgrade, and the
+  resulting test result would come from binaries produced by the *previous* toolchain — a validation claim
+  about a toolchain that was never exercised.
+- The condition is invisible: `checkpoint_check.sh` reports PASS, and only `make`'s
+  "Nothing to be done" line reveals it.
+- Related to, but distinct from, the object-revision issue below: that one is a stale *dependency list*;
+  this one is a stale *producer*.
+
+### Planned Resolution
+
+- Standing rule: **after any toolchain change (container replacement, compiler or Qt upgrade), run
+  `make clean` in both `reelcraft/` and `tests/` and rebuild from clean before claiming any result.**
+  The freshness check alone must not be trusted to trigger that rebuild.
+- Standing rule: treat `make` printing `Nothing to be done for 'first'` immediately after a toolchain
+  change as a red flag rather than good news, and confirm the objects were genuinely reproduced (for
+  example by comparing object mtimes against the toolchain's install time).
+- Observed and acted on during Environment Obj E1 (2026-09-20); see `DEVELOPMENT_LOG.md`.
 
 
 # Issue — Media analysis is sampled, and its precision is a recorded limitation (2026-09-18)

@@ -67,10 +67,13 @@ repeated here: it lives in `DEVELOPMENT_LOG.md` (chronological record), `DECISIO
   `NEXT_TASK.md` §4 (validation debt).
 - The normal suite is model-free and requires no detector, model, network or real footage.
 - **Not re-measured for Architecture Obj A1 (0.2.78)**: that change is documentation-only, so the baseline
-  above is carried forward from the Objective 41 checkpoint unchanged. No suite could be run in this
-  container in any case: Qt 6 is not installed here (`qmake` and `libQt6Core.so*` are absent), so
-  `scripts/checkpoint_check.sh`'s build-tree freshness checks report an environmental failure that is
-  unrelated to documentation edits.
+  above is carried forward from the Objective 41 checkpoint unchanged. At the time, no suite could be run
+  in this container: Qt 6 was not installed (`qmake` and `libQt6Core.so*` were absent) and
+  `scripts/checkpoint_check.sh`'s build-tree freshness checks reported an environmental failure unrelated
+  to documentation edits. **Corrected 2026-09-20 (Environment Obj E1):** the toolchain was reinstalled and
+  both trees were rebuilt from clean, so that environmental condition no longer applies — see the
+  re-verification bullet below and `KNOWN_ISSUES.md` ("checkpoint_check.sh cannot detect a toolchain
+  change").
 - **Re-verified in the restored container (2026-09-20, Qt `6.4.2+dfsg-21.1build5`, gcc 13.3.0)**:
   after the Objective 41 container was replaced, Qt was reinstalled, both trees were rebuilt from clean
   with that toolchain, and the full suite ran: `Totals: 530 passed, 0 failed, 14 skipped, 0 blacklisted,
