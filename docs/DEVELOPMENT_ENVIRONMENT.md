@@ -411,3 +411,34 @@ instead of re-deriving them.
 Each test prints the exact variables it needs when it skips. Coverage note: this harness predates
 Objectives 28-32 and asserts none of their behaviour (see `NEXT_TASK.md` §4).
 
+
+### Objective 28-32 real-media harness (Objective 33)
+
+Five environment-gated tests validate the Objectives 28-32 behaviour on real footage. With the
+prerequisites absent they SKIP, each naming exactly what it needs; an unusable file that WAS supplied
+FAILS (that is a real problem, not a missing prerequisite).
+
+    REELCRAFT_TARGET_CLIP=<360 clip or proxy> \
+    REELCRAFT_TARGET_DETECTOR_PY=<python3> \
+    REELCRAFT_TARGET_DETECTOR_SCRIPT=tools/detector_helper/yolox_detector.py \
+    REELCRAFT_TARGET_YOLOX_MODEL=~/.cache/reelcraft/models/yolox_2022nov.onnx \
+    QT_QPA_PLATFORM=offscreen ./tests/reelcraft_tests \
+      realMediaAudioPreservation realMediaLensRequestReachesOutput \
+      realMediaMultiSubjectContainment realMediaGroupInfeasibilityIsHonest \
+      realMediaExplicitReferencesResolve
+
+`REELCRAFT_TARGET_OUTPUT` optionally selects an output file/directory; otherwise a temporary
+directory is used. The source clip is only ever read: no test writes to, renames, resizes or
+transcodes it, and the audio test re-checks its size, modification time and content digest.
+
+| Test | Objective | What it does with the assets |
+|---|---|---|
+| `realMediaAudioPreservation` | 28 | renders a retained span and asserts the output carries an audio stream with the source's sample rate, a duration matching the retained span, and an unchanged source. Skips when the clip has no audio track. |
+| `realMediaLensRequestReachesOutput` | 29 | renders the same instruction with and without a lens request and asserts the plan's field of view (90 vs 60 degrees) plus decoded-frame inequality — measurable evidence the lens reached the picture. |
+| `realMediaMultiSubjectContainment` | 30/31 | resolves real person tracks, frames two of them (and three when the footage provides three), and asserts the exact tangent containment rule against the detectors own reported footprints at every keyframe. |
+| `realMediaGroupInfeasibilityIsHonest` | 31 | computes the group's real requirement and asserts the corresponding honest refusal (above the renderable maximum, or a requested lens too narrow) with no plan produced. Skips when the footage offers no naturally infeasible group. |
+| `realMediaExplicitReferencesResolve` | 32 | asserts "person 1 and person 2" resolves to the canonical real tracks, that the plan equals the equivalent group phrasing, and that a creator seed plus a numbered person yields two distinct real tracks. |
+
+Sample times are derived from the probed clip duration, so any supplied clip works — the older tests
+hard-code a 12 s proxy window.
+

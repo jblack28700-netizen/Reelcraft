@@ -1102,6 +1102,12 @@ private slots:
     void reframeCommandRunnerResolvesExplicitSubjects();
     void reframeCommandRunnerExplicitSubjectsRefuseHonestly();
     void reframeExplicitSubjectsRenderAndReplay();
+    // Objective 33: real-media validation harness for Objectives 28-32.
+    void realMediaAudioPreservation();
+    void realMediaLensRequestReachesOutput();
+    void realMediaMultiSubjectContainment();
+    void realMediaGroupInfeasibilityIsHonest();
+    void realMediaExplicitReferencesResolve();
     void mediaAnalysisJsonRoundTripAndIdentity();
     void mediaAnalysisSchemaVersionAndDigestHandling();
     void mediaAnalysisSourceStatusDistinguishesMissingFromChanged();
@@ -20525,6 +20531,574 @@ void ProjectTest::reframePipelineRendersRequestedFraming()
     QCOMPARE(QFileInfo(source).size(), sourceBefore.size());
     QCOMPARE(QFileInfo(source).lastModified(), sourceBefore.lastModified());
     QCOMPARE(sha256Of(readFileBytes(source)), sourceDigestBefore);
+}
+
+// ======== Real-media validation harness for Objectives 28-32 (Objective 33) ==
+//
+// Environment-gated, exactly like the Objective 3-19 integration tests: with the
+// documented prerequisites supplied these tests validate the Objective 28-32
+// behaviour against REAL footage; without them they SKIP with the precise
+// prerequisite they need, and they never fabricate an execution.
+//
+// Prerequisites (see DEVELOPMENT_ENVIRONMENT.md):
+//   REELCRAFT_TARGET_CLIP              a real equirectangular 360 clip
+//   REELCRAFT_TARGET_OUTPUT            optional output path (default: temp dir)
+//   REELCRAFT_TARGET_DETECTOR_PY       python3
+//   REELCRAFT_TARGET_DETECTOR_SCRIPT   tools/detector_helper/yolox_detector.py
+//   REELCRAFT_TARGET_YOLOX_MODEL       ~/.cache/reelcraft/models/yolox_2022nov.onnx
+//
+// The distinction the harness keeps: a MISSING prerequisite skips; an unusable
+// file that WAS supplied fails.
+
+namespace {
+
+// The clip, or a precise skip reason. Never fails for a missing prerequisite.
+bool realMediaClipConfigured(const char *testName, QString *clip,
+                             QString *skipReason)
+{
+    const QString path = qEnvironmentVariable("REELCRAFT_TARGET_CLIP");
+    if (path.isEmpty()) {
+        *skipReason = QStringLiteral(
+            "%1 not configured: set REELCRAFT_TARGET_CLIP to a real 360 "
+            "equirectangular clip (missing media; see DEVELOPMENT_ENVIRONMENT.md).")
+                          .arg(QString::fromLatin1(testName));
+        return false;
+    }
+    if (!FrameExtractor::isAvailable()) {
+        *skipReason = QStringLiteral(
+            "%1: ffmpeg is unavailable, and real-media validation needs it.")
+                          .arg(QString::fromLatin1(testName));
+        return false;
+    }
+    const QFileInfo info(path);
+    if (!info.exists() || !info.isFile()) {
+        *skipReason = QStringLiteral(
+            "%1: REELCRAFT_TARGET_CLIP points at '%2', which is not an existing "
+            "file (missing media).").arg(QString::fromLatin1(testName), path);
+        return false;
+    }
+    *clip = path;
+    return true;
+}
+
+// The clip AND the real detector, or a precise skip reason naming what is absent.
+bool realMediaClipAndDetectorConfigured(const char *testName, QString *clip,
+                                        QString *python, QString *script,
+                                        QString *model, QString *skipReason)
+{
+    QString reason;
+    if (!realMediaClipConfigured(testName, clip, &reason)) {
+        *skipReason = reason;
+        return false;
+    }
+    const QString interpreter = qEnvironmentVariable("REELCRAFT_TARGET_DETECTOR_PY");
+    const QString helper = qEnvironmentVariable("REELCRAFT_TARGET_DETECTOR_SCRIPT");
+    const QString weights = qEnvironmentVariable("REELCRAFT_TARGET_YOLOX_MODEL");
+    if (interpreter.isEmpty() || helper.isEmpty() || weights.isEmpty()) {
+        *skipReason = QStringLiteral(
+            "%1: real detection is not configured (set REELCRAFT_TARGET_DETECTOR_PY, "
+            "REELCRAFT_TARGET_DETECTOR_SCRIPT and REELCRAFT_TARGET_YOLOX_MODEL; the "
+            "weights live in ~/.cache/reelcraft/models/).")
+                          .arg(QString::fromLatin1(testName));
+        return false;
+    }
+    if (!QFileInfo::exists(helper)) {
+        *skipReason = QStringLiteral(
+            "%1: REELCRAFT_TARGET_DETECTOR_SCRIPT points at '%2', which does not "
+            "exist.").arg(QString::fromLatin1(testName), helper);
+        return false;
+    }
+    if (!QFileInfo::exists(weights)) {
+        *skipReason = QStringLiteral(
+            "%1: REELCRAFT_TARGET_YOLOX_MODEL points at '%2', which does not exist "
+            "(missing model weights).").arg(QString::fromLatin1(testName), weights);
+        return false;
+    }
+    *python = interpreter;
+    *script = helper;
+    *model = weights;
+    return true;
+}
+
+// A deterministic sample grid inside the clip, derived from the probed duration
+// so any supplied clip works (the Objective 3-19 tests hard-code a 12 s proxy).
+QList<qint64> realMediaSampleTimes(const QString &clip, int samples)
+{
+    qint64 durationMs = 0;
+    QString error;
+    FfprobeDurationProbe probe;
+    if (!probe.durationMs(clip, &durationMs, &error) || durationMs <= 0) {
+        durationMs = 12000;
+    }
+    const qint64 start = durationMs / 4;
+    const qint64 span = qMax<qint64>(1, durationMs / 2);
+    QList<qint64> times;
+    for (int i = 0; i < qMax(2, samples); ++i) {
+        times.append(start + (span * i) / qMax(1, samples - 1));
+    }
+    return times;
+}
+
+// The real person tracks a command can see, in the selector's canonical order.
+QList<TargetTrack> realMediaPersonTracks(const QString &clip, const QString &python,
+                                         const QString &script,
+                                         const QString &model, QString *error)
+{
+    ProcessTargetDetector detector(python, { script, QStringLiteral("--model"), model });
+    FfmpegSeekFrameProvider provider(clip, FrameExtractor::defaultExecutablePath());
+
+    TargetResolveConfig config;
+    config.viewPlan.fieldOfViewDeg = 110.0;
+    config.viewPlan.yawCount = 4;
+    config.viewPlan.pitchCount = 1;
+    config.viewPlan.viewWidth = 512;
+    config.viewPlan.viewHeight = 512;
+    config.minConfidence = 0.35;
+    config.tracker.maxAssociationDistanceDeg = 40.0;
+    config.tracker.maxMisses = 3;
+
+    TargetQuery query;
+    query.label = QStringLiteral("person");
+    query.minConfidence = 0.35;
+
+    QList<TargetTrack> tracks;
+    TargetResolver resolver(config);
+    QString resolveError;
+    if (!resolver.resolveSequence(&provider, realMediaSampleTimes(clip, 5), query,
+                                  &detector, &tracks, &resolveError)) {
+        if (error) {
+            *error = resolveError.isEmpty()
+                ? QStringLiteral("real target resolution failed")
+                : resolveError;
+        }
+        return {};
+    }
+    for (const QString &note : resolver.notes()) {
+        qInfo("resolver note: %s", qPrintable(note));
+    }
+    return TargetSelector::canonicalOrder(tracks, QStringLiteral("person"));
+}
+
+// The output path: REELCRAFT_TARGET_OUTPUT when supplied, else a temporary file.
+QString realMediaOutputPath(QTemporaryDir *directory, const QString &tag)
+{
+    const QString configured = qEnvironmentVariable("REELCRAFT_TARGET_OUTPUT");
+    if (!configured.isEmpty()) {
+        const QFileInfo info(configured);
+        if (info.isDir() || !info.exists()) {
+            return QDir(configured).filePath(tag + QStringLiteral(".mp4"));
+        }
+        return configured;
+    }
+    return directory->filePath(tag + QStringLiteral(".mp4"));
+}
+
+} // namespace
+
+void ProjectTest::realMediaAudioPreservation()
+{
+    QString clip;
+    QString skipReason;
+    if (!realMediaClipConfigured("realMediaAudioPreservation", &clip, &skipReason)) {
+        QSKIP(qPrintable(skipReason));
+    }
+
+    // An audio-bearing clip is a prerequisite in its own right, and its absence is
+    // a SKIP: the fixture suite already proves the audio path model-free.
+    AudioStreamFacts sourceFacts;
+    QVERIFY2(probeAudioFacts(clip, &sourceFacts),
+             "REELCRAFT_TARGET_CLIP was supplied but could not be probed (invalid media)");
+    if (!sourceFacts.hasAudio) {
+        QSKIP("the supplied clip has no audio track; this test needs an audio-bearing "
+              "360 clip (see DEVELOPMENT_ENVIRONMENT.md)");
+    }
+
+    qint64 durationMs = 0;
+    QString error;
+    FfprobeDurationProbe probe;
+    QVERIFY2(probe.durationMs(clip, &durationMs, &error), qPrintable(error));
+    QVERIFY(durationMs > 0);
+
+    const QFileInfo sourceBefore(clip);
+    QByteArray digestBefore;
+    QVERIFY(computeMediaContentSha256(clip, &digestBefore));
+
+    // A RETAINED span, not the whole clip: the output audio must be trimmed to the
+    // span the picture kept.
+    const qint64 startMs = durationMs / 4;
+    const qint64 endMs = qMin(durationMs, startMs + 2000);
+
+    QTemporaryDir outputDirectory;
+    const QString output = realMediaOutputPath(&outputDirectory, QStringLiteral("real_audio"));
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(clip));
+    QVERIFY(app.setActiveMedia(app.mediaItems().first().id()));
+    app.setReframeDefaultOutput(640, 360, 2.0);
+    QVERIFY2(app.runReframeCommandTo(QStringLiteral("pan right"), startMs, endMs, output),
+             qPrintable(app.lastReframeCommandOutcome().error));
+
+    AudioStreamFacts outputFacts;
+    QVERIFY2(probeAudioFacts(output, &outputFacts), "the rendered output has no readable streams");
+    qInfo("real audio: source=%s/%dch/%dHz span=%lld..%lldms output=%s/%dch/%dHz/%.2fs",
+          sourceFacts.hasAudio ? "audio" : "silent", sourceFacts.channels,
+          sourceFacts.sampleRate, static_cast<long long>(startMs),
+          static_cast<long long>(endMs), outputFacts.hasAudio ? "audio" : "silent",
+          outputFacts.channels, outputFacts.sampleRate, outputFacts.durationSeconds);
+    QVERIFY2(outputFacts.hasAudio,
+             "the rendered output carries no audio even though the source has an audio track");
+    QCOMPARE(outputFacts.sampleRate, sourceFacts.sampleRate);
+    if (sourceFacts.channels <= 2) {
+        // The documented policy forces -ac only for the unambiguous layouts.
+        QCOMPARE(outputFacts.channels, sourceFacts.channels);
+    }
+
+    // Retention: the output lasts the retained span, not the whole clip.
+    const double retainedSeconds = static_cast<double>(endMs - startMs) / 1000.0;
+    // One output frame at the 2 fps used above is 0.5 s; allow slightly more so
+    // the assertion is about retention (span vs whole clip), not encoder rounding.
+    const double tolerance = 0.6;
+    QVERIFY2(qAbs(outputFacts.durationSeconds - retainedSeconds) < tolerance,
+             qPrintable(QStringLiteral("output audio lasts %1 s, the retained span is %2 s")
+                            .arg(outputFacts.durationSeconds)
+                            .arg(retainedSeconds)));
+
+    // The source is read-only: unchanged size, mtime and content.
+    const QFileInfo sourceAfter(clip);
+    QByteArray digestAfter;
+    QVERIFY(computeMediaContentSha256(clip, &digestAfter));
+    QCOMPARE(sourceAfter.size(), sourceBefore.size());
+    QCOMPARE(sourceAfter.lastModified(), sourceBefore.lastModified());
+    QCOMPARE(digestAfter, digestBefore);
+}
+
+void ProjectTest::realMediaLensRequestReachesOutput()
+{
+    QString clip;
+    QString skipReason;
+    if (!realMediaClipConfigured("realMediaLensRequestReachesOutput", &clip, &skipReason)) {
+        QSKIP(qPrintable(skipReason));
+    }
+
+    qint64 durationMs = 0;
+    QString error;
+    FfprobeDurationProbe probe;
+    QVERIFY2(probe.durationMs(clip, &durationMs, &error), qPrintable(error));
+    const qint64 startMs = qMax<qint64>(0, durationMs / 4);
+    const qint64 endMs = qMin(durationMs, startMs + 1000);
+
+    QTemporaryDir directory;
+    const auto render = [&](const QString &instruction, const QString &tag,
+                            ReframeCommandResult *result) {
+        ReframeCommandRequest request;
+        request.sourcePath = clip;
+        request.sourceMediaId = QStringLiteral("real-lens");
+        request.instruction = instruction;
+        request.outputPath = realMediaOutputPath(&directory, tag);
+        request.defaultRange = ReframePlan::TimeRange{ startMs, endMs };
+        request.defaultOutput = ReframePlan::OutputSpec{ 320, 180, 2.0 };
+        *result = ReframeCommandRunner::run(request, nullptr, nullptr);
+    };
+
+    ReframeCommandResult plain;
+    render(QStringLiteral("pan right"), QStringLiteral("real_lens_plain"), &plain);
+    QVERIFY2(plain.ok, qPrintable(plain.error));
+    ReframeCommandResult zoomed;
+    render(QStringLiteral("pan right and zoom in"), QStringLiteral("real_lens_zoom"), &zoomed);
+    QVERIFY2(zoomed.ok, qPrintable(zoomed.error));
+
+    // The requested lens survives the whole path: intent -> plan -> renderer input.
+    QCOMPARE(plain.plan.keyframes().first().fieldOfViewDeg, 90.0);
+    QCOMPARE(zoomed.plan.keyframes().first().fieldOfViewDeg, 60.0);
+    for (const CameraKeyframe &keyframe : zoomed.plan.keyframes()) {
+        QCOMPARE(keyframe.fieldOfViewDeg, 60.0);
+    }
+    QCOMPARE(zoomed.frameCount, plain.frameCount);
+
+    // Measurable evidence that the lens reached the PICTURE, not just the plan:
+    // the same camera direction at two lenses cannot decode to the same frames.
+    const QByteArray plainFrames = decodeAllFramesRaw(plain.outputPath);
+    const QByteArray zoomedFrames = decodeAllFramesRaw(zoomed.outputPath);
+    qInfo("real lens: plain=%d frames zoomed=%d frames identical=%d",
+          static_cast<int>(plainFrames.size()), static_cast<int>(zoomedFrames.size()),
+          sha256Of(plainFrames) == sha256Of(zoomedFrames) ? 1 : 0);
+    QVERIFY(!plainFrames.isEmpty());
+    QCOMPARE(zoomedFrames.size(), plainFrames.size());
+    QVERIFY2(sha256Of(zoomedFrames) != sha256Of(plainFrames),
+             "a tighter requested lens produced identical pixels");
+}
+
+void ProjectTest::realMediaMultiSubjectContainment()
+{
+    QString clip;
+    QString python;
+    QString script;
+    QString model;
+    QString skipReason;
+    if (!realMediaClipAndDetectorConfigured("realMediaMultiSubjectContainment", &clip,
+                                            &python, &script, &model, &skipReason)) {
+        QSKIP(qPrintable(skipReason));
+    }
+
+    QString resolveError;
+    const QList<TargetTrack> tracks =
+        realMediaPersonTracks(clip, python, script, model, &resolveError);
+    QVERIFY2(!tracks.isEmpty(), qPrintable(resolveError.isEmpty()
+                                               ? QStringLiteral("no real person track was resolved")
+                                               : resolveError));
+    qInfo("real containment: %d canonical person track(s)", static_cast<int>(tracks.size()));
+    if (tracks.size() < 2) {
+        QSKIP("the supplied footage resolved fewer than two distinct person tracks, "
+              "so multi-subject framing cannot be exercised on it");
+    }
+
+    QTemporaryDir directory;
+    const auto plan = [&](const QString &instruction) {
+        ReframeCommandRequest request;
+        request.instruction = instruction;
+        request.defaultRange = ReframePlan::TimeRange{
+            realMediaSampleTimes(clip, 2).first(), realMediaSampleTimes(clip, 2).last() };
+        request.defaultOutput = ReframePlan::OutputSpec{ 640, 360, 2.0 };
+        request.resolvedTracks = tracks;
+        return ReframeCommandRunner::prepare(request, nullptr, nullptr);
+    };
+
+    // Two-subject framing against REAL reported footprints, asserted with the
+    // exact tangent containment rule (Objective 31) — never the old span/cosine
+    // approximation.
+    const ReframeCommandResult pair = plan(QStringLiteral("keep both people in frame"));
+    QVERIFY2(pair.ok, qPrintable(pair.error));
+    QCOMPARE(pair.resolvedTargets.size(), 2);
+    QStringList pairIds;
+    for (const ReframeTarget &target : pair.resolvedTargets) {
+        pairIds.append(target.id);
+    }
+    QCOMPARE(pairIds, QStringList({ tracks.at(0).id(), tracks.at(1).id() }));
+    int pairs = 0;
+    QVERIFY2(planContainsTracks(pair.plan, tracks, pairIds, &pairs),
+             "a real detected footprint is outside the framed area");
+    qInfo("real containment: pair lens=%.2f deg checks=%d keyframes=%d",
+          pair.plan.keyframes().first().fieldOfViewDeg, pairs,
+          static_cast<int>(pair.plan.keyframes().size()));
+
+    // Deterministic on real evidence.
+    const ReframeCommandResult repeat = plan(QStringLiteral("keep both people in frame"));
+    QVERIFY2(repeat.ok, qPrintable(repeat.error));
+    QCOMPARE(repeat.plan.toJsonObject(), pair.plan.toJsonObject());
+
+    // Three or more when the footage provides them; when it does not, the
+    // limitation is recorded rather than invented around.
+    if (tracks.size() < 3) {
+        qInfo("recorded limitation: the supplied footage resolved only %d person "
+              "track(s), so 3+ subject group framing was not exercised on real media",
+              static_cast<int>(tracks.size()));
+        return;
+    }
+    const ReframeCommandResult group = plan(QStringLiteral("keep the three people in frame"));
+    QVERIFY2(group.ok, qPrintable(group.error));
+    QCOMPARE(group.resolvedTargets.size(), 3);
+    QStringList groupIds;
+    for (const ReframeTarget &target : group.resolvedTargets) {
+        groupIds.append(target.id);
+    }
+    int groupPairs = 0;
+    QVERIFY2(planContainsTracks(group.plan, tracks, groupIds, &groupPairs),
+             "a real detected footprint is outside the framed group");
+    qInfo("real containment: group lens=%.2f deg checks=%d",
+          group.plan.keyframes().first().fieldOfViewDeg, groupPairs);
+}
+
+void ProjectTest::realMediaGroupInfeasibilityIsHonest()
+{
+    QString clip;
+    QString python;
+    QString script;
+    QString model;
+    QString skipReason;
+    if (!realMediaClipAndDetectorConfigured("realMediaGroupInfeasibilityIsHonest", &clip,
+                                            &python, &script, &model, &skipReason)) {
+        QSKIP(qPrintable(skipReason));
+    }
+
+    QString resolveError;
+    const QList<TargetTrack> tracks =
+        realMediaPersonTracks(clip, python, script, model, &resolveError);
+    QVERIFY2(!tracks.isEmpty(), qPrintable(resolveError.isEmpty()
+                                               ? QStringLiteral("no real person track was resolved")
+                                               : resolveError));
+    if (tracks.size() < 2) {
+        QSKIP("the supplied footage resolved fewer than two distinct person tracks, "
+              "so a group framing cannot be attempted on it");
+    }
+
+    // The requirement comes from the REAL footprints: take the observations the
+    // whole group has at one common timestamp and ask the planner's own rule.
+    QList<TargetObservation> joint;
+    for (const TargetObservation &observation : tracks.first().observations()) {
+        QList<TargetObservation> atTime;
+        bool everyTrack = true;
+        for (const TargetTrack &track : tracks) {
+            const TargetObservation *found = nullptr;
+            for (const TargetObservation &candidate : track.observations()) {
+                if (candidate.timeMs == observation.timeMs) {
+                    found = &candidate;
+                    break;
+                }
+            }
+            if (!found) {
+                everyTrack = false;
+                break;
+            }
+            atTime.append(*found);
+        }
+        if (everyTrack) {
+            joint = atTime;
+            break;
+        }
+    }
+    if (joint.isEmpty()) {
+        QSKIP("the resolved tracks were never observed together in the supplied footage, "
+              "so no real group framing - feasible or not - exists to test");
+    }
+    const TargetTrackPlanner::EnclosingFraming required =
+        TargetTrackPlanner::enclosingFramingDeg(joint, 640, 360);
+
+    QTemporaryDir directory;
+    const auto request = [&](const QString &instruction) {
+        ReframeCommandRequest request;
+        request.instruction = instruction;
+        request.defaultRange = ReframePlan::TimeRange{ joint.first().timeMs,
+                                                       joint.first().timeMs + 1000 };
+        request.defaultOutput = ReframePlan::OutputSpec{ 640, 360, 2.0 };
+        request.resolvedTracks = tracks;
+        return ReframeCommandRunner::prepare(request, nullptr, nullptr);
+    };
+
+    if (!required.ok) {
+        // Naturally infeasible: the real group exceeds what the renderer can frame.
+        qInfo("real infeasibility: %s", qPrintable(required.error));
+        const ReframeCommandResult refused = request(QStringLiteral("keep everyone in frame"));
+        QVERIFY(!refused.ok);
+        QVERIFY2(refused.error.contains(QStringLiteral("maximum")), qPrintable(refused.error));
+        QVERIFY2(refused.plan.keyframes().isEmpty(),
+                 "an infeasible group must produce no plan rather than a clamped one");
+        return;
+    }
+
+    qInfo("real requirement: %d subject(s) need %.2f deg of field of view",
+          static_cast<int>(joint.size()), required.fieldOfViewDeg);
+    if (required.fieldOfViewDeg > 60.0) {
+        // A genuine infeasibility from real geometry: the requested close-up
+        // cannot hold the group, and the command must say so rather than widen
+        // the lens behind the creator's back or drop a subject.
+        const ReframeCommandResult refused =
+            request(QStringLiteral("keep everyone in frame, close-up"));
+        QVERIFY(!refused.ok);
+        QVERIFY2(refused.error.contains(QStringLiteral("too narrow")), qPrintable(refused.error));
+        QVERIFY2(refused.plan.keyframes().isEmpty(),
+                 "a request that cannot be satisfied must produce no plan");
+        const ReframeCommandResult accepted = request(QStringLiteral("keep everyone in frame"));
+        QVERIFY2(accepted.ok, qPrintable(accepted.error));
+        QVERIFY(accepted.plan.keyframes().first().fieldOfViewDeg
+                >= required.fieldOfViewDeg);
+        return;
+    }
+
+    QSKIP("the supplied footage's group needs only a wide-ish lens, so it provides no "
+          "naturally infeasible case; recorded rather than manufactured");
+}
+
+void ProjectTest::realMediaExplicitReferencesResolve()
+{
+    QString clip;
+    QString python;
+    QString script;
+    QString model;
+    QString skipReason;
+    if (!realMediaClipAndDetectorConfigured("realMediaExplicitReferencesResolve", &clip,
+                                            &python, &script, &model, &skipReason)) {
+        QSKIP(qPrintable(skipReason));
+    }
+
+    QString resolveError;
+    const QList<TargetTrack> tracks =
+        realMediaPersonTracks(clip, python, script, model, &resolveError);
+    QVERIFY2(!tracks.isEmpty(), qPrintable(resolveError.isEmpty()
+                                               ? QStringLiteral("no real person track was resolved")
+                                               : resolveError));
+    if (tracks.size() < 2) {
+        QSKIP("the supplied footage resolved fewer than two distinct person tracks, "
+              "so explicit multi-subject references cannot be exercised on it");
+    }
+
+    const QFileInfo sourceBefore(clip);
+    QByteArray digestBefore;
+    QVERIFY(computeMediaContentSha256(clip, &digestBefore));
+
+    QTemporaryDir directory;
+    const auto request = [&](const QString &instruction) {
+        ReframeCommandRequest request;
+        request.instruction = instruction;
+        request.defaultRange = ReframePlan::TimeRange{
+            tracks.first().firstTimeMs(),
+            qMax(tracks.first().lastTimeMs(), tracks.first().firstTimeMs() + 1000) };
+        request.defaultOutput = ReframePlan::OutputSpec{ 640, 360, 2.0 };
+        request.resolvedTracks = tracks;
+        return request;
+    };
+
+    // Two numbered people: they must resolve to the canonical tracks, in order.
+    const ReframeCommandResult numbered =
+        ReframeCommandRunner::prepare(request(QStringLiteral("keep person 1 and person 2 in frame")),
+                                      nullptr, nullptr);
+    QVERIFY2(numbered.ok, qPrintable(numbered.error));
+    QCOMPARE(numbered.resolvedTargets.size(), 2);
+    QStringList numberedIds;
+    for (const ReframeTarget &target : numbered.resolvedTargets) {
+        numberedIds.append(target.id);
+    }
+    QCOMPARE(numberedIds, QStringList({ tracks.at(0).id(), tracks.at(1).id() }));
+
+    // The set feeds the SAME N-way path as the group phrasing: identical plans.
+    const ReframeCommandResult group =
+        ReframeCommandRunner::prepare(request(QStringLiteral("keep both people in frame")),
+                                      nullptr, nullptr);
+    QVERIFY2(group.ok, qPrintable(group.error));
+    qInfo("real explicit references: numbered=%s group=%s identicalPlans=%d",
+          qPrintable(numberedIds.join(QStringLiteral(","))),
+          qPrintable(QStringList({ tracks.at(0).id(), tracks.at(1).id() })
+                         .join(QStringLiteral(","))),
+          numbered.plan.toJsonObject() == group.plan.toJsonObject() ? 1 : 0);
+    QCOMPARE(numbered.plan.toJsonObject(), group.plan.toJsonObject());
+
+    // Creator plus a numbered person, seeded from a real track: the creator leads
+    // and the numbered reference resolves to a DIFFERENT real track.
+    const TargetTrack &creatorSource = tracks.last();
+    ReframeCommandRequest withCreator =
+        request(QStringLiteral("keep me and person 1 in frame"));
+    withCreator.hasCreatorSelection = true;
+    withCreator.creatorSelection.identity = QStringLiteral("me");
+    withCreator.creatorSelection.timeMs = creatorSource.firstTimeMs();
+    withCreator.creatorSelection.yawDeg = creatorSource.representativeTarget().yawDeg;
+    withCreator.creatorSelection.pitchDeg = creatorSource.representativeTarget().pitchDeg;
+    withCreator.creatorSelection.label = creatorSource.label();
+    const ReframeCommandResult creatorResult =
+        ReframeCommandRunner::prepare(withCreator, nullptr, nullptr);
+    QVERIFY2(creatorResult.ok, qPrintable(creatorResult.error));
+    QCOMPARE(creatorResult.resolvedTargets.size(), 2);
+    QCOMPARE(creatorResult.resolvedTargets.first().id, creatorSource.id());
+    QVERIFY(creatorResult.resolvedTargets.at(1).id != creatorSource.id());
+    qInfo("real explicit references: creator=%s + person 1=%s",
+          qPrintable(creatorResult.resolvedTargets.at(0).id),
+          qPrintable(creatorResult.resolvedTargets.at(1).id));
+
+    // Resolution is read-only with respect to the source media.
+    const QFileInfo sourceAfter(clip);
+    QByteArray digestAfter;
+    QVERIFY(computeMediaContentSha256(clip, &digestAfter));
+    QCOMPARE(sourceAfter.size(), sourceBefore.size());
+    QCOMPARE(sourceAfter.lastModified(), sourceBefore.lastModified());
+    QCOMPARE(digestAfter, digestBefore);
 }
 
 QTEST_MAIN(ProjectTest)

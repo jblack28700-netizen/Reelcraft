@@ -89,18 +89,21 @@ post-objective gate; nothing in this file authorises starting one automatically.
      search found no video file larger than 20 MB anywhere. `numpy`, `cv2` and `onnxruntime` all fail
      to import (`ModuleNotFoundError`), and no model weights are present. Method and exact probes:
      `DEVELOPMENT_ENVIRONMENT.md` → "Real-media validation prerequisites in this container".
-  2. **The existing gated harness does not cover Objectives 28-32.** The 8 environment-gated tests
-     assert Objectives 13/14/19-era behaviour (rendered playback, temporal segments, a single-subject
-     "follow person 1", source playback, project reopen). **None** of them asserts output audio
-     (Obj 28), a requested lens reaching the render (Obj 29), or multi-subject framing, group/explicit
-     references, containment against real footprints, or honest refusals on real footage (Obj 30-32).
-     Unblocking therefore needs a small new env-gated test harness, not only assets.
-- **Minimum human action to unblock:** (i) supply one real equirectangular 360 clip with audio and export
-  `REELCRAFT_TARGET_CLIP` (a short 1280x640 proxy extracted read-only from the original is sufficient
-  and fast); (ii) install the detector runtime and weights (`python3-opencv` + `python3-numpy`, and
-  `onnxruntime` for the speaker/appearance helpers, plus `yolox_2022nov.onnx` and optionally
-  `silero_vad.onnx` in `~/.cache/reelcraft/models/`); (iii) authorise a small follow-up objective for
-  the Objective 28-32 validation harness. Environment capability is otherwise adequate: ffmpeg 6.1.1
+  2. **A harness for Objectives 28-32 now exists (Objective 33) but has never run.** The
+     Objective 3-19 gated tests assert that era's behaviour only (rendered playback, temporal
+     segments, a single-subject "follow person 1", source playback, project reopen); the new tests
+     `realMediaAudioPreservation`, `realMediaLensRequestReachesOutput`,
+     `realMediaMultiSubjectContainment`, `realMediaGroupInfeasibilityIsHonest` and
+     `realMediaExplicitReferencesResolve` cover Objectives 28-32 and skip with a precise
+     prerequisite message until the assets below are supplied. See
+     `DEVELOPMENT_ENVIRONMENT.md` → "Invocation contract for the Objective 28-32 harness".
+- **Minimum human action to unblock (the harness is now in place, so this is assets only):**
+  (i) supply one real equirectangular 360 clip with audio and export `REELCRAFT_TARGET_CLIP` (a short
+  1280x640 proxy extracted read-only from the original is sufficient and fast); (ii) install the
+  detector runtime and weights (`python3-opencv` + `python3-numpy`; plus `yolox_2022nov.onnx` in
+  `~/.cache/reelcraft/models/`; `onnxruntime` and `silero_vad.onnx` only for the speaker/appearance
+  helpers, which this sweep does not need); (iii) run the five harness tests. Until then every one of
+  them skips, and no validation claim may be made. Environment capability is otherwise adequate: ffmpeg 6.1.1
   with libx264/aac, 8 CPUs, ~1 TB RAM, ~9 GB free disk, no GPU (CPU inference is what the helpers
   expect).
 

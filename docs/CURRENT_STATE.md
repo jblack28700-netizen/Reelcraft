@@ -43,15 +43,16 @@ repeated here: it lives in `DEVELOPMENT_LOG.md` (chronological record), `DECISIO
 
 ## Test baseline
 
-- Current result: **487 passed, 0 failed, 9 skipped** (Objective 32 checkpoint; this is the
+- Current result: **487 passed, 0 failed, 14 skipped** (Objective 33 checkpoint; this is the
   canonical form `scripts/checkpoint_check.sh` reads). Full suite with
   `scripts/build_and_test.sh`; a focused set by passing QtTest function names to
   `tests/reelcraft_tests`.
 - Measured wall time: **~66 s** on the current RunPod container; ~730 s on the proot development
   device, which the script's **900 s** ceiling accommodates. The FFmpeg render/decode/analysis tests
   dominate; a 25-test logic subset runs in ~1.7 s.
-- The **9 skips are by design**: 8 environment-gated real-media/model integrations plus the
-  child-only fresh-process replay slot. Which capabilities are therefore fixture-only is tracked in
+- The **14 skips are by design**: 13 environment-gated real-media/model integrations (8 from
+  Objectives 3-19 plus the 5 Objective 28-32 harness tests added by Objective 33) and the child-only
+  fresh-process replay slot. Which capabilities are therefore fixture-only is tracked in
   `NEXT_TASK.md` §4 (validation debt).
 - The normal suite is model-free and requires no detector, model, network or real footage.
 
@@ -63,8 +64,11 @@ commands (when the `REELCRAFT_*` inputs are configured).
 
 **Not real-media-verified: rendered-output audio (Obj 28), lens control (Obj 29), two-subject framing
 (Obj 30), N-way group framing (Obj 31) and explicit subject sets (Obj 32).** A readiness assessment on
-2026-09-18 found this container cannot run that sweep: no real 360 clip, no `numpy`/`cv2`/
-`onnxruntime`, no model weights, and no existing gated test asserting Objectives 28-32 behaviour.
+2026-09-18 found this container cannot run that sweep (no real 360 clip, no `numpy`/`cv2`/
+`onnxruntime`, no model weights), and Objective 33 built the five-test harness that will run it —
+`realMediaAudioPreservation`, `realMediaLensRequestReachesOutput`,
+`realMediaMultiSubjectContainment`, `realMediaGroupInfeasibilityIsHonest`,
+`realMediaExplicitReferencesResolve` — which currently skip with precise prerequisite messages.
 Exact inventory, probes and the invocation contract are in `DEVELOPMENT_ENVIRONMENT.md`; the debt and
 its minimum unblocking action are in `NEXT_TASK.md` §4.
 

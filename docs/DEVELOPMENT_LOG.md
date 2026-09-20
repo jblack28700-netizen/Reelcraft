@@ -2503,3 +2503,86 @@ framing, N-way group framing, explicit subject sets). Readiness only: no product
 
 - None. Decisions 001-053 preserved.
 
+
+
+## 2026-09-18 — 360 Reframing Objective 33: Real-Media Validation Harness for Objectives 28-32
+
+### Objective
+
+Build the environment-gated machinery that will validate the Objective 28-32 behaviour on real
+footage, useful immediately as an executable contract, without performing or claiming that validation
+and without touching product code.
+
+### What inspection found
+
+- The existing gated tests (`realDetectorIntegration`, `realUserCommandIntegration`,
+  `realApplicationCommandIntegration`, `realTemporalEditIntegration`, `realCompoundCommandIntegration`,
+  `realSpeakerCommandIntegration`, `realSourcePlaybackIntegration`, `realReframePlaybackIntegration`)
+  establish the conventions worth reusing: read `REELCRAFT_TARGET_*`, skip with the exact variable list
+  when unset, guard on `FrameExtractor::isAvailable()`, build `ProcessTargetDetector` from the helper
+  script and weights, resolve through `TargetResolver`, order with `TargetSelector::canonicalOrder`,
+  write outputs to `REELCRAFT_TARGET_OUTPUT` or a `QTemporaryDir`, and log measured facts with
+  `qInfo`. They assert Objectives 13/14/19 behaviour and were left untouched.
+- They also hard-code a 12 s proxy window (5500-7500 ms). The harness derives its sample times from the
+  probed clip duration instead, so any supplied clip works.
+
+### What was built
+
+Five gated tests plus a small shared prerequisite block (no new framework):
+
+- `realMediaAudioPreservation` (Obj 28) — renders a retained span from an audio-bearing clip and
+  asserts the output carries an audio stream with the source's sample rate (and channel layout for the
+  mono/stereo cases the policy forces), a duration matching the retained span, and a source whose size,
+  mtime and content digest are unchanged. Skips explicitly when the clip has no audio track.
+- `realMediaLensRequestReachesOutput` (Obj 29) — renders the same direction with and without a lens
+  request and asserts the plan's field of view (90 vs 60 degrees) plus decoded-frame inequality, so the
+  evidence is measurable rather than visual.
+- `realMediaMultiSubjectContainment` (Obj 30/31) — resolves real person tracks, frames two of them and
+  three when the footage provides three, and asserts the **exact tangent containment rule** against the
+  detector's own reported footprints at every keyframe, with determinism re-checked. When the footage
+  yields only two tracks the 3+ case is recorded as a limitation via `qInfo` instead of being invented.
+- `realMediaGroupInfeasibilityIsHonest` (Obj 31) — computes the group's real requirement with the
+  planner's own rule and asserts whichever honest refusal that geometry implies: above the renderable
+  maximum, or a requested lens too narrow, in both cases with no plan produced. When the supplied
+  footage offers no naturally infeasible group it skips and says so, rather than manufacturing one.
+- `realMediaExplicitReferencesResolve` (Obj 32) — asserts "person 1 and person 2" resolves to the
+  canonical real tracks, that the resulting plan equals the equivalent group phrasing (same N-way path),
+  and that a creator seeded from a real track plus a numbered person yields two distinct real tracks.
+
+### Prerequisite contract (verified in this environment)
+
+| Situation | Behaviour (demonstrated) |
+|---|---|
+| `REELCRAFT_TARGET_CLIP` unset | SKIP naming the variable and pointing at `DEVELOPMENT_ENVIRONMENT.md` |
+| clip path does not exist | SKIP "missing media" naming the path |
+| detector variables unset | SKIP naming all three variables and the weights directory |
+| weights path set but absent | SKIP "missing model weights" naming the path |
+| ffmpeg unavailable | SKIP |
+| clip supplied but not probeable | **FAIL** with "(invalid media)" — a real problem, not a prerequisite |
+| all prerequisites present, execution fails | FAIL (the normal path) |
+
+### Verification
+
+- The five tests compile and skip cleanly with their precise messages (1 ms).
+- The four distinct skip branches and the invalid-media failure branch were demonstrated individually
+  with temporary environment settings and a scratch non-media file in `/tmp`; no repository file and no
+  media file was written or altered.
+- Targeted regression over the Objective 28-32 synthetic tests, the harness and the adjacent
+  parser/runner/planner/pipeline/replay/application tests: **36 passed / 0 failed / 5 skipped**.
+- Official `scripts/build_and_test.sh`: exit 0, **487 passed / 0 failed / 14 skipped** — the same 487
+  passes as the Objective 32 baseline and five additional skips, which is exactly the new harness.
+
+### Boundary notes
+
+- No product code, no product behaviour, no schema, no framing geometry, no parser/resolver semantics,
+  no audio policy and no dependency changed: the diff is confined to `tests/test_project.cpp` and
+  documentation. The five new tests cannot pass without real assets.
+- **No real-media validation is claimed.** The Objective 28-32 debt is unchanged and execution remains
+  blocked until the documented prerequisites are supplied; what changed is that the sweep is now one
+  command away instead of needing a new harness.
+- No decision entry: no architectural decision was required.
+
+### Decisions
+
+- None. Decisions 001-053 preserved.
+
