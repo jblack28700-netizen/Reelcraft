@@ -1343,6 +1343,9 @@ private slots:
     void applicationPreservesUnreadableRecordsAcrossReopen();
     void preservedRenderRecordIsNeverUsedAsARecord();
     void mainWindowListsUnreadableRecordHonestly();
+    // Objective 39: the render list keeps the creator's selection across refreshes.
+    void mainWindowRenderListKeepsSelectionAcrossRefresh();
+    void mainWindowRevisionWorksAfterARefresh();
 };
 
 void ProjectTest::initTestCase()
@@ -23138,6 +23141,114 @@ void ProjectTest::mainWindowListsUnreadableRecordHonestly()
     // The unreadable entry is described as such, never as an empty record.
     QVERIFY(outputsList->item(1)->text().contains(QStringLiteral("[unreadable]")));
     QVERIFY(outputsList->item(1)->text().contains(QStringLiteral("preserved unchanged")));
+}
+
+void ProjectTest::mainWindowRenderListKeepsSelectionAcrossRefresh()
+{
+    MainWindow window;
+    auto *outputsList =
+        window.findChild<QListWidget *>(QStringLiteral("reframeOutputsList"));
+    QVERIFY(outputsList);
+
+    auto record = [](const QString &instruction, const QString &outputPath) {
+        ReframeCommandOutcome outcome;
+        outcome.ok = true;
+        outcome.instruction = instruction;
+        outcome.outputPath = outputPath;
+        return outcome;
+    };
+    const QList<ReframeCommandOutcome> two = {
+        record(QStringLiteral("follow person 1"), QStringLiteral("/tmp/one.mp4")),
+        record(QStringLiteral("zoom in"), QStringLiteral("/tmp/two.mp4")),
+    };
+    const QList<ReframeCommandOutcome> three = {
+        two.at(0), two.at(1),
+        record(QStringLiteral("zoom out"), QStringLiteral("/tmp/three.mp4")),
+    };
+
+    // A refresh that only APPENDS keeps the record the creator had selected: the
+    // list is rebuilt on every change, and clear() used to drop the selection.
+    window.showReframeOutputs(two);
+    QCOMPARE(outputsList->count(), 2);
+    outputsList->setCurrentRow(1);
+    QCOMPARE(outputsList->currentRow(), 1);
+    window.showReframeOutputs(three);
+    QCOMPARE(outputsList->count(), 3);
+    QCOMPARE(outputsList->currentRow(), 1);
+    QCOMPARE(outputsList->item(1)->text().contains(QStringLiteral("zoom in")), true);
+
+    // An identical refresh is stable.
+    window.showReframeOutputs(three);
+    QCOMPARE(outputsList->currentRow(), 1);
+
+    // Selecting another row is honoured on the next refresh.
+    outputsList->setCurrentRow(0);
+    window.showReframeOutputs(three);
+    QCOMPARE(outputsList->currentRow(), 0);
+
+    // A selection that no longer exists is DROPPED rather than moved to a different
+    // record: the controls act on a record, so pointing them at another one
+    // silently would be worse than pointing at none.
+    outputsList->setCurrentRow(2);
+    window.showReframeOutputs(two);
+    QCOMPARE(outputsList->count(), 2);
+    QCOMPARE(outputsList->currentRow(), -1);
+
+    // With nothing selected, a refresh does not invent a selection.
+    window.showReframeOutputs(three);
+    QCOMPARE(outputsList->currentRow(), -1);
+}
+
+void ProjectTest::mainWindowRevisionWorksAfterARefresh()
+{
+    MainWindow window;
+    auto *outputsList =
+        window.findChild<QListWidget *>(QStringLiteral("reframeOutputsList"));
+    auto *revisionEdit =
+        window.findChild<QLineEdit *>(QStringLiteral("revisionInstructionEdit"));
+    auto *reviseButton =
+        window.findChild<QPushButton *>(QStringLiteral("reviseRenderButton"));
+    auto *provenanceButton =
+        window.findChild<QPushButton *>(QStringLiteral("describeDecisionButton"));
+    auto *statusLabel = window.findChild<QLabel *>(QStringLiteral("statusLabel"));
+    QVERIFY(outputsList);
+    QVERIFY(revisionEdit);
+    QVERIFY(reviseButton);
+    QVERIFY(provenanceButton);
+    QVERIFY(statusLabel);
+
+    ReframeCommandOutcome first;
+    first.ok = true;
+    first.instruction = QStringLiteral("follow person 1");
+    first.outputPath = QStringLiteral("/tmp/one.mp4");
+    ReframeCommandOutcome second;
+    second.ok = true;
+    second.instruction = QStringLiteral("zoom in");
+    second.outputPath = QStringLiteral("/tmp/two.mp4");
+
+    window.showReframeOutputs({ first, second });
+    outputsList->setCurrentRow(1);
+
+    // The application refreshes the list after a revision, exactly as it does after
+    // any render. The creator's selection must survive that, or the follow-up action
+    // they were about to take would be refused.
+    window.showReframeOutputs({ first, second });
+    QCOMPARE(outputsList->currentRow(), 1);
+
+    QSignalSpy reviseSpy(&window, &MainWindow::reviseReframeOutputRequested);
+    QSignalSpy provenanceSpy(&window, &MainWindow::describeDecisionRequested);
+    QVERIFY(reviseSpy.isValid());
+    QVERIFY(provenanceSpy.isValid());
+
+    revisionEdit->setText(QStringLiteral("keep me centered"));
+    reviseButton->click();
+    QCOMPARE(reviseSpy.count(), 1);
+    QCOMPARE(reviseSpy.first().at(0).toInt(), 1);
+    QVERIFY(!statusLabel->text().contains(QStringLiteral("No generated render selected")));
+
+    provenanceButton->click();
+    QCOMPARE(provenanceSpy.count(), 1);
+    QCOMPARE(provenanceSpy.first().at(0).toInt(), 1);
 }
 
 QTEST_MAIN(ProjectTest)

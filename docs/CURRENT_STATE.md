@@ -7,22 +7,22 @@ repeated here: it lives in `DEVELOPMENT_LOG.md` (chronological record), `DECISIO
 
 ## Version and branch
 
-- Version: **0.2.74** (user-facing history: `CHANGELOG.md`).
-- Branch: `main`. Current checkpoint: this commit (Objective 38); the previous checkpoint was
-  `abfafc99c252749ec7241b93a3da75481f5e20be` (Objective 37), preceded by
-  `dae2864a6feeb27feb2804f08c5ec1101fda69e4` (Objective 36).
+- Version: **0.2.75** (user-facing history: `CHANGELOG.md`).
+- Branch: `main`. Current checkpoint: this commit (Objective 39); the previous checkpoint was
+  `d9f600cff2f5e11ee4436459e570627041e88415` (Objective 38), preceded by
+  `abfafc99c252749ec7241b93a3da75481f5e20be` (Objective 37).
 
 ## Priority and stage
 
 - **Human-approved priority:** a working **360 reframing / editing capability**.
   Pipeline: 360 source -> scene/subject understanding -> natural-language or structured request ->
   structured edit/reframe plan -> virtual-camera decisions -> deterministic execution -> flat output.
-- **Stage:** Phase 4 (360 reframing engine) — 38 objectives complete and verified; Phase 3 media
+- **Stage:** Phase 4 (360 reframing engine) — 39 objectives complete and verified; Phase 3 media
   engine is open, its player-lifecycle objective deferred behind the 360 priority.
-- **Current objective:** none selected. Objective 38 (unreadable render records are preserved instead of
-  discarded; the recorded `KNOWN_ISSUES.md` resolution) is complete, following Objective 37 (render
-  destinations, Decision 057), Objective 36 (revision safety, Decision 056) and Objective 35 (creator
-  revision v1, Decision 055). The next capability is chosen by the human from `NEXT_TASK.md` §5.
+- **Current objective:** none selected. Objective 39 (the render list keeps the creator's selection across
+  refreshes) is complete, following Objective 38 (record preservation), Objective 37 (render destinations,
+  Decision 057), Objective 36 (revision safety, Decision 056) and Objective 35 (creator revision v1,
+  Decision 055). The next capability is chosen by the human from `NEXT_TASK.md` §5.
 
 ## Subsystem status
 
@@ -49,7 +49,7 @@ repeated here: it lives in `DEVELOPMENT_LOG.md` (chronological record), `DECISIO
 
 ## Test baseline
 
-- Current result: **519 passed, 0 failed, 14 skipped** (Objective 38 checkpoint; this is the
+- Current result: **521 passed, 0 failed, 14 skipped** (Objective 39 checkpoint; this is the
   canonical form `scripts/checkpoint_check.sh` reads). Full suite with
   `scripts/build_and_test.sh`; a focused set by passing QtTest function names to
   `tests/reelcraft_tests`.
@@ -179,6 +179,7 @@ each objective.
 | Phase 4 Obj 35 | creator revision v1: revise a rendered edit to a fresh sibling destination, derived supersession, provenance readout | `6cf1d1e` |
 | Phase 4 Obj 36 | revision safety (never target a held render's output path) and visible derived supersession | `dae2864` |
 | Phase 4 Obj 37 | render destinations never overwrite a recorded render; creator workflow covered end to end | `abfafc9` |
-| Phase 4 Obj 38 | unreadable render records preserved verbatim instead of discarded (recorded KI resolution) | this checkpoint |
+| Phase 4 Obj 38 | unreadable render records preserved verbatim instead of discarded (recorded KI resolution) | `d9f600c` |
+| Phase 4 Obj 39 | the render list keeps the creator's selection across refreshes (interaction defect fix) | this checkpoint |
 
 ^ `f4ad631` also carries the canonical workflow policy (Objective 7's precedent).

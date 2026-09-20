@@ -946,6 +946,15 @@ Date: 2026-09-20
 - This matches what already happened for an unreadable edit decision inside a result, so the two halves of a project record now behave the same way.
 - 3 new tests, plus an existing test strengthened (it used to assert only that a damaged entry was reported; it now asserts it survives in place). Full model-free suite 519 passed / 0 failed / 14 skipped.
 
+## v0.2.75 — The results list no longer loses your selection
+
+Date: 2026-09-20
+
+- Selecting a rendered result and then producing another one no longer clears your selection. Previously the results list was rebuilt after every render and the highlight was lost, so the next action on that list (preview, play, revise, or ask why a decision was made) would tell you that nothing was selected — even though you had just picked a result.
+- If the result you had selected is still in the list, it stays selected. If it is gone, the list is left with nothing selected rather than silently jumping to a different result, so you are never acting on the wrong one.
+- 2 new tests. Full model-free suite 521 passed / 0 failed / 14 skipped.
+
+
 
 
 

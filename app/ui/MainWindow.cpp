@@ -638,6 +638,14 @@ void MainWindow::showReframeOutputs(const QList<ReframeCommandOutcome> &outputs)
     if (!m_reframeOutputsList) {
         return;
     }
+    // Objective 39: the list is REBUILT on every change, and clear() also drops the
+    // current row -- but every action on this list (preview, play, revise, show the
+    // decision provenance) acts on the SELECTED record, so losing the selection meant
+    // that after any render the creator was told "No generated render selected" for
+    // a record they had chosen. The previous selection is remembered and restored
+    // when it still exists; when it does not, the list is left with no selection
+    // rather than silently pointing at a different record.
+    const int previousRow = m_reframeOutputsList->currentRow();
     m_reframeOutputsList->clear();
     for (const ReframeCommandOutcome &outcome : outputs) {
         // Objective 38: an entry this build could not read is listed honestly rather
@@ -656,6 +664,9 @@ void MainWindow::showReframeOutputs(const QList<ReframeCommandOutcome> &outputs)
             text += QStringLiteral(" (%1)").arg(outcome.error);
         }
         m_reframeOutputsList->addItem(text);
+    }
+    if (previousRow >= 0 && previousRow < m_reframeOutputsList->count()) {
+        m_reframeOutputsList->setCurrentRow(previousRow);
     }
 }
 

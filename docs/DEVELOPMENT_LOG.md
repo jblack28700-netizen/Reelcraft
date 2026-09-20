@@ -2984,3 +2984,54 @@ destroyed it.
 - None required; the recorded `KNOWN_ISSUES.md` resolution was implemented, and both of its statements
   (here and in the revision-boundary-limits entry) were updated from "not retained" to the implemented
   behaviour. Decisions 001-057 preserved.
+
+
+## 2026-09-20 — 360 Reframing Objective 39: The Render List Keeps the Creator's Selection
+
+### Objective
+
+Fix an interaction defect in the creator surfaces built over Objectives 34-37: the render list is rebuilt on
+every change, which discarded the creator's selection, and every action on that list acts on the selected
+record.
+
+### What inspection found
+
+- `MainWindow::showReframeOutputs` calls `clear()` and re-adds every row, and `QListWidget::clear()`
+  resets the current row. Nothing restored it.
+- The list is refreshed on every change (`reframeOutputsChanged`), so after ANY render — a command, an
+  accepted review, or a revision — the creator's selection was gone, and the next click on "Preview
+  Selected Render", "Play Render", "Revise Selected Render" or "Why This Decision?" reported
+  *"No generated render selected."* for a record they had just selected and were still looking at.
+- This is exactly the workflow the last four objectives built, which is why it was worth fixing rather
+  than filing.
+
+### What was built
+
+- `showReframeOutputs` remembers the current row, rebuilds the list, and **restores the selection when that
+  row still exists**. An identical refresh is stable; an appended record leaves the creator where they were.
+- When the remembered row no longer exists, the list is left with **no** selection rather than being
+  silently pointed at a different record: the actions act on a record, so acting on a different one by
+  accident would be worse than acting on none. A refresh with nothing selected invents no selection either.
+
+### Verification
+
+- `mainWindowRenderListKeepsSelectionAcrossRefresh` pins all four cases: append keeps the row, an identical
+  refresh is stable, selecting another row is honoured, a vanished row clears the selection, and no
+  selection is invented.
+- `mainWindowRevisionWorksAfterARefresh` is the defect as the creator experiences it: select record 1,
+  let the list refresh (as it does after any render), then "Revise Selected Render" and "Why This Decision?"
+  still act on record 1 instead of reporting that nothing is selected.
+- Targeted regression over the render list, the revision/provenance/review surfaces and the records they
+  read; official `scripts/build_and_test.sh`. Numbers are in `CURRENT_STATE.md`.
+
+### Boundary notes
+
+- Presentation only: no Application behaviour, no persistence, no schema, no destination or decision
+  semantics changed, and no new capability. No decision entry was required (this is a defect fix, not a
+  semantic choice).
+- The provenance readout deliberately keeps describing the record the creator last asked about; it is a
+  read-out of that record, not a mirror of the list selection.
+
+### Decisions
+
+- None required. Decisions 001-057 preserved.
