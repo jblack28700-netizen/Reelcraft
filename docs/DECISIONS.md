@@ -2384,6 +2384,80 @@ changed, and a third record was appended claiming that same path.
 
 ---
 
-*Decisions 001-055 are preserved verbatim; this decision adds to them and supersedes exactly one clause of Decision 055, as stated above.*
+---
+
+# Decision 057 — No Render May Write to a Path a Render Record Owns, and the Default Destination Is Derived Fresh
+
+**Status:** Accepted (2026-09-20, 360 Reframing Objective 37)
+
+## Context
+
+Decision 056 established, for the revision surface, that a path a render record owns is never a valid
+destination: a record is a historical fact about a render, and replay must reproduce it. Decision 056
+explicitly declined to answer the wider question it raised — "the general command path is deliberately
+unchanged … widening it to every command is a separate question that this decision does not answer".
+
+Objective 37 answered it with evidence, found while writing the creator-workflow end-to-end test. The
+test ran the documented sequence (command → review → accept → revise → replay) and asserted that record
+0's rendered file still contained record 0's render. It did not: the reviewed plan had been **accepted
+onto the same default destination**, `<base>_reframe.mp4`, silently overwriting the earlier render while
+both records claimed that path. The same hazard applies to the plain command path, which is worse because
+it is the everyday action: running the same command twice writes the second render over the first, and the
+project then holds two records (and two decisions) pointing at one file whose content matches only the
+newer one. Any later replay of the older decision writes a file that disagrees with what the project says
+that record was.
+
+## Decision
+
+- **No render may write to a path that a render record the application holds already owns.** The rule is
+  enforced for the direct command path and for review acceptance (the revision surface already enforces
+  it since Decision 056), through the single shared definition `recordHoldingOutputPath()`.
+- **An explicitly supplied destination that a record owns is REFUSED**, with a message naming the owning
+  record. Refusal, not silent redirection: a caller who names a path must be told it is unavailable.
+- **A destination that is not supplied is derived FRESH**: `<base>_reframe.mp4` for the first render of a
+  clip — the documented default is unchanged in the ordinary case — and `<base>_reframe_2.mp4`,
+  `<base>_reframe_3.mp4`, … for later renders, taking the first name that neither exists as a file nor is
+  owned by a record. A second render therefore lands beside the first instead of on top of it, and a
+  pre-existing unrelated file with the default name is left alone.
+- **Review acceptance derives its destination at ACCEPT time.** The destination is a filesystem fact, not
+  part of the reviewed plan; deriving it when the creator commits removes the whole class of "the
+  destination was taken while the plan was waiting for review" and never forces a re-review (which would
+  re-run perception for a filesystem accident). Accepting with an explicit path keeps the refusal rule
+  above.
+- **This answers the question Decision 056 left open and supersedes that one sentence of it.** Nothing
+  else in Decision 056 changes, and Decisions 033 (replay) and 055 (revision destinations) are unchanged:
+  replay still refuses an existing file outright, and revisions still use their own `_rev<N>` sequence.
+
+## Consequences
+
+- Renders accumulate instead of overwriting each other, which is what the rest of the architecture already
+  assumes: records are append-only, decisions are immutable, and replay is expected to reproduce a
+  historical render. Silent loss of a rendered result requires a deliberate filesystem action by the
+  creator, not an ordinary second render.
+- Behaviour changes in one visible way: running a command twice into the same directory now produces
+  `…_reframe.mp4` and `…_reframe_2.mp4` rather than one file written twice. The first render of a clip is
+  unaffected, which is why the existing suite is largely untouched by this decision.
+- Callers that name an occupied destination now get a refusal where they previously got an overwrite. The
+  general media-import, preview, playback and replay paths are unaffected; the original media is still
+  never a valid destination.
+- Cost: a render can no longer be "redone in place" through the same API call. That is deliberate — the
+  project has no destructive-operation surface, and re-doing an edit produces a new record either way.
+- No schema, artifact, hash, loader, renderer, encoder or replay change; no new dependency, provider or
+  plan type.
+
+## Verification
+
+- The end-to-end creator-workflow test is the reproduction and the regression: it asserts, after the full
+  sequence, that record 0's file still contains record 0's render.
+- `applicationRenderDestinationsNeverOverwriteARecordedRender` pins the derived sequence
+  (`clip_reframe.mp4`, `clip_reframe_2.mp4`, `clip_reframe_3.mp4`) and that an unrelated existing file
+  with the default name is skipped rather than overwritten.
+- `applicationCommandRefusesAnExplicitPathHeldByARecord` pins the refusal, that it names the owning
+  record, that nothing is appended, and that the record's file is unchanged.
+- `applicationReviewAcceptRefusesAClaimedDestination` pins the explicit-path case on the review surface.
+
+---
+
+*Decisions 001-056 are preserved verbatim; this decision adds to them and supersedes exactly one sentence of Decision 056, as stated above.*
 
 

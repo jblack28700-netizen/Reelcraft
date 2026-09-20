@@ -2838,3 +2838,79 @@ was the fix written; the reproduction is kept as the regression.
 
 - Decision 056 recorded (and one clause of Decision 055 superseded, as stated there). Decisions 001-055
   otherwise preserved.
+
+
+## 2026-09-20 — 360 Reframing Objective 37: Render Destinations Never Overwrite a Recorded Render
+
+### Objective
+
+Close the wider class of defect that Decision 056 deliberately left open — a render writing over a file a
+render record owns — and lock the creator workflow end to end with the test that found it.
+
+### The defect, found by the workflow test and reproduced
+
+Writing an end-to-end test of the documented creator sequence (command -> review -> accept -> revise ->
+replay) failed on an assertion that looked trivial: *record 0's rendered file still contains record 0's
+render*. It did not. **Accepting the reviewed plan wrote onto the same default destination**
+(`<base>_reframe.mp4`) and silently replaced record 0's render, leaving two records — and two immutable
+decisions — claiming one file whose content matched only the newer one. Replaying the older decision would
+then produce a file that disagrees with what the project says that record was.
+
+The same hazard applied to the everyday path: running the same command twice wrote the second render over
+the first. Decision 056 had already established the principle for revisions (a path a record owns is never
+a valid destination) and had explicitly declined to answer the wider question. This objective answers it.
+
+### What was built (Decision 057)
+
+- **One rule, every render surface**: no render may write to a path a render record the application holds
+  owns. Enforced in `buildReframeCommandContext` (the direct command path and review preparation) and in
+  `acceptReframeReview`, through the single `recordHoldingOutputPath()` definition introduced by
+  Objective 36.
+- **An explicitly named destination that a record owns is REFUSED**, with the owning record named —
+  refusal rather than silent redirection, because a caller who names a path must be told it is
+  unavailable.
+- **An unspecified destination is derived FRESH**: `<base>_reframe.mp4` for the first render of a clip
+  (the documented default is unchanged in the ordinary case), then `<base>_reframe_2.mp4`,
+  `<base>_reframe_3.mp4`, … taking the first name that is neither an existing file nor owned by a record.
+  A pre-existing unrelated file on the default name is left untouched.
+- **Review acceptance derives its destination at ACCEPT time.** The destination is a filesystem fact, not
+  part of the reviewed plan, so choosing it when the creator commits removes the whole "the destination was
+  taken while the plan waited for review" class and never forces a re-review (which would re-run
+  perception for a filesystem accident). The now-unused `m_pendingReviewOutputPath` member was removed.
+
+### Verification
+
+- The end-to-end workflow test is both the reproduction and the regression:
+  `creatorWorkflowEndToEndPreservesInvariants` drives command -> review -> accept -> revise -> replay ->
+  save -> reopen with injected seams and asserts, among other invariants, that record 0's file is
+  untouched, that the accepted render is EXACTLY the reviewed plan, that replay is perception-free (the
+  command executor is never consulted) and reproduces the record's own plan from the record's own source,
+  that no earlier record's JSON changes, that the decision chain resolves, and that the whole workflow
+  survives a reopen byte-identically.
+  `creatorWorkflowSupersessionIsDecisionLevel` records the honest limit that supersession is
+  decision-level: a replay carries its source decision, so a later revision of that decision is reported
+  against every record carrying it.
+- 3 new destination tests:
+  `applicationRenderDestinationsNeverOverwriteARecordedRender` (the derived sequence, and an unrelated
+  file on the default name left alone), `applicationCommandRefusesAnExplicitPathHeldByARecord` (refusal
+  naming the record, nothing appended, file unchanged, and a fresh explicit path still accepted), and
+  `applicationReviewAcceptRefusesAClaimedDestination` (refusal on the review surface, the review
+  surviving so no re-review is needed, then a derived fresh destination rendering exactly the reviewed
+  plan).
+- Targeted regression across revision, decisions, replay, records, the command path, the review path and
+  the touched UI; official `scripts/build_and_test.sh`. Numbers are in `CURRENT_STATE.md`.
+
+### Boundary notes
+
+- `KNOWN_ISSUES.md` gained the decision-level-supersession limitation found here, and its stale skip
+  counts were corrected.
+- Deliberately unchanged: replay's own stricter policy (it still refuses any existing file), the revision
+  `_rev<N>` sequence, hashing, the strict loader, the renderer/encoder, and every persisted artifact. No
+  schema bump, no new dependency, provider or plan type, no real-media claim.
+- Visible behaviour change, recorded: running a command twice into one directory now produces
+  `…_reframe.mp4` and `…_reframe_2.mp4` instead of one file written twice. The first render of a clip is
+  unaffected, which is why almost all existing tests were untouched.
+
+### Decisions
+
+- Decision 057 recorded, superseding exactly the one sentence of Decision 056 that deferred this question.

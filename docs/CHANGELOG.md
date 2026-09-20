@@ -927,6 +927,17 @@ Date: 2026-09-20
 - Everything else behaves exactly as before: the general "Run 360 Command" action, the review-and-accept workflow, replays, and saved projects.
 - 3 new tests (including the reproduction of the overwrite); targeted regression 59 passed / 0 failed / 0 skipped and the full model-free suite 511 passed / 0 failed / 14 skipped. Decision 056 records the tightened rule.
 
+## v0.2.73 — Rendered results no longer overwrite each other
+
+Date: 2026-09-20
+
+- Render destination handling is now non-destructive everywhere. A render that does not have a destination named for it is written to the first free name beside the source — `…_reframe.mp4` for the first render of a clip, then `…_reframe_2.mp4`, `…_reframe_3.mp4` — so producing a second result never replaces the first.
+- If a destination is named explicitly and an earlier rendered result already owns that file, the render is refused with a message naming the result it would have replaced. Previously it would silently write over it, which could leave the project describing a result as one edit while the file held another.
+- This closes a real path to losing work that the earlier revision-only protection did not cover: it was reachable both by accepting a reviewed plan and by simply running a command twice.
+- The first render of a clip still uses the same familiar name, and naming your own fresh destination still works exactly as before. Replay keeps its own stricter rule of never writing over an existing file.
+- 5 new tests (including an end-to-end pass through the whole creator workflow: command, review, accept, revise, replay, reopen); one existing determinism test was updated because it used to prove determinism by re-rendering onto the same file, which is now refused and is asserted as such. Full model-free suite 516 passed / 0 failed / 14 skipped. Decision 057 records the rule.
+
+
 
 
 

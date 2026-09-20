@@ -610,6 +610,11 @@ Application::CommandContext Application::buildReframeCommandContext(
     QString resolvedOutput = outputPath.trimmed();
     if (resolvedOutput.isEmpty()) {
         resolvedOutput = defaultReframeOutputPath(*media);
+        if (resolvedOutput.isEmpty()) {
+            outcome.error = QStringLiteral(
+                "Could not derive a free output path beside the source media.");
+            return context;
+        }
     }
     const QFileInfo outputInfo(resolvedOutput);
     const QDir outputDir = outputInfo.absoluteDir();
@@ -623,6 +628,18 @@ Application::CommandContext Application::buildReframeCommandContext(
         == QFileInfo(media->path()).absoluteFilePath()) {
         outcome.error = QStringLiteral(
             "The output path must differ from the source media path.");
+        return context;
+    }
+    // Decision 057: a path a render record owns is never a valid destination. The
+    // revision surface refuses the same class earlier with its own wording, so
+    // this is the command path's and review preparation's guard.
+    const int owner = recordHoldingOutputPath(outputInfo.absoluteFilePath());
+    if (owner >= 0) {
+        outcome.error = QStringLiteral(
+            "The output path must not overwrite a recorded render: record %1 "
+            "already writes to %2")
+                            .arg(owner)
+                            .arg(m_reframeOutputs.at(owner).outputPath);
         return context;
     }
     outcome.outputPath = outputInfo.absoluteFilePath();
@@ -845,9 +862,29 @@ void Application::setReframeDefaultOutput(int width, int height, double fps)
 
 QString Application::defaultReframeOutputPath(const MediaItem &media) const
 {
+    // Decision 057. The FIRST render of a clip keeps the documented name; a later
+    // one does not, because the destination must be neither an existing file nor a
+    // path a render record already owns -- a record is a historical fact about a
+    // render and replay has to reproduce it. Running a command twice therefore
+    // produces a second render beside the first instead of on top of it.
     const QFileInfo info(media.path());
-    return info.absoluteDir().filePath(
-        info.completeBaseName() + QStringLiteral("_reframe.mp4"));
+    const QDir directory = info.absoluteDir();
+    const QString stem = info.completeBaseName() + QStringLiteral("_reframe");
+    const QString first = directory.filePath(stem + QStringLiteral(".mp4"));
+    if (!QFileInfo::exists(first) && recordHoldingOutputPath(first) < 0) {
+        return first;
+    }
+    for (int n = 2; n <= 100000; ++n) {
+        const QString candidate =
+            directory.filePath(QStringLiteral("%1_%2.mp4").arg(stem).arg(n));
+        if (!QFileInfo::exists(candidate)
+            && recordHoldingOutputPath(candidate) < 0) {
+            return candidate;
+        }
+    }
+    // Unreachable in practice. Reported honestly by the caller rather than
+    // returning an occupied path.
+    return QString();
 }
 
 QList<ReframeCommandOutcome> Application::reframeOutputs() const
@@ -866,10 +903,9 @@ QList<ReframeCommandOutcome> Application::reframeOutputs() const
 
 void Application::clearPendingReview()
 {
-    const bool hadReview = m_pendingReview.isValid()
-        || !m_pendingReviewOutputPath.isEmpty() || !m_pendingReviewTargets.isEmpty();
+    const bool hadReview =
+        m_pendingReview.isValid() || !m_pendingReviewTargets.isEmpty();
     m_pendingReview = ReframePlanReview();
-    m_pendingReviewOutputPath.clear();
     m_pendingReviewTargets.clear();
     if (hadReview) {
         emit reframeReviewChanged(m_pendingReview);
@@ -944,7 +980,6 @@ bool Application::prepareReframeCommand(const QString &instruction, qint64 start
     }
 
     m_pendingReview = review;
-    m_pendingReviewOutputPath = outcome.outputPath;
     m_pendingReviewTargets = result.resolvedTargets;
     emit reframeReviewChanged(m_pendingReview);
     return true;
@@ -978,15 +1013,21 @@ ReframeReviewResult Application::acceptReframeReview(const QString &outputPath)
         return result;
     }
 
-    // Destination: the path the review was prepared with, unless the caller names
-    // another one, which is validated exactly as the command path validates it.
-    QString target = outputPath.trimmed();
+    // Destination (Decision 057). The destination is a filesystem fact, not part of
+    // the reviewed plan, so it is derived WHEN THE CREATOR COMMITS rather than when
+    // the plan was prepared: deriving it here removes the whole class of "the
+    // destination was taken while the plan waited for review" and never forces a
+    // re-review, which would re-run perception for a filesystem accident. A caller
+    // that names a path explicitly keeps it, and it is validated below.
+    const QString requested = outputPath.trimmed();
+    QString target = requested;
     if (target.isEmpty()) {
-        target = m_pendingReviewOutputPath;
-    }
-    if (target.isEmpty()) {
-        result.error = QStringLiteral("The reviewed plan has no output path.");
-        return result;
+        target = defaultReframeOutputPath(*media);
+        if (target.isEmpty()) {
+            result.error = QStringLiteral(
+                "Could not derive a free output path beside the source media.");
+            return result;
+        }
     }
     const QFileInfo outputInfo(target);
     const QDir outputDir = outputInfo.absoluteDir();
@@ -999,6 +1040,16 @@ ReframeReviewResult Application::acceptReframeReview(const QString &outputPath)
     if (absoluteOutput == QFileInfo(media->path()).absoluteFilePath()) {
         result.error = QStringLiteral(
             "The output path must differ from the source media path.");
+        return result;
+    }
+    // A path a render record owns is never a valid destination (Decision 057). The
+    // derived destination cannot be one; an explicitly named one can be.
+    if (const int owner = recordHoldingOutputPath(absoluteOutput); owner >= 0) {
+        result.error = QStringLiteral(
+                           "The output path must not overwrite a recorded render: "
+                           "record %1 already writes to %2")
+                           .arg(owner)
+                           .arg(m_reframeOutputs.at(owner).outputPath);
         return result;
     }
 

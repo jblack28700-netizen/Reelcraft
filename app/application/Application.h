@@ -190,7 +190,10 @@ public slots:
     bool runReframeCommand(const QString &instruction, qint64 startMs, qint64 endMs);
 
     // As above, but with an explicit output path. An empty path derives a
-    // deterministic default next to the source (<base>_reframe.mp4).
+    // deterministic default next to the source: <base>_reframe.mp4 for the first
+    // render of a clip, then the first free <base>_reframe_<N>.mp4 (Decision 057),
+    // so a later render is written BESIDE an earlier one rather than over it. An
+    // explicit path that a render record already owns is refused.
     bool runReframeCommandTo(const QString &instruction, qint64 startMs,
                              qint64 endMs, const QString &outputPath);
 
@@ -245,11 +248,14 @@ public slots:
     // EditDecision built from that same plan. The plan is never re-parsed,
     // re-resolved or re-planned, and it is never mutated by review.
     //
-    // An empty outputPath keeps the destination the review was prepared with; a
-    // non-empty one replaces it after the same validation the command path
-    // applies (the directory must exist and the path must differ from the
-    // source media). The pending review is cleared on every outcome, so a
-    // failed render cannot be re-accepted against a stale plan.
+    // An empty outputPath derives a FRESH destination at accept time (Decision
+    // 057: the destination is a filesystem fact, not part of the reviewed plan, so
+    // it is chosen when the creator commits and can never have been taken while
+    // the plan waited for review). A non-empty one is validated as the command
+    // path validates it -- the directory must exist, the path must differ from the
+    // source media, and it must not be a path a render record owns. The pending
+    // review is cleared on every outcome, so a failed render cannot be re-accepted
+    // against a stale plan.
     ReframeReviewResult acceptReframeReview(const QString &outputPath = QString());
 
     // Reject: discards the pending review. Nothing is rendered, no record is
@@ -631,7 +637,6 @@ private:
     // Objective 34: the pending creator review (session state, never persisted)
     // and the destination Accept will use unless it is given another one.
     ReframePlanReview m_pendingReview;
-    QString m_pendingReviewOutputPath;
     QList<ReframeTarget> m_pendingReviewTargets;
 
     // Objective 12: creator "me" selection and render preview.

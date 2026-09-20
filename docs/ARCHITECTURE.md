@@ -471,6 +471,7 @@ consumes it. This is an index, not a replacement for the sections above or for `
 | Renderer + encoder | `app/reframe/ReframeRenderer.*` | deterministic frames from (plan, timestamp); H.264/yuv420p; optional source-audio mux | pipeline, replay |
 | Pipeline | `app/reframe/ReframePipeline.*` | orchestration; audio decision from probe facts; notes surfaced | command runner, Application, replay |
 | Command runner | `app/reframe/ReframeCommandRunner.*` | single composition entry point; never fabricates a direction; refuses unsupported combinations | Application |
+| Render destination policy | `Application::{defaultReframeOutputPath,recordHoldingOutputPath}` | no render writes to a path a held render record owns (refused when named explicitly); an unspecified destination is derived fresh (`<base>_reframe.mp4`, then `<base>_reframe_<N>.mp4`) so renders accumulate instead of overwriting; review acceptance derives it at commit time (Decision 057) | command path, review accept, revision |
 | Contract checker | `app/reframe/ReframeContract.*` | pure IPC-1..4 checks over the final (intent, plan) pair | command runner |
 | Edit-decision artifact | `app/reframe/EditDecision.*` | versioned, hashed, immutable; strict loader; replay without perception | Application, replay |
 | Media-analysis artifact | `app/analysis/MediaAnalysis.*`, `MediaAnalysisRunner.*` | versioned layered evidence with explicit lifecycle/coverage; never an editorial decision | project references only (no consumer yet) |
@@ -510,6 +511,8 @@ Section headers in `tests/test_project.cpp` name the objective each group belong
 | Lens / FOV control (Obj 29) | `reframeIntentParsesFraming`, `reframeBuilderAppliesRequestedFraming`, `reframeContractFieldOfViewFidelity`, `reframeCommandRunnerFollowsAtRequestedFraming`, `reframeCommandRunnerSpeakerFramingIsHonest`, `reframePipelineRendersRequestedFraming` |
 | Explicit subject sets (Obj 32) | `reframeIntentParsesExplicitSubjectSets`, `reframeCommandRunnerResolvesExplicitSubjects`, `reframeCommandRunnerExplicitSubjectsRefuseHonestly`, `reframeExplicitSubjectsRenderAndReplay` |
 | Group framing (Obj 30/31) | `reframeIntentParsesMultiSubjectFraming`, `reframeIntentParsesGroupFraming`, `reframeMultiSubjectFramingGeometry`, `reframeGroupFramingGeometrySweep`, `reframeGroupFramingResolvesCanonicalSets`, `reframeGroupFramingRefusesHonestly`, `reframeCommandRunnerFramesTwoSubjects`, `reframeCommandRunnerResolvesTwoDetectedPeople`, `reframeCommandRunnerRejectsUnsatisfiableMultiSubject`, `reframeCommandRunnerFramesMovingSubjectsAndReplays`, `reframeGroupFramingRendersAndReplays` |
+| Render destinations never overwrite a recorded render (Obj 37) | `applicationRenderDestinationsNeverOverwriteARecordedRender`, `applicationCommandRefusesAnExplicitPathHeldByARecord`, `applicationReviewAcceptRefusesAClaimedDestination` |
+| Creator workflow end to end (Obj 37) | `creatorWorkflowEndToEndPreservesInvariants`, `creatorWorkflowSupersessionIsDecisionLevel` |
 | Creator revision + provenance readout (Obj 35) | `applicationRevision*`, `mainWindowRevisionAndProvenanceSurface` |
 | Creator review: inspect, accept, reject (Obj 34) | `creatorReview*` |
 | Source playback + rendered playback | `sourcePlayback*`, `applicationPlayback*`, `realSourcePlaybackIntegration` |

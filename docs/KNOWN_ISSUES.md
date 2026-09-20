@@ -507,8 +507,10 @@ The automated suite reports skips that are deliberate:
 
 ### Impact
 
-A clean run reports `401 passed / 0 failed / 8 skipped`. The skip count is 7 + 1 by
-design; a reader expecting 7 should not read the 8th as a regression.
+A clean run reports `516 passed / 0 failed / 14 skipped` at the Objective 37 checkpoint. The skip count
+is 13 environment-gated real-media/model integrations (8 from Objectives 3-19 plus the 5 Objective 28-32
+harness tests) + 1 child-only slot, by design; a reader expecting fewer should not read the difference as
+a regression. `NEXT_TASK.md` §4 is the register of which capabilities are therefore fixture-only.
 
 ### Planned Resolution
 
@@ -552,6 +554,37 @@ survive a project reopen, and a damaged record is reported rather than recovered
 
 Persisting accept/reject status (with its own schema and versioning decision) and a
 retention/compaction policy are both future objectives. Neither is in scope for Objective 17.
+
+
+# Issue — Creator supersession is decision-level, not record-level (2026-09-20)
+
+### Status
+
+Open — recorded limitation, not a defect (Decisions 055, 056, 057).
+
+### Description
+
+A record is superseded when another record's decision names its decision hash as its parent, and that
+relationship is DERIVED at read time (nothing is stored). Because a replay appends a record carrying its
+source decision verbatim, two records can legitimately share one decision. When such a shared decision is
+later revised, the new revision is reported as revising **every** record that carries it — the original and
+its replayed copies alike.
+
+Concretely: command (record 0) -> revision (record 1) -> replay of record 1 (record 2) -> revise record 2
+(record 3) leaves `revisionsOf(0) = {1, 2}` and `revisionsOf(1) = revisionsOf(2) = {3}`.
+
+### Impact
+
+The provenance readout can name more than one record as "being revised" where the creator revised one of
+them. The statement is true about the *decision* lineage (the replay reproduces that decision) and the
+readout never claims more than the recorded lineage supports, but it is not a statement about rows.
+
+### Planned Resolution
+
+Record-level parentage would fix it, and would require changing the decision artifact (a parent reference
+to a record rather than to a decision) — a persisted-artifact and schema change that no current capability
+needs. Recorded here so the behaviour is a known, explicable limit rather than a surprise.
+Verified in `creatorWorkflowSupersessionIsDecisionLevel`.
 
 
 # Issue — A generated makefile can silently mix object revisions (2026-09-18)

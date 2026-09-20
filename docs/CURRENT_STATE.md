@@ -7,10 +7,10 @@ repeated here: it lives in `DEVELOPMENT_LOG.md` (chronological record), `DECISIO
 
 ## Version and branch
 
-- Version: **0.2.72** (user-facing history: `CHANGELOG.md`).
-- Branch: `main`. Current checkpoint: this commit (Objective 36); the previous checkpoint was
-  `6cf1d1ed6a138d22ea26efe7e1a255f5e0e333fb` (Objective 35), preceded by
-  `0401d35d6b4aa4134368544a9e437632911b7a9b` (Objective 34).
+- Version: **0.2.73** (user-facing history: `CHANGELOG.md`).
+- Branch: `main`. Current checkpoint: this commit (Objective 37); the previous checkpoint was
+  `dae2864a6feeb27feb2804f08c5ec1101fda69e4` (Objective 36), preceded by
+  `6cf1d1ed6a138d22ea26efe7e1a255f5e0e333fb` (Objective 35).
 
 ## Priority and stage
 
@@ -19,10 +19,10 @@ repeated here: it lives in `DEVELOPMENT_LOG.md` (chronological record), `DECISIO
   structured edit/reframe plan -> virtual-camera decisions -> deterministic execution -> flat output.
 - **Stage:** Phase 4 (360 reframing engine) — 34 objectives complete and verified; Phase 3 media
   engine is open, its player-lifecycle objective deferred behind the 360 priority.
-- **Current objective:** none selected. Objective 36 (revision safety — a revision never targets a
-  render record's output path — and visible derived supersession; Decision 056) is complete, following
-  Objective 35 (creator revision v1, Decision 055). The next capability is chosen by the human from
-  `NEXT_TASK.md` §5.
+- **Current objective:** none selected. Objective 37 (render destinations never overwrite a recorded
+  render, and the creator workflow covered end to end; Decision 057) is complete, following Objective 36
+  (revision safety, Decision 056) and Objective 35 (creator revision v1, Decision 055). The next
+  capability is chosen by the human from `NEXT_TASK.md` §5.
 
 ## Subsystem status
 
@@ -43,11 +43,12 @@ repeated here: it lives in `DEVELOPMENT_LOG.md` (chronological record), `DECISIO
 | Persistent media analysis (artifact + one-pass runner) | implemented; **no consumer yet** | `app/analysis/` |
 | Creator review (inspect the prepared plan, accept or reject) | implemented, verified (fixtures) | `app/application/ReframePlanReview.*`, `Application` review API, `MainWindow` panel |
 | Creator revision (record level) + provenance/supersession readout | implemented, verified (fixtures) | `Application::{revisionOutputPath,reviseReframeOutput,revisionsOf,recordHoldingOutputPath}`, `MainWindow` revision/provenance controls |
+| Non-destructive render destinations (no render overwrites a recorded render) | implemented, verified (fixtures) | `Application::{defaultReframeOutputPath,buildReframeCommandContext,acceptReframeReview}` over `recordHoldingOutputPath` |
 | In-app audio playback | **missing** (Decision 036 follow-up) | — |
 
 ## Test baseline
 
-- Current result: **511 passed, 0 failed, 14 skipped** (Objective 36 checkpoint; this is the
+- Current result: **516 passed, 0 failed, 14 skipped** (Objective 37 checkpoint; this is the
   canonical form `scripts/checkpoint_check.sh` reads). Full suite with
   `scripts/build_and_test.sh`; a focused set by passing QtTest function names to
   `tests/reelcraft_tests`.
@@ -95,9 +96,13 @@ renderer is byte-identical to the reviewed plan.
 - **Supersession is derived, not stored**: a record is superseded exactly when another held record names
   its decision hash as its parent, so the relationship is visible (in the provenance readout) only while
   those records are held, and no immutable artifact carries a status field.
-- **The general command path still accepts any output path**, including one a render record already
-  claims; only the revision surface refuses those (Decision 056). Overwriting a previous render through
-  `runReframeCommandTo` remains possible by design and is a separate question.
+- **Renders accumulate rather than overwrite** (Decision 057): a derived destination takes the first free
+  `<base>_reframe.mp4` / `<base>_reframe_<N>.mp4`, and an explicitly named destination that a render
+  record owns is refused. There is consequently no "redo this render in place" surface: re-running an edit
+  produces another record. A creator can still overwrite their own files outside Reelcraft, and the media
+  import/preview/playback paths are unaffected.
+- **Supersession is decision-level, not record-level** (recorded in `KNOWN_ISSUES.md`): a replay carries
+  its source decision, so a later revision of that decision is reported against every record carrying it.
 - **Media analysis has no consumer**: artifacts are produced and referenced, never yet used to make
   a decision; sampling defaults to a 1 s grid.
 - **Perception needs external helpers**: detection, appearance and speaker evidence are optional
@@ -166,6 +171,7 @@ each objective.
 | Phase 4 Obj 33 | real-media validation harness for Objectives 28-32 (env-gated; still unrun) | `14df4e5` |
 | Phase 4 Obj 34 | creator review foundation: inspect the prepared plan, accept it (rendering exactly that plan) or reject it | `0401d35` |
 | Phase 4 Obj 35 | creator revision v1: revise a rendered edit to a fresh sibling destination, derived supersession, provenance readout | `6cf1d1e` |
-| Phase 4 Obj 36 | revision safety (never target a held render's output path) and visible derived supersession | this checkpoint |
+| Phase 4 Obj 36 | revision safety (never target a held render's output path) and visible derived supersession | `dae2864` |
+| Phase 4 Obj 37 | render destinations never overwrite a recorded render; creator workflow covered end to end | this checkpoint |
 
 ^ `f4ad631` also carries the canonical workflow policy (Objective 7's precedent).

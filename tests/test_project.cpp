@@ -1331,6 +1331,14 @@ private slots:
     void applicationRevisionRefusesAnotherRecordsOutputPath();
     void applicationRevisionStillAllowsAFreshExplicitPath();
     void mainWindowProvenanceShowsDerivedSupersession();
+    // Objective 37: the creator workflow end to end (command -> review -> accept ->
+    // revise -> replay -> reopen) and its invariants.
+    void creatorWorkflowEndToEndPreservesInvariants();
+    void creatorWorkflowSupersessionIsDecisionLevel();
+    // Objective 37: render destinations never overwrite a recorded render.
+    void applicationRenderDestinationsNeverOverwriteARecordedRender();
+    void applicationCommandRefusesAnExplicitPathHeldByARecord();
+    void applicationReviewAcceptRefusesAClaimedDestination();
 };
 
 void ProjectTest::initTestCase()
@@ -8092,8 +8100,21 @@ void ProjectTest::applicationReframeCommandIsDeterministic()
     QVERIFY(app.runReframeCommandTo(QStringLiteral("look at the person"), 0, 1000,
                                     outputPath));
     const ReframeCommandOutcome first = app.lastReframeCommandOutcome();
+
+    // Determinism is asserted by issuing the SAME command again, but a repeat can
+    // no longer be aimed at the destination the first run recorded (Decision 057:
+    // a render never writes over a recorded render). The refusal is pinned here
+    // because this test is where the old behaviour lived.
+    QVERIFY(!app.runReframeCommandTo(QStringLiteral("look at the person"), 0, 1000,
+                                     outputPath));
+    QVERIFY(app.lastReframeCommandOutcome().error.contains(
+        QStringLiteral("must not overwrite a recorded render")));
+    QCOMPARE(requests.size(), 1);
+    QCOMPARE(app.reframeOutputs().size(), 1);
+
+    const QString repeatPath = directory.filePath(QStringLiteral("out2.mp4"));
     QVERIFY(app.runReframeCommandTo(QStringLiteral("look at the person"), 0, 1000,
-                                    outputPath));
+                                    repeatPath));
     const ReframeCommandOutcome second = app.lastReframeCommandOutcome();
 
     QCOMPARE(first.resolvedTargets.size(), second.resolvedTargets.size());
@@ -8103,7 +8124,9 @@ void ProjectTest::applicationReframeCommandIsDeterministic()
     QCOMPARE(requests.size(), 2);
     QCOMPARE(requests.at(0).instruction, requests.at(1).instruction);
     QCOMPARE(requests.at(0).sourcePath, requests.at(1).sourcePath);
-    QCOMPARE(requests.at(0).outputPath, requests.at(1).outputPath);
+    // Everything but the destination is identical; the destination is fresh.
+    QVERIFY(requests.at(0).outputPath != requests.at(1).outputPath);
+    QCOMPARE(requests.at(1).outputPath, QFileInfo(repeatPath).absoluteFilePath());
     QCOMPARE(requests.at(0).defaultRange.startMs,
              requests.at(1).defaultRange.startMs);
 }
@@ -22616,6 +22639,323 @@ void ProjectTest::mainWindowProvenanceShowsDerivedSupersession()
     window.showDecisionProvenance(app.decisionProvenance(0), 0, app.revisionsOf(0));
     QVERIFY(provenanceLabel->text().contains(
         QStringLiteral("superseded: revised by records 1, 2")));
+}
+
+// ================= Objective 37: the creator workflow end to end =============
+// Each objective of the creator-authority family is covered on its own; nothing
+// yet exercises the SEQUENCE as a product does (command -> review -> accept ->
+// revise -> replay -> reopen) or the composition points between them. These tests
+// lock the family's invariants with injected seams: no model, no encoder, no
+// network, no real media.
+
+void ProjectTest::creatorWorkflowEndToEndPreservesInvariants()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QString mediaPath;
+    QVERIFY(setupActiveMedia(app, directory, &mediaPath));
+    const QFileInfo sourceBefore(mediaPath);
+    QByteArray sourceDigestBefore;
+    QVERIFY(computeMediaContentSha256(mediaPath, &sourceDigestBefore));
+
+    int executorCalls = 0;
+    int renderCalls = 0;
+    ReframePlan replayedPlan;
+    QString replayedSource;
+    QString replayedOutput;
+    app.setReframeCommandExecutor(revisionExecutor(&executorCalls, /*writeOutput=*/true));
+    app.setReframeCommandPreparer(reviewPreparer());
+    app.setReframeReplayRenderer(
+        recordingRenderer(&renderCalls, &replayedPlan, &replayedSource, &replayedOutput));
+
+    // 1. A command renders record 0.
+    const QString commandOutput = directory.filePath(QStringLiteral("clip_reframe.mp4"));
+    QVERIFY2(app.runReframeCommandTo(QStringLiteral("follow person 1"), 0, 4000,
+                                     commandOutput),
+             qPrintable(app.lastReframeCommandOutcome().error));
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    const QJsonObject record0Json = app.reframeOutputs().at(0).toJsonObject();
+
+    // 2. A DIFFERENT instruction is reviewed and accepted, rendering record 1.
+    QVERIFY(app.prepareReframeCommand(QStringLiteral("keep both of us in frame"), 0, 4000));
+    QVERIFY(app.hasPendingReview());
+    const QString reviewedPlanJson = QString::fromUtf8(
+        QJsonDocument(app.pendingReview().plan.toJsonObject()).toJson(QJsonDocument::Compact));
+    const ReframeReviewResult accepted = app.acceptReframeReview();
+    QVERIFY2(accepted.ok, qPrintable(accepted.error));
+    QCOMPARE(app.reframeOutputs().size(), 2);
+    // The rendered plan was EXACTLY the reviewed plan (Objective 34's invariant),
+    // and accepting rendered through the render seam, not the command executor.
+    QCOMPARE(QString::fromUtf8(QJsonDocument(app.reframeOutputs().at(1)
+                                                 .editDecision().plan().toJsonObject())
+                                   .toJson(QJsonDocument::Compact)),
+             reviewedPlanJson);
+    QCOMPARE(renderCalls, 1);
+    QCOMPARE(executorCalls, 1);
+
+    // 3. The accepted record is revised, rendering record 2.
+    const QJsonObject record1Json = app.reframeOutputs().at(1).toJsonObject();
+    const QByteArray record1Hash = app.reframeOutputs().at(1).editDecision().decisionHash();
+    const RevisionResult revised = app.reviseReframeOutput(1, QStringLiteral("zoom in"));
+    QVERIFY2(revised.ok, qPrintable(revised.error));
+    QCOMPARE(app.reframeOutputs().size(), 3);
+    QCOMPARE(executorCalls, 2);
+    QCOMPARE(app.reframeOutputs().at(2).editDecision().origin(),
+             EditDecision::originCreatorRevision());
+    QCOMPARE(app.reframeOutputs().at(2).editDecision().parentDecisionHash(),
+             QString::fromLatin1(record1Hash));
+
+    // 4. The revision is replayed, appending record 3 that carries the SAME
+    //    decision (the Objective 16 identical-hash invariant).
+    const QJsonObject record2Json = app.reframeOutputs().at(2).toJsonObject();
+    const QByteArray record2Hash = app.reframeOutputs().at(2).editDecision().decisionHash();
+    const QString replayOutput = directory.filePath(QStringLiteral("replay.mp4"));
+    const ReplayResult replayed = app.replayEditDecision(2, replayOutput);
+    QVERIFY2(replayed.ok, qPrintable(replayed.error));
+    QCOMPARE(app.reframeOutputs().size(), 4);
+    QCOMPARE(app.reframeOutputs().at(3).editDecision().decisionHash(), record2Hash);
+    // Replay rendered the record's own plan from the record's source, and never
+    // consulted the command executor: replay stays perception-free.
+    QCOMPARE(renderCalls, 2);
+    QCOMPARE(executorCalls, 2);
+    QCOMPARE(QString::fromUtf8(QJsonDocument(replayedPlan.toJsonObject())
+                                   .toJson(QJsonDocument::Compact)),
+             QString::fromUtf8(QJsonDocument(app.reframeOutputs().at(2)
+                                                 .editDecision().plan().toJsonObject())
+                                   .toJson(QJsonDocument::Compact)));
+    QCOMPARE(replayedSource, mediaPath);
+    QCOMPARE(replayedOutput, QFileInfo(replayOutput).absoluteFilePath());
+
+    // Every record keeps a loadable decision and its own origin.
+    QCOMPARE(app.reframeOutputs().at(0).editDecision().origin(), EditDecision::originCommand());
+    QCOMPARE(app.reframeOutputs().at(1).editDecision().origin(), EditDecision::originCommand());
+    QVERIFY(!app.reframeOutputs().at(1).editDecision().hasParentDecision());
+    for (const ReframeCommandOutcome &record : app.reframeOutputs()) {
+        QVERIFY(record.ok);
+        QVERIFY(record.hasEditDecision());
+        QVERIFY(record.editDecisionError().isEmpty());
+        QVERIFY(!record.editDecision().decisionHash().isEmpty());
+    }
+
+    // NO earlier record was rewritten by any later operation.
+    QCOMPARE(app.reframeOutputs().at(0).toJsonObject(), record0Json);
+    QCOMPARE(app.reframeOutputs().at(1).toJsonObject(), record1Json);
+    QCOMPARE(app.reframeOutputs().at(2).toJsonObject(), record2Json);
+
+    // The source media was only ever read.
+    const QFileInfo sourceAfter(mediaPath);
+    QByteArray sourceDigestAfter;
+    QVERIFY(computeMediaContentSha256(mediaPath, &sourceDigestAfter));
+    QCOMPARE(sourceAfter.size(), sourceBefore.size());
+    QCOMPARE(sourceAfter.lastModified(), sourceBefore.lastModified());
+    QCOMPARE(sourceDigestAfter, sourceDigestBefore);
+    QCOMPARE(fileBytes(commandOutput), QByteArray("rendered-bytes"));
+
+    // Provenance answers for every record, and the chain resolves.
+    for (int i = 0; i < app.reframeOutputs().size(); ++i) {
+        const DecisionProvenance view = app.decisionProvenance(i);
+        QVERIFY(view.available);
+        if (view.hasParent) {
+            QVERIFY(view.parentResolved);
+        }
+    }
+
+    // The whole workflow survives a save and reopen byte-identically, with the
+    // derived supersession and lineage unchanged.
+    const QString projectPath = directory.filePath(QStringLiteral("workflow.reel"));
+    QVERIFY(app.saveProject(projectPath));
+    Application reopened;
+    QVERIFY(reopened.openProject(projectPath));
+    QCOMPARE(reopened.reframeOutputs().size(), 4);
+    QCOMPARE(reopened.reframeOutputs().at(0).toJsonObject(), record0Json);
+    QCOMPARE(reopened.reframeOutputs().at(1).toJsonObject(), record1Json);
+    QCOMPARE(reopened.reframeOutputs().at(2).toJsonObject(), record2Json);
+    QCOMPARE(reopened.revisionsOf(1), app.revisionsOf(1));
+    QCOMPARE(reopened.revisionsOf(2), app.revisionsOf(2));
+    QVERIFY(reopened.decisionProvenance(2).parentResolved);
+}
+
+void ProjectTest::creatorWorkflowSupersessionIsDecisionLevel()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    int renderCalls = 0;
+    app.setReframeCommandExecutor(revisionExecutor(nullptr, /*writeOutput=*/true));
+    app.setReframeReplayRenderer(countingReplayRenderer(&renderCalls));
+
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("follow person 1"), 0, 4000,
+                                    directory.filePath(QStringLiteral("clip_reframe.mp4"))));
+    QVERIFY(app.reviseReframeOutput(0, QStringLiteral("zoom in")).ok);
+    const QByteArray revisionHash = app.reframeOutputs().at(1).editDecision().decisionHash();
+    QVERIFY(app.replayEditDecision(1, directory.filePath(QStringLiteral("replay.mp4"))).ok);
+    QCOMPARE(app.reframeOutputs().size(), 3);
+    // The replay carries the revision's decision verbatim, so two DISTINCT records
+    // share one decision.
+    QCOMPARE(app.reframeOutputs().at(2).editDecision().decisionHash(), revisionHash);
+    QCOMPARE(app.reframeOutputs().at(1).outputPath,
+             QFileInfo(directory.filePath(QStringLiteral("clip_reframe_rev1.mp4")))
+                 .absoluteFilePath());
+    QVERIFY(app.reframeOutputs().at(2).outputPath.endsWith(QStringLiteral("replay.mp4")));
+
+    // Supersession is DECISION-level, and that is stated rather than hidden: a
+    // revision of the shared decision is reported as revising every record that
+    // carries it, because the lineage the decision records points at a decision,
+    // not at a row. Record-level parentage would require changing the artifact.
+    const RevisionResult another = app.reviseReframeOutput(2, QStringLiteral("zoom out"));
+    QVERIFY2(another.ok, qPrintable(another.error));
+    QCOMPARE(app.reframeOutputs().size(), 4);
+    QCOMPARE(app.reframeOutputs().at(3).editDecision().parentDecisionHash(),
+             QString::fromLatin1(revisionHash));
+    // Record 2 is a REPLAY of record 1, i.e. a record carrying record 1's decision,
+    // not a revision OF it: the revision names record 0's decision as its parent.
+    // So the shared decision makes BOTH record 1 and record 2 report the newest
+    // revision, and record 0 report the revision together with its replay copy.
+    QCOMPARE(app.revisionsOf(0), QList<int>({ 1, 2 }));
+    QCOMPARE(app.revisionsOf(1), QList<int>({ 3 }));
+    QCOMPARE(app.revisionsOf(2), QList<int>({ 3 }));
+
+    // Provenance resolves the shared parent to a held record, and says so.
+    const DecisionProvenance view = app.decisionProvenance(3);
+    QVERIFY(view.available);
+    QVERIFY(view.hasParent);
+    QVERIFY(view.parentResolved);
+    QCOMPARE(view.parentDecisionHash, QString::fromLatin1(revisionHash));
+}
+
+void ProjectTest::applicationRenderDestinationsNeverOverwriteARecordedRender()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandExecutor(revisionExecutor(nullptr, /*writeOutput=*/true));
+
+    // The FIRST render of a clip keeps the documented default name.
+    const QString firstOutput = directory.filePath(QStringLiteral("clip_reframe.mp4"));
+    QVERIFY(app.runReframeCommand(QStringLiteral("follow person 1"), 0, 4000));
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    QCOMPARE(app.reframeOutputs().at(0).outputPath,
+             QFileInfo(firstOutput).absoluteFilePath());
+    QCOMPARE(fileBytes(firstOutput), QByteArray("rendered-bytes"));
+
+    // A SECOND render goes beside it instead of over it (Decision 057), so the
+    // earlier record's file still contains the earlier record's render.
+    QVERIFY(app.runReframeCommand(QStringLiteral("zoom in"), 0, 4000));
+    QCOMPARE(app.reframeOutputs().size(), 2);
+    const QString secondOutput = directory.filePath(QStringLiteral("clip_reframe_2.mp4"));
+    QCOMPARE(app.reframeOutputs().at(1).outputPath,
+             QFileInfo(secondOutput).absoluteFilePath());
+    QVERIFY(app.reframeOutputs().at(1).outputPath != app.reframeOutputs().at(0).outputPath);
+    QCOMPARE(fileBytes(firstOutput), QByteArray("rendered-bytes"));
+    QCOMPARE(fileBytes(secondOutput), QByteArray("rendered-bytes"));
+
+    // And a third continues the sequence.
+    QVERIFY(app.runReframeCommand(QStringLiteral("zoom out"), 0, 4000));
+    QCOMPARE(app.reframeOutputs().size(), 3);
+    QVERIFY(app.reframeOutputs().at(2).outputPath.endsWith(
+        QStringLiteral("clip_reframe_3.mp4")));
+
+    // An unrelated file sitting on the default name is left alone, not clobbered:
+    // the derivation treats an existing file as unavailable even when no record
+    // claims it.
+    QTemporaryDir other;
+    QVERIFY(other.isValid());
+    Application second;
+    QVERIFY(setupActiveMedia(second, other, nullptr));
+    second.setReframeCommandExecutor(revisionExecutor(nullptr, /*writeOutput=*/true));
+    const QString occupied = other.filePath(QStringLiteral("clip_reframe.mp4"));
+    {
+        QFile file(occupied);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.write("creator-owned-file") > 0);
+    }
+    QVERIFY(second.runReframeCommand(QStringLiteral("follow person 1"), 0, 4000));
+    QCOMPARE(fileBytes(occupied), QByteArray("creator-owned-file"));
+    QVERIFY(second.reframeOutputs().at(0).outputPath.endsWith(
+        QStringLiteral("clip_reframe_2.mp4")));
+}
+
+void ProjectTest::applicationCommandRefusesAnExplicitPathHeldByARecord()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandExecutor(revisionExecutor(nullptr, /*writeOutput=*/true));
+
+    const QString firstOutput = directory.filePath(QStringLiteral("clip_reframe.mp4"));
+    QVERIFY(app.runReframeCommand(QStringLiteral("follow person 1"), 0, 4000));
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    QCOMPARE(fileBytes(firstOutput), QByteArray("rendered-bytes"));
+
+    // Naming a destination a record owns is refused, with the owning record named.
+    QVERIFY(!app.runReframeCommandTo(QStringLiteral("zoom in"), 0, 4000, firstOutput));
+    const QString error = app.lastReframeCommandOutcome().error;
+    QVERIFY(error.contains(QStringLiteral("must not overwrite a recorded render")));
+    QVERIFY(error.contains(QStringLiteral("record 0")));
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    QCOMPARE(fileBytes(firstOutput), QByteArray("rendered-bytes"));
+    // ...and the refusal is a failure record only when it reached a target: this
+    // one never did, so nothing at all was appended.
+    QVERIFY(app.reframeOutputs().at(0).ok);
+
+    // A genuinely fresh explicit destination still works.
+    const QString chosen = directory.filePath(QStringLiteral("chosen.mp4"));
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("zoom in"), 0, 4000, chosen));
+    QCOMPARE(app.reframeOutputs().size(), 2);
+    QCOMPARE(app.reframeOutputs().at(1).outputPath, QFileInfo(chosen).absoluteFilePath());
+}
+
+void ProjectTest::applicationReviewAcceptRefusesAClaimedDestination()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandExecutor(revisionExecutor(nullptr, /*writeOutput=*/true));
+    app.setReframeCommandPreparer(reviewPreparer());
+    int renderCalls = 0;
+    app.setReframeReplayRenderer(countingReplayRenderer(&renderCalls));
+
+    // A plan is prepared and waits for review.
+    QVERIFY(app.prepareReframeCommand(QStringLiteral("keep both of us in frame"), 0, 4000));
+    QVERIFY(app.hasPendingReview());
+
+    // Meanwhile a command claims a destination of its own.
+    const QString claimed = directory.filePath(QStringLiteral("claimed.mp4"));
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("follow person 1"), 0, 4000, claimed));
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    const QByteArray claimedBytes = fileBytes(claimed);
+
+    // Accepting onto a destination a record owns is refused, and the review
+    // survives so the creator can accept somewhere else without re-reviewing.
+    const ReframeReviewResult refused = app.acceptReframeReview(claimed);
+    QVERIFY(!refused.ok);
+    QVERIFY(refused.error.contains(QStringLiteral("must not overwrite a recorded render")));
+    QVERIFY(refused.error.contains(QStringLiteral("record 0")));
+    QCOMPARE(renderCalls, 0);
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    QCOMPARE(fileBytes(claimed), claimedBytes);
+    QVERIFY(app.hasPendingReview());
+
+    // With no destination named, accept derives one freshly and renders exactly the
+    // reviewed plan.
+    const ReframePlan reviewed = app.pendingReview().plan;
+    const ReframeReviewResult accepted = app.acceptReframeReview();
+    QVERIFY2(accepted.ok, qPrintable(accepted.error));
+    QCOMPARE(renderCalls, 1);
+    QCOMPARE(app.reframeOutputs().size(), 2);
+    const ReframeCommandOutcome record = app.reframeOutputs().at(1);
+    QCOMPARE(record.editDecision().plan().toJsonObject(), reviewed.toJsonObject());
+    QCOMPARE(record.outputPath,
+             QFileInfo(directory.filePath(QStringLiteral("clip_reframe.mp4")))
+                 .absoluteFilePath());
+    QVERIFY(record.outputPath != app.reframeOutputs().at(0).outputPath);
+    QCOMPARE(fileBytes(claimed), claimedBytes);
+    QVERIFY(!app.hasPendingReview());
 }
 
 QTEST_MAIN(ProjectTest)
