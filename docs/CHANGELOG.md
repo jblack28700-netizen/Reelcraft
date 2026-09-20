@@ -906,4 +906,16 @@ Date: 2026-09-18
 - Nothing changed about how the existing one-step "Run 360 Command" action behaves, nor about how an edit is planned, rendered, saved, or replayed.
 - 13 new tests; targeted regression 87 passed / 0 failed / 0 skipped and the full model-free suite 500 passed / 0 failed / 14 skipped. Decision 054 records the design.
 
+## v0.2.71 — You can revise a rendered edit, and ask why it was made
+
+Date: 2026-09-20
+
+- A generated render can now be **revised in words**. Select a render, type what should change ("keep me centered and zoom in"), and Reelcraft produces a new render from that instruction. The revised render is written next to the one it revises, never over it, and never over anything else.
+- A revision is recorded as a **new decision that points back at the decision it revises**, so what the original render was made from stays exactly as it was — the earlier edit is never rewritten, only added to.
+- Repeating a revision keeps going rather than colliding: the revisions of one render are numbered in order (`…_rev1`, `…_rev2`, `…_rev3`), and a revision whose source footage has since changed or gone missing is refused with the reason instead of quietly being made against different footage.
+- A new **"Why This Decision?"** action shows how a render's decision was formed: whether it was your original command or a revision, the instruction behind it, which earlier decision it revises and whether that earlier decision is still present in the project, whether the source footage still matches, and a summary of the plan that was executed. When a record carries no decision, it says so plainly.
+- Nothing else changed: the "Run 360 Command" and "Review Plan" workflows behave exactly as before, replays still reproduce exactly the same frames, and saved projects are unchanged.
+- 8 new tests; targeted regression 67 passed / 0 failed / 0 skipped and the full model-free suite 508 passed / 0 failed / 14 skipped. Decision 055 records the revision semantics.
+
+
 

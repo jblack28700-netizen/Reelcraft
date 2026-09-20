@@ -3,6 +3,7 @@
 #include <QImage>
 #include <QMainWindow>
 
+#include "application/DecisionProvenance.h"
 #include "application/ReframeCommandOutcome.h"
 #include "application/ReframePlanReview.h"
 #include "core/MediaItem.h"
@@ -79,6 +80,11 @@ public slots:
     // cannot change the plan.
     void showReframeReview(const ReframePlanReview &review);
 
+    // Presents the read-only "why" of the decision behind a render record
+    // (Objective 35): how it was formed, what it revises, whether that parent is
+    // present, the source status and the plan summary. Display only.
+    void showDecisionProvenance(const DecisionProvenance &view, int index);
+
     // Updates the rendered-result playback state readout (Objective 13).
     void showReframePlaybackState(bool playing);
     void showReframePlaybackPosition(qint64 frameCount, qint64 positionMs);
@@ -105,6 +111,10 @@ signals:
                                 qint64 endMs);
     void acceptReframeReviewRequested();
     void rejectReframeReviewRequested();
+    // Objective 35: revise a RENDERED record from a new instruction, and ask why
+    // a recorded decision was made. Requests only; the application acts.
+    void reviseReframeOutputRequested(int index, const QString &instruction);
+    void describeDecisionRequested(int index);
     void selectCreatorTargetRequested();
     void clearCreatorTargetRequested();
     void previewReframeOutputRequested(int index);
@@ -163,6 +173,12 @@ private:
     QPushButton *m_acceptReviewButton = nullptr;
     QPushButton *m_rejectReviewButton = nullptr;
     QLabel *m_reviewSummaryLabel = nullptr;
+
+    // Objective 35: record-level revision and the provenance readout.
+    QLineEdit *m_revisionEdit = nullptr;
+    QPushButton *m_reviseRenderButton = nullptr;
+    QPushButton *m_provenanceButton = nullptr;
+    QLabel *m_provenanceLabel = nullptr;
     QListWidget *m_reframeOutputsList = nullptr;
 
     // Objective 12: creator selection, render preview, provider status.

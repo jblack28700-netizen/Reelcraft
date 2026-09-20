@@ -20,15 +20,12 @@ structured edit/reframe plan -> virtual-camera decisions -> deterministic execut
 
 ## 2. Current objective
 
-**Process Objective P1 — Development-management consolidation** (this checkpoint; documentation and
-policy only, no product change).
+**None selected.** Objective 35 (creator revision v1 — record-level revision with a fresh sibling
+destination, derived supersession and a provenance readout, Decision 055) is complete, following
+Objective 34 (creator review, Decision 054). Each delivered objective has its own commit.
 
-**The approved batch is complete**: Objective 31 (N-way group framing, Decision 052) and
-Objective 32 (explicit subject sets, Decision 053) are both delivered, each with its own commit, and
-the multi-subject framing family is closed for now.
-
-**No next objective is selected.** The next capability is chosen by the human from §5 after the
-post-objective gate; nothing in this file authorises starting one automatically.
+**The next capability is chosen by the human from §5** after the post-objective gate; nothing in this
+file authorises starting one automatically.
 
 ---
 
@@ -61,7 +58,9 @@ post-objective gate; nothing in this file authorises starting one automatically.
 | **Group framing (2-10 subjects)** | done | `TargetTrackPlanner::{planTracks,enclosingFramingDeg}` (exact basis), `ReframeSubjectGroup`/`subjectCount`, runner group resolution | two or more resolved tracks | **fixture only** | `5592118`, this checkpoint (Obj 31) |
 | Persistent media analysis (artifact + runner) | partial | `app/analysis/{MediaAnalysis,MediaAnalysisRunner}.*` | detector / ffprobe | fixture; **no consumer** | `90f671c` |
 | **Creator review (inspect the plan, accept or reject)** | done | `app/application/ReframePlanReview.*`, `Application` review API + preparer seam, `MainWindow` review panel | — | **fixture only** | this checkpoint (Obj 34) |
-| Creator revision UI (revise a reviewed plan) | missing | `Application::reviseEditDecision` exists as an API only | a decision on whether a reviewed plan may be revised before render | — | — |
+| **Creator revision v1 (revise a rendered edit) + provenance readout** | done | `Application::{revisionOutputPath,reviseReframeOutput,revisionsOf}` over the Objective 17 mechanism, `MainWindow` revision/provenance controls | — | **fixture only** | this checkpoint (Obj 35) |
+| Pre-render revision (revise a reviewed-but-unrendered plan) | blocked | `ReframePlanReview` + review API exist | a semantic decision: an unrendered plan has no persisted parent decision to point at (parentless `creator-revision` origin / plan-level parentage) | — | — |
+| Structured / operation-level plan editing | deferred | — | a decision authorising a plan-level (post-intent) editing path that bypasses the intent→plan contract checker | — | — |
 | In-app audio playback | missing | — | audio-output subsystem decision (Decision 036) | — | — |
 | Explicit subject sets ("keep me and person 2 in frame", "frame the presenter and the guest") | done | `ReframeSubjectGroup::ExplicitSet` + `subjectReferences` + runner reference resolution | the existing selector vocabulary | **fixture only** | this checkpoint (Obj 32) |
 | Pair-path smoothing (containment-preserving) | missing | `TargetTrackPlanner::planTracks` | measured real-media jitter evidence | — | — |
@@ -81,6 +80,10 @@ post-objective gate; nothing in this file authorises starting one automatically.
   `realReframePlaybackIntegration`, `realTemporalEditIntegration`, `realCompoundCommandIntegration`,
   `realUserCommandIntegration`, `realApplicationCommandIntegration`), the 5 Objective 28-32 harness
   tests below, and the child-only `replayFreshProcessChild` slot.
+- **Objective 35 adds no validation debt either.** Creator revision composes the already-validated
+  Objective 17 mechanism (immutable decisions, lineage, replay) with the existing command pipeline, and
+  the provenance readout only presents persisted facts; its validation level is fixture by design and it
+  has no real-media counterpart to run.
 - **Objective 34 adds no validation debt.** Creator review is application/UI orchestration over
   artifacts that are already validated (the plan, the decision, the render seam): it introduces no
   perception, no geometry and no rendering behaviour, so its validation level is fixture by design and
@@ -122,7 +125,8 @@ post-objective gate; nothing in this file authorises starting one automatically.
 | **Real-media validation sweep for Objectives 28-30** | ready (blocked on media) | a real 360 clip + optional detector/speaker helpers | closes the only validation debt in the current capability set |
 | **Real-media validation sweep** (see §4) | ready once media exists | a real 360 clip + optional helpers | closes the only validation debt in the framing capability |
 | **Containment-preserving group-path smoothing** | candidate | measured jitter evidence from the sweep above | quality refinement; evidence-poor today |
-| **Creator revision UI** | ready (needs scope) | a decision on revising a reviewed plan (Obj 34 kept review accept/reject-only) | completes the review step of the documented creator workflow |
+| **Structured plan adjustment (lens/time/aim on a reviewed plan, no perception)** | ready (needs scope + decision) | a decision authorising a plan-level editing path (the intent is not persisted, so only the plan can be adjusted) | the documented §10 "modify individual operations" control; makes revision instant instead of a full re-run |
+| **Pre-render revision of a reviewed plan** | blocked on a decision | parentless creator-revision lineage semantics | continues the Objective 34 review loop; thin value until the lineage semantic exists |
 | **Real-media validation of the creator-review path** | not applicable | — | not a candidate: Obj 34 adds no perception or rendering behaviour (see §4) |
 | **Containment-preserving pair smoothing** | candidate | measured jitter evidence from the validation sweep | quality refinement; weak evidence today (see §6) |
 | **Analysis -> Reasoning seam** | blocked | app-level analysis action, reasoning semantics, evidence granularity | the documented successor stage (Decision 039) |

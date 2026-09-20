@@ -65,6 +65,7 @@ HEADERS += \
     app/application/Application.h \
     app/analysis/MediaAnalysis.h \
     app/analysis/MediaAnalysisRunner.h \
+    app/application/DecisionProvenance.h \
     app/application/ReframeCommandOutcome.h \
     app/application/ReframePlanReview.h \
     app/core/MediaItem.h \

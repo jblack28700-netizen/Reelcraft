@@ -2210,6 +2210,112 @@ of scope: revising the plan, editing a timeline, undo/redo, and any new plan or 
 
 ---
 
-*Decisions 001-053 are preserved verbatim; this decision adds to them and supersedes none of them.*
+---
+
+# Decision 055 — Creator Revision Semantics: Fresh Sibling Destination, Derived Supersession, Existing Lineage
+
+**Status:** Accepted (2026-09-20, 360 Reframing Objective 35)
+
+## Context
+
+Objectives 16 and 17 made a render reproducible from a persisted `EditDecision` and made that artifact
+immutable: a revision is expressed as a **new** decision carrying the prior one's hash as its single
+parent (Decision 034). Objective 34 then added Creator Review — inspect the prepared plan, accept it or
+reject it — and deliberately stopped there.
+
+What existed after Objective 34 was an asymmetry: the revision *mechanism* was implemented and tested
+(`EditDecision::revisedFrom`, `Application::reviseEditDecision`), but it was unreachable from the
+product, and the decisions a creator acts on are renders they have seen. Bringing the mechanism to a
+surface raises four questions that the mechanism itself does not answer, and each of them is a
+semantic choice rather than an implementation detail:
+
+- **Where does a revised render go?** The command path accepts any output path and will overwrite an
+  existing file; replay refuses to overwrite.`reviseEditDecision` refuses only the *parent record's*
+  own output path, so a caller can still name any other existing file as the destination.
+- **What does "superseded" mean?** `AI_EDIT_CONTRACT.md` §9 lists a conceptual status vocabulary
+  (Approved, Superseded, …) that has never been implemented, and decisions are immutable — a stored
+  "superseded" flag would be a mutable field on an immutable artifact.
+- **How is a revised render attributed?** `origin` already has exactly two values, `command` and
+  `creator-revision`, and Decision 007's consequence requires the model to distinguish AI-generated
+  decisions from creator modifications.
+
+## Decision
+
+Four semantics, and nothing else:
+
+1. **A revision initiated through the creator revision surface writes to a deterministic fresh sibling
+   destination: `<base>_reframe_rev<N>.mp4`**, where `<base>` is the source media's complete base name
+   and `N` is **the smallest positive integer whose path does not already exist**. The directory is the
+   directory of the record being revised (the revision is a sibling of the render it revises), falling
+   back to the source media's directory when the record carries no usable output path. The name is
+   derived from the media and not from the parent's file name, so a revision of a revision continues
+   the same sequence (`…_rev1`, `…_rev2`, `…_rev3`) instead of nesting suffixes.
+2. **A revision through this surface never overwrites its parent render, and never overwrites any other
+   existing file.** The derivation in (1) establishes this by construction: a candidate path is chosen
+   only when no file exists there. This is deliberately stricter than the general command policy and
+   does not change it — the explicit-path form `reviseEditDecision(index, instruction, path)` keeps its
+   existing behaviour, and its Objective 17 tests are unchanged.
+3. **Supersession is DERIVED from lineage at read time.** No `superseded`, `approved` or status field is
+   added to `EditDecision` (or anywhere else), no decision-status state machine is introduced, and no
+   persisted artifact gains a mutable field: a record is superseded exactly when another record this
+   application holds names its decision hash as that record's `parentDecisionHash`. The relationship
+   is computed on demand, is honest about what the application currently holds, and disappears with
+   the records it describes. `AI_EDIT_CONTRACT.md` §9 therefore remains conceptual.
+4. **A revision is attributed as `creator-revision` and carries the existing parent decision hash** —
+   unchanged Objective 17 vocabulary and persistence. The revision is a NEW immutable decision; the
+   plan it carries is built by the same command pipeline as any other revision, and the parent artifact
+   is only ever read.
+
+## Explicitly not decided here
+
+This decision changes **no** persistence semantics: no `Project` schema bump, no new persisted
+artifact, no change to `decisionHash`, to version retention, to the loader's strictness, to
+`origin`/`parentDecisionHash` validation, to replay (still perception-free and still re-using the same
+decision), or to the single append gate. It also does not decide: retention or compaction of
+accumulating decisions; persisting accept/reject status; structured, operation-level, keyframe or
+timeline editing; pre-render revision of a reviewed-but-unrendered plan (which has no persisted parent
+to point at and would need its own semantic decision); or any unification of output-path policy across
+command, revision and replay.
+
+## Implementation note (recorded during the same objective, before its commit)
+
+Point (1) above says "the smallest positive integer whose path does not already exist". Implementing it
+exposed that the literal rule is insufficient, and the refinement is recorded rather than quietly
+applied: **a candidate is fresh when no file exists there AND no record the application holds already
+claims that output path.**
+
+The case that requires it: a record's output file can legitimately be absent — the creator deleted the
+render, or (in the test suite) the render was produced by an injected executor that writes nothing. On
+the literal rule, revising such a record derives `…_rev1.mp4`, which *is* that record's own output path,
+so the revision path correctly refuses ("must not overwrite the record it revises") and **every later
+revision of that record stalls on the same refusal**. Two focused tests failed exactly this way before
+the refinement. With the second condition the sequence advances (`…_rev1`, `…_rev2`, `…_rev3`) whether
+or not the earlier files still exist, and "never overwrites" remains true by construction for both files
+and records.
+
+## Consequences
+
+- A revision is additive and non-destructive by construction: the parent render stays byte-identical on
+  disk and in the project file, and the creator's revised render appears beside it under a name that
+  cannot collide.
+- The absence of a stored status keeps every immutable artifact immutable; the cost is that supersession
+  is only visible while the records that express it are held, which is exactly the honesty the read-time
+  derivation provides.
+- No perception, parser, planner, geometry, renderer, encoder, audio or decision-persistence behaviour
+  is affected, and the Objective 34 review path is untouched.
+
+## Verification
+
+- Recorded before implementation; verified by the Objective 35 tests: the derived path is a fresh
+  sibling (`_rev1`, then `_rev2` when `_rev1` exists), an existing file is never overwritten (including
+  the parent render and a pre-existing `_rev1`), the child record carries `origin=creator-revision`
+  with the parent's hash, a two-step chain resolves through `decisionProvenance`, the parent record is
+  byte-identical afterwards, supersession is derived at read time, and every refusal (unknown index,
+  record without a decision, empty instruction, drifted or missing source) renders nothing and appends
+  nothing.
+
+---
+
+*Decisions 001-054 are preserved verbatim; this decision adds to them and supersedes none of them.*
 
 

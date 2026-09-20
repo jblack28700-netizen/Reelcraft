@@ -82,6 +82,20 @@ MainWindow::MainWindow(QWidget *parent)
         QStringLiteral("No plan is waiting for review."), central);
     m_reviewSummaryLabel->setWordWrap(true);
     m_reviewSummaryLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+
+    // Objective 35: revise a render that already exists, and ask why it was made.
+    m_revisionEdit = new QLineEdit(central);
+    m_revisionEdit->setPlaceholderText(
+        QStringLiteral("e.g. keep me centered and zoom in"));
+    m_reviseRenderButton =
+        new QPushButton(QStringLiteral("Revise Selected Render"), central);
+    m_provenanceButton =
+        new QPushButton(QStringLiteral("Why This Decision?"), central);
+    m_provenanceLabel = new QLabel(
+        QStringLiteral("Select a generated render for its decision provenance."),
+        central);
+    m_provenanceLabel->setWordWrap(true);
+    m_provenanceLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
     // A plan must be reviewed before it can be accepted or rejected.
     m_acceptReviewButton->setEnabled(false);
     m_rejectReviewButton->setEnabled(false);
@@ -143,6 +157,10 @@ MainWindow::MainWindow(QWidget *parent)
     m_acceptReviewButton->setObjectName("acceptReframeReviewButton");
     m_rejectReviewButton->setObjectName("rejectReframeReviewButton");
     m_reviewSummaryLabel->setObjectName("reframeReviewSummaryLabel");
+    m_revisionEdit->setObjectName("revisionInstructionEdit");
+    m_reviseRenderButton->setObjectName("reviseRenderButton");
+    m_provenanceButton->setObjectName("describeDecisionButton");
+    m_provenanceLabel->setObjectName("decisionProvenanceLabel");
     m_reframeOutputsList->setObjectName("reframeOutputsList");
     m_previewRenderButton->setObjectName("previewRenderButton");
     m_selectCreatorButton->setObjectName("selectCreatorButton");
@@ -197,6 +215,10 @@ MainWindow::MainWindow(QWidget *parent)
     layout->addWidget(m_rejectReviewButton);
     layout->addWidget(m_reframeOutputsList);
     layout->addWidget(m_previewRenderButton);
+    layout->addWidget(m_revisionEdit);
+    layout->addWidget(m_reviseRenderButton);
+    layout->addWidget(m_provenanceButton);
+    layout->addWidget(m_provenanceLabel);
     layout->addWidget(m_selectCreatorButton);
     layout->addWidget(m_clearCreatorButton);
     layout->addWidget(m_creatorSelectionLabel);
@@ -331,6 +353,32 @@ MainWindow::MainWindow(QWidget *parent)
             return;
         }
         emit playReframeOutputRequested(row);
+    });
+
+    // Objective 35: both actions act on the SELECTED record, and both refuse
+    // locally when there is nothing to act on, so no request is emitted blind.
+    connect(m_reviseRenderButton, &QPushButton::clicked, this, [this]() {
+        const int row = m_reframeOutputsList->currentRow();
+        if (row < 0) {
+            m_statusLabel->setText(
+                QStringLiteral("No generated render selected to revise."));
+            return;
+        }
+        const QString instruction = m_revisionEdit->text().trimmed();
+        if (instruction.isEmpty()) {
+            m_statusLabel->setText(QStringLiteral("Enter a revised instruction."));
+            return;
+        }
+        emit reviseReframeOutputRequested(row, instruction);
+    });
+    connect(m_provenanceButton, &QPushButton::clicked, this, [this]() {
+        const int row = m_reframeOutputsList->currentRow();
+        if (row < 0) {
+            m_statusLabel->setText(
+                QStringLiteral("No generated render selected."));
+            return;
+        }
+        emit describeDecisionRequested(row);
     });
     connect(m_pauseRenderButton, &QPushButton::clicked, this,
             &MainWindow::pauseReframeOutputPlaybackRequested);
@@ -524,6 +572,51 @@ void MainWindow::showReframeReview(const ReframePlanReview &review)
             .arg(review.keyframeCount)
             .arg(review.planDigest.left(12),
                  review.summaryLines().join(QStringLiteral("\n"))));
+}
+
+void MainWindow::showDecisionProvenance(const DecisionProvenance &view, int index)
+{
+    if (!m_provenanceLabel) {
+        return;
+    }
+    if (!view.available) {
+        m_provenanceLabel->setText(
+            QStringLiteral("Render %1 — no decision to explain: %2")
+                .arg(index)
+                .arg(view.error.isEmpty()
+                         ? QStringLiteral("this record carries no edit decision.")
+                         : view.error));
+        return;
+    }
+    QStringList lines;
+    lines.append(QStringLiteral("Render %1 — how this decision was formed:").arg(index));
+    lines.append(QStringLiteral("  origin: %1").arg(view.origin));
+    lines.append(QStringLiteral("  instruction: %1").arg(view.instruction));
+    if (view.hasParent) {
+        lines.append(QStringLiteral("  revises: %1 (%2)")
+                         .arg(view.parentDecisionHash.left(12),
+                              view.parentResolved
+                                  ? QStringLiteral("held by this project")
+                                  : QStringLiteral("not held by this project")));
+    } else {
+        lines.append(QStringLiteral("  revises: nothing (an original decision)"));
+    }
+    lines.append(QStringLiteral("  source: %1%2")
+                     .arg(view.sourceStatus,
+                          view.sourceDetail.isEmpty()
+                              ? QString()
+                              : QStringLiteral(" — %1").arg(view.sourceDetail)));
+    lines.append(QStringLiteral("  plan: %1 keyframe(s), %2 retained segment(s), "
+                                "%3..%4 ms, %5x%6 at %7 fps, %8 frame(s)")
+                     .arg(view.keyframeCount)
+                     .arg(view.segmentCount)
+                     .arg(view.planStartMs)
+                     .arg(view.planEndMs)
+                     .arg(view.outputWidth)
+                     .arg(view.outputHeight)
+                     .arg(view.outputFps)
+                     .arg(view.planFrameCount));
+    m_provenanceLabel->setText(lines.join(QStringLiteral("\n")));
 }
 
 void MainWindow::showReframeOutputs(const QList<ReframeCommandOutcome> &outputs)

@@ -2689,3 +2689,94 @@ path.
 - Decision 054 recorded (creator review as a read-only view; accept executes the exact reviewed plan
   through the existing render seam and the single append gate; shared command context builder).
   Decisions 001-053 preserved.
+
+
+## 2026-09-20 — 360 Reframing Objective 35: Creator Revision v1 (Record-Level Revision and Provenance)
+
+### Objective
+
+Make the Objective 17 revision mechanism reachable from the product: a creator looks at a **rendered**
+edit, asks for a change in words, and gets a new attributed render — with the "why" of a recorded
+decision readable. Four new semantics were formalized first as Decision 055 (fresh sibling
+destination, never overwrite the parent, supersession derived at read time, existing
+`creator-revision` attribution and parent hash); the mechanism itself is used unchanged.
+
+### What inspection found
+
+- **The mechanism existed and was tested but unreachable.** `EditDecision::revisedFrom`,
+  `Application::reviseEditDecision` and `decisionProvenance` were implemented by Objective 17 with 9
+  tests, and `grep -rniE 'revis|provenance|lineage|parent' app/ui/ app/main.cpp` returned only Qt
+  `QWidget *parent` constructor arguments: no revision and no provenance surface existed anywhere.
+- **The destination question was genuinely open.** The command path accepts any output path and will
+  overwrite an existing file; replay refuses; `reviseEditDecision` refuses only the *parent record's*
+  path. Nothing derived a name, so no surface could offer a safe default.
+- **A revision has no persisted parent unless a decision exists**, which is why the objective stayed
+  at the record level (pre-render revision of a reviewed plan would need its own semantic).
+- **`DecisionProvenance` lived inside `Application.h`**, so a UI readout would have pulled the whole
+  Application into a widget header. It was extracted to `app/application/DecisionProvenance.h`
+  (mirroring `ReframeCommandOutcome.h`/`ReframePlanReview.h`); nothing else used it.
+
+### What was built
+
+- **`Application::revisionOutputPath(index)`** — the deterministic fresh sibling destination of Decision
+  055: `<media base>_reframe_rev<N>.mp4` in the revised record's directory, `N` the smallest positive
+  integer that is free.
+- **`Application::reviseReframeOutput(index, revisedInstruction)`** — the surface entry point: it checks
+  the two classes it owns (unknown index, a record with no usable decision) and then delegates to the
+  existing `reviseEditDecision(index, instruction, derivedPath)`, inheriting every Objective 17
+  refusal unchanged. It renders nothing itself and adds no new execution path.
+- **`Application::revisionsOf(index)`** — supersession DERIVED at read time: the held records whose
+  decision names this record's decision as its parent. Nothing is stored; no immutable artifact gained a
+  status field.
+- **UI**: a revision instruction input, "Revise Selected Render" and "Why This Decision?" actions (both
+  acting on the selected render list row and refusing locally when there is nothing to act on), and a
+  provenance readout presenting origin, instruction, the revised-from hash **and whether that parent is
+  held**, source status, and the plan summary. Wiring lives in `app/main.cpp`; a refusal is surfaced
+  through the existing status channel with the application's own reason.
+- **No persistence change.** No `Project` schema bump, no new artifact, no status field, no change to
+  `decisionHash`, the loader, replay or the single append gate.
+
+### Defect found during implementation
+
+The literal Decision 055 rule ("the smallest N whose path does not already exist") was **insufficient**,
+and two focused tests failed on it: a record's output file can legitimately be absent (the creator
+deleted the render, or an injected executor wrote nothing), in which case the derivation returned the
+record's own path, the revision path correctly refused it, and **every later revision of that record
+stalled on the same refusal**. A candidate is now fresh when no file exists there **and** no held record
+claims that path. The refinement is recorded as an implementation note appended to Decision 055 — the
+original semantics text was left as recorded, and the case that required the refinement is stated.
+
+### Verification
+
+- 8 new model-free tests: `applicationRevisionDerivesFreshSiblingPath` (the derived name, skipping an
+  occupied candidate, stability, and no destination for an unusable index or record);
+  `applicationRevisionProducesAttributedChildRecord` (attribution `creator-revision` + the parent hash,
+  a different decision hash, byte-identical parent JSON and unchanged parent decision, source untouched,
+  and provenance resolving the lineage); `applicationRevisionChainPreservesLineageAndSupersession`
+  (`_rev1`/`_rev2`, a single parent per step, derived `revisionsOf`, and the absence of any stored
+  status key); `applicationRevisionNeverOverwritesAnExistingFile` (the parent render and a pre-existing
+  `_rev1` both keep their bytes through two revisions);
+  `applicationRevisionRefusesHonestly` (unknown index, empty instruction, record without a decision — no
+  render, no append, no file); `applicationRevisionRefusesDriftedOrMissingSource` (the two source
+  failure classes stay distinct); `applicationRevisionLineageSurvivesReopen` (the chain reloads
+  byte-identically, the next revision continues the sequence, and a project holding only a child reports
+  its lineage honestly as unresolved); `mainWindowRevisionAndProvenanceSurface` (local refusals, request
+  payloads, and the readout's facts and honest "no decision" state).
+- Targeted regression across revision, decisions, replay, records, the command path, the Objective 34
+  review path and the touched UI: see the checkpoint record in `CURRENT_STATE.md`.
+- Official `scripts/build_and_test.sh`: recorded in `CURRENT_STATE.md`; zero failures, no new skips.
+
+### Boundary notes / not implemented
+
+- Deliberately **not** built: structured/operation-level editing, keyframe or timeline editing, plan-level
+  (pre-render) revision, persisted reviews or accept/reject status, any decision-status state machine,
+  retention/compaction, and any unification of output-path policy across command/revision/replay.
+- The Objective 34 review path, the direct command path, replay, and every persisted artifact are
+  unchanged; no new dependency, provider, model or plan type; no real-media claim (the objective adds no
+  perception or rendering behaviour, so it adds no validation debt).
+- `PROJECT_HISTORY.md` was deliberately not touched (milestone-level narrative only).
+
+### Decisions
+
+- Decision 055 recorded (four revision semantics) with an implementation note recording the refinement
+  the focused tests forced. Decisions 001-054 preserved.

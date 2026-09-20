@@ -10,6 +10,7 @@
 #include <memory>
 
 #include "analysis/MediaAnalysis.h"
+#include "application/DecisionProvenance.h"
 #include "application/ReframeCommandOutcome.h"
 #include "application/ReframePlanReview.h"
 #include "core/MediaItem.h"
@@ -87,32 +88,8 @@ struct ReframeReviewResult
     QString error;
 };
 
-// Read-only provenance view of the decision behind a render record (Objective
-// 17). Inspection never executes anything and never modifies the artifact.
-struct DecisionProvenance
-{
-    bool available = false;      // a decision is attached and loaded
-    QString error;               // why it is unavailable, when it is not
-    QString origin;
-    QString instruction;
-    QString parentDecisionHash;
-    // Referential lineage check: does the referenced parent actually exist among
-    // the records this application holds? A syntactically valid hash is not
-    // proof of a valid lineage relationship.
-    bool hasParent = false;
-    bool parentResolved = false;
-    QString sourceStatus;        // EditDecision::sourceStatusToString()
-    QString sourceDetail;
-    // Plan summary (no keyframes are copied).
-    int keyframeCount = 0;
-    int segmentCount = 0;
-    qint64 planStartMs = 0;
-    qint64 planEndMs = 0;
-    int outputWidth = 0;
-    int outputHeight = 0;
-    double outputFps = 0.0;
-    int planFrameCount = 0;
-};
+// DecisionProvenance (the read-only "why" view of a persisted decision) lives in
+// application/DecisionProvenance.h.
 
 class Application : public QObject
 {
@@ -363,6 +340,36 @@ public slots:
     // Read-only provenance of the decision behind a record. Never executes,
     // never modifies, and reports honestly when there is no usable decision.
     DecisionProvenance decisionProvenance(int index) const;
+
+    // --- creator revision surface (Objective 35) ----------------------------
+    // Record-level creator revision: the creator looks at a RENDERED edit and
+    // asks for a change in words. The revision travels the existing Objective 17
+    // mechanism unchanged -- a new free-text instruction through the same command
+    // pipeline, producing a NEW immutable EditDecision whose single parent is the
+    // record it revises -- so nothing about decision persistence, lineage,
+    // hashing or replay is redefined here (Decision 055).
+    //
+    // The derived fresh destination (Decision 055): "<media base>_reframe_rev<N>.mp4"
+    // in the revised record's directory, N being the smallest positive integer
+    // whose path does not already exist. A revision through this surface therefore
+    // never overwrites its parent render, and never overwrites anything else.
+    QString revisionOutputPath(int index) const;
+
+    // Revises the indexed record from the creator's revised instruction, writing
+    // to the derived fresh destination. Inherits every refusal of
+    // reviseEditDecision(): unknown index, a record without a usable decision, an
+    // empty instruction, and a source that no longer matches the recorded
+    // fingerprint. A refusal renders nothing, appends nothing and modifies
+    // nothing.
+    RevisionResult reviseReframeOutput(int index, const QString &revisedInstruction);
+
+    // Supersession, DERIVED at read time (Decision 055): the records that name
+    // this record's decision as their parent. Nothing is stored; a record is
+    // superseded exactly when another held record points at it. Empty when the
+    // index or the record's decision is unusable, and honest about what the
+    // application currently holds -- a record whose parent was never loaded is
+    // simply not listed anywhere.
+    QList<int> revisionsOf(int index) const;
 
     // Replaceable, optional media duration probe used to default a whole-clip
     // range (a zero start/end). The application owns a built-in ffprobe probe;

@@ -65,6 +65,25 @@ int main(int argc, char *argv[])
                      &application, &Application::rejectReframeReview);
     QObject::connect(&application, &Application::reframeReviewChanged,
                      &window, &MainWindow::showReframeReview);
+    // Objective 35: revise a rendered edit (the application derives the fresh
+    // destination) and explain a recorded decision. A refusal is reported through
+    // the existing status channel; nothing is rendered on a refusal.
+    QObject::connect(&window, &MainWindow::reviseReframeOutputRequested,
+                     &application, [&application, &window](
+                                       int index, const QString &instruction) {
+                         const RevisionResult result =
+                             application.reviseReframeOutput(index, instruction);
+                         if (!result.ok) {
+                             window.showStatus(
+                                 QStringLiteral("Revision refused: %1")
+                                     .arg(result.error));
+                         }
+                     });
+    QObject::connect(&window, &MainWindow::describeDecisionRequested, &application,
+                     [&application, &window](int index) {
+                         window.showDecisionProvenance(
+                             application.decisionProvenance(index), index);
+                     });
     QObject::connect(&window, &MainWindow::selectCreatorTargetRequested,
                      &application, &Application::selectCreatorTargetFromViewport);
     QObject::connect(&window, &MainWindow::clearCreatorTargetRequested,

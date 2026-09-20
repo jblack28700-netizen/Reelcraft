@@ -1505,6 +1505,125 @@ DecisionProvenance Application::decisionProvenance(int index) const
     return view;
 }
 
+// --- Objective 35: the creator revision surface ------------------------------
+//
+// The revision MECHANISM is Objective 17's and is not reimplemented here. What
+// this surface adds is the destination and the read-time view:
+//   * a deterministic fresh sibling path (Decision 055), so a revision can never
+//     overwrite the render it revises or anything else;
+//   * derived supersession, so no immutable artifact gains a mutable status
+//     field.
+// Every refusal belongs to the existing revision path: an unknown index, a record
+// with no usable decision, an empty instruction, and a source whose fingerprint
+// no longer matches are all reported by `reviseEditDecision()` with no render
+// attempted and no record appended.
+
+QString Application::revisionOutputPath(int index) const
+{
+    if (index < 0 || index >= m_reframeOutputs.size()) {
+        return QString();
+    }
+    const ReframeCommandOutcome &record = m_reframeOutputs.at(index);
+    if (!record.hasEditDecision()) {
+        return QString();
+    }
+
+    // The revision is a sibling of the render it revises.
+    QDir directory = QFileInfo(record.outputPath).absoluteDir();
+    if (record.outputPath.isEmpty() || !directory.exists()) {
+        // A record with no usable output location still has a source, and the
+        // source's directory is where a default render would have gone.
+        const QString sourcePath = record.editDecision().source().path;
+        if (sourcePath.isEmpty()) {
+            return QString();
+        }
+        directory = QFileInfo(sourcePath).absoluteDir();
+    }
+
+    // The base comes from the SOURCE media, never from the parent's file name, so
+    // revising a revision continues the same sequence (_rev1, _rev2, _rev3)
+    // instead of nesting suffixes.
+    const QString base =
+        QFileInfo(record.editDecision().source().path).completeBaseName();
+    if (base.isEmpty()) {
+        return QString();
+    }
+
+    // A candidate is FRESH when no file exists there AND no record this
+    // application holds already claims that output path. The second condition is
+    // required, not defensive: a record's file can legitimately be absent (the
+    // creator deleted it, or the render was produced by an injected executor in a
+    // test), and on the literal "no file exists" rule the derivation would hand
+    // back the very record being revised -- which the revision path correctly
+    // refuses, stalling every later revision of that record. See the
+    // implementation note appended to Decision 055.
+    const auto claimedByHeldRecord = [this](const QString &path) {
+        const QString absolute = QFileInfo(path).absoluteFilePath();
+        for (const ReframeCommandOutcome &record : m_reframeOutputs) {
+            if (!record.outputPath.isEmpty()
+                && QFileInfo(record.outputPath).absoluteFilePath() == absolute) {
+                return true;
+            }
+        }
+        return false;
+    };
+    for (int n = 1; n <= 100000; ++n) {
+        const QString candidate = directory.filePath(
+            QStringLiteral("%1_reframe_rev%2.mp4").arg(base).arg(n));
+        if (!QFileInfo::exists(candidate) && !claimedByHeldRecord(candidate)) {
+            return candidate;
+        }
+    }
+    return QString();
+}
+
+RevisionResult Application::reviseReframeOutput(
+    int index, const QString &revisedInstruction)
+{
+    // The two validation classes this surface owns are checked first, so the
+    // reason reported is the same one the explicit-path form reports.
+    if (index < 0 || index >= m_reframeOutputs.size()) {
+        RevisionResult result;
+        result.error = QStringLiteral("There is no such reframe output to revise.");
+        return result;
+    }
+    const QString destination = revisionOutputPath(index);
+    if (destination.isEmpty()) {
+        RevisionResult result;
+        result.error = m_reframeOutputs.at(index).editDecisionError().isEmpty()
+            ? QStringLiteral("This render record has no editable decision, so no "
+                             "revision destination can be derived.")
+            : m_reframeOutputs.at(index).editDecisionError();
+        return result;
+    }
+    return reviseEditDecision(index, revisedInstruction, destination);
+}
+
+QList<int> Application::revisionsOf(int index) const
+{
+    QList<int> revisions;
+    if (index < 0 || index >= m_reframeOutputs.size()) {
+        return revisions;
+    }
+    const ReframeCommandOutcome &record = m_reframeOutputs.at(index);
+    if (!record.hasEditDecision()) {
+        return revisions;
+    }
+    // Derived, never stored: a record is a revision of this one exactly when its
+    // decision names this decision as its parent. A replay carried forward from a
+    // revision keeps the same decision and is therefore listed too -- that is what
+    // the lineage says, and nothing is curated here.
+    const QByteArray hash = record.editDecision().decisionHash();
+    for (int i = 0; i < m_reframeOutputs.size(); ++i) {
+        const ReframeCommandOutcome &candidate = m_reframeOutputs.at(i);
+        if (candidate.hasEditDecision()
+            && candidate.editDecision().parentDecisionHash() == hash) {
+            revisions.append(i);
+        }
+    }
+    return revisions;
+}
+
 ReplayResult Application::replayEditDecision(int index, const QString &outputPath)
 {
     ReplayResult result;
