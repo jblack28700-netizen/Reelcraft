@@ -854,3 +854,16 @@ Date: 2026-09-18
 - Nothing about detection, tracking, identity, timing, audio or saved decisions changed: the requested lens lives inside the edit plan Reelcraft already stores, so a saved edit still replays to exactly the same frames.
 - 6 new tests; targeted regression 73 passed / 0 failed / 0 skipped and the full model-free suite 472 passed / 0 failed / 9 skipped. Decision 049 records the design.
 
+
+## v0.2.67 — Reframing can now keep two people in frame
+
+Date: 2026-09-18
+
+- Reelcraft can now frame **two people at once**. Asking to "keep both of us in frame", "keep us both in frame", "follow both of us", "keep both people in frame" or "keep both of them in frame" resolves the two subjects and produces a camera movement that holds both of them inside the frame, where previously such instructions were not understood at all.
+- "Both of us" means the creator plus the one other person visible — the same selection the rest of Reelcraft already uses — and asking without having selected yourself says so plainly. "Both people" means exactly the two visible people; if three or more are visible it says the request is ambiguous instead of quietly choosing two.
+- The framing itself is driven by how large the two subjects actually appear and by the shape of the output. The camera aims between them — neither person is given priority — and uses the tightest lens that holds both, so the result adapts instead of relying on a fixed guess.
+- The two subjects can move: the framing follows them across the clip, and the lens is chosen for the moment they are furthest apart so that neither ever leaves the frame.
+- If they cannot share one frame — they are too far apart, or you asked for a close-up that cannot contain both — Reelcraft says so and explains what would be needed, instead of silently framing one of them or quietly widening the shot you asked for.
+- Single-subject instructions, following one person, aiming at something, timing, sound and saved edits are all unchanged; a saved edit replays to exactly the same frames.
+- 6 new tests; targeted regression 102 passed / 0 failed / 0 skipped and the full model-free suite 478 passed / 0 failed / 9 skipped. Decision 050 records the design.
+

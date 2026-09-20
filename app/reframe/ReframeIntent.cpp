@@ -365,6 +365,43 @@ QString withoutSpan(const QString &text, int start, int end)
     return result;
 }
 
+// Objective 30: plural framing. The phrase names a GROUP, not tracks — which
+// tracks is decided at command time against the current tracks and identity
+// state, exactly as a single reference is. A framing verb (or an explicit "in
+// frame") must be present, so a passing mention of two people is not turned into
+// a framing instruction.
+bool pluralGroupFromClause(const QString &clause, ReframeSubjectGroup *outGroup)
+{
+    static const QRegularExpression framingVerb(QStringLiteral(
+        "\\b(keep|keeping|follow|following|frame|frames|framing|hold|holding|"
+        "stay|staying|show|showing|include|including|cent(?:er|re)(?:ed|d)?|"
+        "in frame|in shot|in view)\\b"));
+    if (!framingVerb.match(clause).hasMatch()) {
+        return false;
+    }
+    static const char *creatorPhrases[] = {
+        "both of us", "us both", "the two of us", "two of us", "both of we",
+    };
+    for (const char *phrase : creatorPhrases) {
+        if (wholePhraseIndex(clause, QString::fromLatin1(phrase)) >= 0) {
+            *outGroup = ReframeSubjectGroup::CreatorAndOther;
+            return true;
+        }
+    }
+    static const char *peoplePhrases[] = {
+        "both people", "both persons", "both of them", "the two people",
+        "the two persons", "the two of them", "two people", "two persons",
+        "both of the people",
+    };
+    for (const char *phrase : peoplePhrases) {
+        if (wholePhraseIndex(clause, QString::fromLatin1(phrase)) >= 0) {
+            *outGroup = ReframeSubjectGroup::TwoPeople;
+            return true;
+        }
+    }
+    return false;
+}
+
 QStringList splitClauses(const QString &text)
 {
     static const QRegularExpression splitter(QStringLiteral(
@@ -949,7 +986,13 @@ ReframeIntent ReframeIntentParser::parse(const QString &text)
         const bool hasFieldOfView =
             fieldOfViewFromClause(cameraText, &requestedFieldOfViewDeg,
                                   &fieldOfViewStart, &fieldOfViewEnd);
-        if (!clauseHasCameraKeyword(cameraText) && !hasFieldOfView) {
+        // Objective 30: a plural framing clause is a camera instruction too, and
+        // it is detected before the single-subject patterns so that "keep both
+        // of us centered" is never read as the single subject "both of us".
+        ReframeSubjectGroup subjectGroup = ReframeSubjectGroup::None;
+        const bool plural =
+            pluralGroupFromClause(cameraText, &subjectGroup);
+        if (!clauseHasCameraKeyword(cameraText) && !hasFieldOfView && !plural) {
             continue;
         }
         if (hasFieldOfView
@@ -974,13 +1017,22 @@ ReframeIntent ReframeIntentParser::parse(const QString &text)
             move.fieldOfViewDeg = requestedFieldOfViewDeg;
         }
 
+        if (plural) {
+            // Continuous framing of several subjects: the same class of request
+            // as "keep me centered", executed as one camera path. A direction in
+            // the same clause is still parsed, so the command can refuse the
+            // combination honestly instead of silently dropping half of it.
+            move.subjectGroup = subjectGroup;
+            move.followSubject = true;
+        }
+
         double yaw = 0.0;
         double pitch = 0.0;
         if (directionFromClause(directionText, &yaw, &pitch)) {
             move.hasDirection = true;
             move.yawDeg = yaw;
             move.pitchDeg = pitch;
-        } else {
+        } else if (!plural) {
             bool follow = false;
             QString subject = subjectFromClause(cameraText, &follow);
             if (temporal) {
@@ -1000,7 +1052,8 @@ ReframeIntent ReframeIntentParser::parse(const QString &text)
         // camera, which is what turns "start wide, then push in on me" into a
         // real two-keyframe move instead of a silently dropped instruction.
         if (move.hasDirection || !move.targetRef.isEmpty()
-            || move.hasFieldOfView) {
+            || move.hasFieldOfView
+            || move.subjectGroup != ReframeSubjectGroup::None) {
             intent.moves.append(move);
         }
     }
@@ -1028,6 +1081,21 @@ ReframeIntent ReframeIntentParser::parse(const QString &text)
     } else if (intent.hasOutput || intent.hasTimeRange) {
         intent.notes.append(QStringLiteral(
             "No camera instruction: a centered forward view is used."));
+    }
+
+    // Objective 30: one deterministic note naming the plural group asked for.
+    for (const ReframeCameraMove &move : intent.moves) {
+        if (move.subjectGroup == ReframeSubjectGroup::CreatorAndOther) {
+            intent.notes.append(QStringLiteral(
+                "Multi-subject framing: the creator and the other visible "
+                "person."));
+            break;
+        }
+        if (move.subjectGroup == ReframeSubjectGroup::TwoPeople) {
+            intent.notes.append(QStringLiteral(
+                "Multi-subject framing: the two visible people."));
+            break;
+        }
     }
 
     // Objective 29: one deterministic note naming the framing the instruction

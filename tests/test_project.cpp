@@ -1084,6 +1084,13 @@ private slots:
     void reframeCommandRunnerFollowsAtRequestedFraming();
     void reframeCommandRunnerSpeakerFramingIsHonest();
     void reframePipelineRendersRequestedFraming();
+    // Objective 30: multi-subject framing.
+    void reframeIntentParsesMultiSubjectFraming();
+    void reframeMultiSubjectFramingGeometry();
+    void reframeCommandRunnerFramesTwoSubjects();
+    void reframeCommandRunnerResolvesTwoDetectedPeople();
+    void reframeCommandRunnerRejectsUnsatisfiableMultiSubject();
+    void reframeCommandRunnerFramesMovingSubjectsAndReplays();
     void mediaAnalysisJsonRoundTripAndIdentity();
     void mediaAnalysisSchemaVersionAndDigestHandling();
     void mediaAnalysisSourceStatusDistinguishesMissingFromChanged();
@@ -11604,6 +11611,643 @@ void ProjectTest::replayReproducesRenderedAudio()
     QVERIFY(replayFacts.hasAudio);
     QCOMPARE(replayFacts.channels, facts.channels);
     QCOMPARE(replayFacts.sampleRate, facts.sampleRate);
+}
+
+// ============ 360 multi-subject framing (Objective 30) ======================
+//
+// "keep both of us in frame" resolves two EXISTING identities and produces one
+// deterministic camera path that keeps both inside the frame. Deterministic
+// fixtures only: no model, no network, no real footage.
+
+namespace {
+
+// Two tracks observed at the SAME timestamps — exactly what one resolver pass
+// produces — so a joint framing can be computed without inventing anything.
+TargetTrack pairTrack(const QString &id, double yawDeg, double pitchDeg,
+                      double yawRadiusDeg, double pitchRadiusDeg,
+                      const QList<qint64> &times)
+{
+    TargetTrack track(id, QStringLiteral("person"));
+    for (qint64 timeMs : times) {
+        TargetObservation observation;
+        observation.timeMs = timeMs;
+        observation.targetId = id;
+        observation.label = QStringLiteral("person");
+        observation.confidence = 0.9;
+        observation.yawDeg = yawDeg;
+        observation.pitchDeg = pitchDeg;
+        observation.yawRadiusDeg = yawRadiusDeg;
+        observation.pitchRadiusDeg = pitchRadiusDeg;
+        track.append(observation);
+    }
+    return track;
+}
+
+struct FrameDirection
+{
+    double x = 0.0;
+    double y = 0.0;
+    double z = 0.0;
+};
+
+FrameDirection frameDirection(double yawDeg, double pitchDeg)
+{
+    const double yaw = qDegreesToRadians(yawDeg);
+    const double pitch = qDegreesToRadians(pitchDeg);
+    return FrameDirection{ std::cos(pitch) * std::sin(yaw),
+                           std::cos(pitch) * std::cos(yaw),
+                           std::sin(pitch) };
+}
+
+// The EXACT containment test of EquirectView's camera basis (roll 0): every
+// corner of the subject's reported footprint must project inside the frame.
+// Used to prove the framing rule really contains the subjects rather than merely
+// returning a number.
+bool subjectInsideFrame(double aimYawDeg, double aimPitchDeg, double fovDeg,
+                        double aspect, double yawDeg, double pitchDeg,
+                        double yawRadiusDeg, double pitchRadiusDeg)
+{
+    const double tanHalf = std::tan(qDegreesToRadians(fovDeg) / 2.0);
+    const FrameDirection forward = frameDirection(aimYawDeg, aimPitchDeg);
+    FrameDirection right{ forward.y, -forward.x, 0.0 };
+    const double rightLength =
+        std::sqrt(right.x * right.x + right.y * right.y + right.z * right.z);
+    if (rightLength < 1e-12) {
+        right = FrameDirection{ 1.0, 0.0, 0.0 };
+    } else {
+        right.x /= rightLength;
+        right.y /= rightLength;
+        right.z /= rightLength;
+    }
+    const FrameDirection up{
+        right.y * forward.z - right.z * forward.y,
+        right.z * forward.x - right.x * forward.z,
+        right.x * forward.y - right.y * forward.x
+    };
+
+    const double yaws[2] = { yawDeg - yawRadiusDeg, yawDeg + yawRadiusDeg };
+    const double pitches[2] = { pitchDeg - pitchRadiusDeg,
+                                pitchDeg + pitchRadiusDeg };
+    for (double cornerYaw : yaws) {
+        for (double cornerPitch : pitches) {
+            const FrameDirection direction =
+                frameDirection(cornerYaw, cornerPitch);
+            const double lateral = direction.x * right.x + direction.y * right.y
+                + direction.z * right.z;
+            const double vertical = direction.x * up.x + direction.y * up.y
+                + direction.z * up.z;
+            if (qAbs(lateral) > tanHalf * aspect + 1e-9) {
+                return false;
+            }
+            if (qAbs(vertical) > tanHalf + 1e-9) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+TargetObservation subjectObservation(qint64 timeMs, double yawDeg,
+                                     double pitchDeg, double yawRadiusDeg,
+                                     double pitchRadiusDeg)
+{
+    TargetObservation observation;
+    observation.timeMs = timeMs;
+    observation.label = QStringLiteral("person");
+    observation.confidence = 0.9;
+    observation.yawDeg = yawDeg;
+    observation.pitchDeg = pitchDeg;
+    observation.yawRadiusDeg = yawRadiusDeg;
+    observation.pitchRadiusDeg = pitchRadiusDeg;
+    return observation;
+}
+
+} // namespace
+
+void ProjectTest::reframeIntentParsesMultiSubjectFraming()
+{
+    const ReframeIntent us = ReframeIntentParser::parse(
+        QStringLiteral("keep both of us in frame"));
+    QVERIFY(us.recognized);
+    QCOMPARE(us.moves.size(), 1);
+    QCOMPARE(us.moves.at(0).subjectGroup, ReframeSubjectGroup::CreatorAndOther);
+    QVERIFY(us.moves.at(0).followSubject);
+    QVERIFY(us.moves.at(0).targetRef.isEmpty());
+    QVERIFY(!us.moves.at(0).hasDirection);
+    QVERIFY2(us.notes.join(QStringLiteral("\n"))
+                 .contains(QStringLiteral("Multi-subject framing")),
+             qPrintable(us.notes.join(QStringLiteral(" | "))));
+
+    QCOMPARE(ReframeIntentParser::parse(QStringLiteral("keep us both in frame"))
+                 .moves.at(0).subjectGroup,
+             ReframeSubjectGroup::CreatorAndOther);
+    QCOMPARE(ReframeIntentParser::parse(QStringLiteral("follow both of us"))
+                 .moves.at(0).subjectGroup,
+             ReframeSubjectGroup::CreatorAndOther);
+    QCOMPARE(ReframeIntentParser::parse(QStringLiteral("keep the two of us framed"))
+                 .moves.at(0).subjectGroup,
+             ReframeSubjectGroup::CreatorAndOther);
+
+    QCOMPARE(ReframeIntentParser::parse(QStringLiteral("keep both people in frame"))
+                 .moves.at(0).subjectGroup,
+             ReframeSubjectGroup::TwoPeople);
+    QCOMPARE(ReframeIntentParser::parse(QStringLiteral("keep both of them in frame"))
+                 .moves.at(0).subjectGroup,
+             ReframeSubjectGroup::TwoPeople);
+    QCOMPARE(ReframeIntentParser::parse(QStringLiteral("frame both people"))
+                 .moves.at(0).subjectGroup,
+             ReframeSubjectGroup::TwoPeople);
+    QCOMPARE(ReframeIntentParser::parse(QStringLiteral("follow both people"))
+                 .moves.at(0).subjectGroup,
+             ReframeSubjectGroup::TwoPeople);
+
+    // Single-subject instructions are untouched: no group, same subject, same
+    // follow/aim classification.
+    const ReframeIntent single =
+        ReframeIntentParser::parse(QStringLiteral("keep me centered"));
+    QCOMPARE(single.moves.size(), 1);
+    QCOMPARE(single.moves.at(0).subjectGroup, ReframeSubjectGroup::None);
+    QCOMPARE(single.moves.at(0).targetRef, QStringLiteral("me"));
+    QVERIFY(single.moves.at(0).followSubject);
+
+    const ReframeIntent other =
+        ReframeIntentParser::parse(QStringLiteral("follow the person"));
+    QCOMPARE(other.moves.at(0).subjectGroup, ReframeSubjectGroup::None);
+    QCOMPARE(other.moves.at(0).targetRef, QStringLiteral("person"));
+
+    // A passing mention of two people is not a framing instruction.
+    const ReframeIntent mention =
+        ReframeIntentParser::parse(QStringLiteral("make a version with both of us"));
+    QVERIFY(mention.moves.isEmpty());
+    QVERIFY(!mention.recognized);
+
+    // A plural clause that also carries a direction keeps BOTH, so the command
+    // can refuse the combination instead of silently dropping half of it.
+    const ReframeIntent mixed = ReframeIntentParser::parse(
+        QStringLiteral("pan right and keep both of us in frame"));
+    QCOMPARE(mixed.moves.size(), 1);
+    QVERIFY(mixed.moves.at(0).hasDirection);
+    QCOMPARE(mixed.moves.at(0).subjectGroup, ReframeSubjectGroup::CreatorAndOther);
+
+    // Objective 29 composes with Objective 30.
+    const ReframeIntent framed = ReframeIntentParser::parse(
+        QStringLiteral("keep both of us in frame, wide"));
+    QCOMPARE(framed.requestedFieldOfViews(), QList<double>{ 120.0 });
+    QCOMPARE(framed.moves.at(0).subjectGroup, ReframeSubjectGroup::CreatorAndOther);
+}
+
+void ProjectTest::reframeMultiSubjectFramingGeometry()
+{
+    // Two subjects 40 degrees apart, each 5 degrees wide, both level.
+    const QList<TargetObservation> sideBySide{
+        subjectObservation(0, -20.0, 0.0, 5.0, 5.0),
+        subjectObservation(0, 20.0, 0.0, 5.0, 5.0)
+    };
+    const auto side = TargetTrackPlanner::enclosingFramingDeg(sideBySide, 1920, 1080);
+    QVERIFY2(side.ok, qPrintable(side.error));
+    // Aim is the midpoint of the two footprints, never one subject's direction.
+    QVERIFY(qAbs(side.yawDeg) < 1e-9);
+    QVERIFY(qAbs(side.pitchDeg) < 1e-9);
+    // The lens is driven by the reported footprints and the output aspect, not
+    // by a constant: a 50-degree horizontal span needs 2*atan(tan(25)/aspect).
+    const double expected = qRadiansToDegrees(
+        2.0 * std::atan(std::tan(qDegreesToRadians(25.0)) / (1920.0 / 1080.0)));
+    QVERIFY2(qAbs(side.fieldOfViewDeg - expected) < 1e-6,
+             qPrintable(QStringLiteral("%1 vs %2")
+                            .arg(side.fieldOfViewDeg)
+                            .arg(expected)));
+    for (const TargetObservation &observation : sideBySide) {
+        QVERIFY(subjectInsideFrame(side.yawDeg, side.pitchDeg,
+                                   side.fieldOfViewDeg, 1920.0 / 1080.0,
+                                   observation.yawDeg, observation.pitchDeg,
+                                   observation.yawRadiusDeg,
+                                   observation.pitchRadiusDeg));
+    }
+
+    // A vertical output needs a much wider vertical lens for the same pair.
+    const auto vertical =
+        TargetTrackPlanner::enclosingFramingDeg(sideBySide, 1080, 1920);
+    QVERIFY2(vertical.ok, qPrintable(vertical.error));
+    QVERIFY(vertical.fieldOfViewDeg > side.fieldOfViewDeg + 20.0);
+    for (const TargetObservation &observation : sideBySide) {
+        QVERIFY(subjectInsideFrame(vertical.yawDeg, vertical.pitchDeg,
+                                   vertical.fieldOfViewDeg, 1080.0 / 1920.0,
+                                   observation.yawDeg, observation.pitchDeg,
+                                   observation.yawRadiusDeg,
+                                   observation.pitchRadiusDeg));
+    }
+
+    // Pitch-dominated: one subject high, one low.
+    const QList<TargetObservation> stacked{
+        subjectObservation(0, 0.0, -25.0, 4.0, 4.0),
+        subjectObservation(0, 10.0, 25.0, 4.0, 4.0)
+    };
+    const auto high = TargetTrackPlanner::enclosingFramingDeg(stacked, 1920, 1080);
+    QVERIFY2(high.ok, qPrintable(high.error));
+    QVERIFY(qAbs(high.pitchDeg) < 1e-9);
+    QVERIFY(high.fieldOfViewDeg >= 58.0);
+    for (const TargetObservation &observation : stacked) {
+        QVERIFY(subjectInsideFrame(high.yawDeg, high.pitchDeg,
+                                   high.fieldOfViewDeg, 1920.0 / 1080.0,
+                                   observation.yawDeg, observation.pitchDeg,
+                                   observation.yawRadiusDeg,
+                                   observation.pitchRadiusDeg));
+    }
+
+    // Yaw wraparound: a pair straddling +/-180 must be framed the short way
+    // round, at yaw 180, not across the whole sphere through yaw 0.
+    const QList<TargetObservation> wrapped{
+        subjectObservation(0, 175.0, 0.0, 3.0, 3.0),
+        subjectObservation(0, -175.0, 0.0, 3.0, 3.0)
+    };
+    const auto across = TargetTrackPlanner::enclosingFramingDeg(wrapped, 1920, 1080);
+    QVERIFY2(across.ok, qPrintable(across.error));
+    QVERIFY2(qAbs(qAbs(across.yawDeg) - 180.0) < 1e-6,
+             qPrintable(QString::number(across.yawDeg)));
+    QVERIFY(across.fieldOfViewDeg < 40.0);
+    for (const TargetObservation &observation : wrapped) {
+        QVERIFY(subjectInsideFrame(across.yawDeg, across.pitchDeg,
+                                   across.fieldOfViewDeg, 1920.0 / 1080.0,
+                                   observation.yawDeg, observation.pitchDeg,
+                                   observation.yawRadiusDeg,
+                                   observation.pitchRadiusDeg));
+    }
+
+    // Impossible: subjects nearly opposite each other cannot share one frame, and
+    // the refusal states the measured requirement instead of clamping.
+    const QList<TargetObservation> opposite{
+        subjectObservation(0, -85.0, 0.0, 2.0, 2.0),
+        subjectObservation(0, 85.0, 0.0, 2.0, 2.0)
+    };
+    const auto impossible =
+        TargetTrackPlanner::enclosingFramingDeg(opposite, 1920, 1080);
+    QVERIFY(!impossible.ok);
+    QVERIFY2(impossible.error.contains(QStringLiteral("maximum")),
+             qPrintable(impossible.error));
+
+    // Fewer than two observations is not a framing decision.
+    QVERIFY(!TargetTrackPlanner::enclosingFramingDeg(
+                 { subjectObservation(0, 0.0, 0.0, 5.0, 5.0) }, 1920, 1080)
+                 .ok);
+}
+
+void ProjectTest::reframeCommandRunnerFramesTwoSubjects()
+{
+    const QList<qint64> times{ 0, 1000, 2000, 3000, 4000 };
+    ReframeCommandRequest request;
+    request.instruction = QStringLiteral("keep both people in frame");
+    request.defaultRange = ReframePlan::TimeRange{ 0, 4000 };
+    request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+    request.resolvedTracks = { pairTrack(QStringLiteral("t1"), -30.0, 0.0, 4.0,
+                                         4.0, times),
+                               pairTrack(QStringLiteral("t2"), 30.0, 0.0, 4.0,
+                                         4.0, times) };
+
+    const ReframeCommandResult result =
+        ReframeCommandRunner::prepare(request, nullptr, nullptr);
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QCOMPARE(result.resolvedTargets.size(), 2);
+    QVERIFY(result.resolvedTargets.at(0).id != result.resolvedTargets.at(1).id);
+
+    // One keyframe per timestamp where BOTH subjects were observed, aimed at
+    // their midpoint, with ONE lens for the whole instruction.
+    const QList<CameraKeyframe> keyframes = result.plan.keyframes();
+    QCOMPARE(keyframes.size(), 5);
+    double lens = 0.0;
+    for (int i = 0; i < keyframes.size(); ++i) {
+        QVERIFY(qAbs(keyframes.at(i).yawDeg) < 1e-6);
+        QVERIFY(qAbs(keyframes.at(i).pitchDeg) < 1e-6);
+        QCOMPARE(keyframes.at(i).timeMs, times.at(i));
+        if (i == 0) {
+            lens = keyframes.at(i).fieldOfViewDeg;
+        }
+        QCOMPARE(keyframes.at(i).fieldOfViewDeg, lens);
+        // Both subjects really are inside the frame at every keyframe.
+        QVERIFY(subjectInsideFrame(keyframes.at(i).yawDeg,
+                                   keyframes.at(i).pitchDeg, lens, 16.0 / 9.0,
+                                   -30.0, 0.0, 4.0, 4.0));
+        QVERIFY(subjectInsideFrame(keyframes.at(i).yawDeg,
+                                   keyframes.at(i).pitchDeg, lens, 16.0 / 9.0,
+                                   30.0, 0.0, 4.0, 4.0));
+    }
+    QVERIFY(lens > 20.0);
+
+    // Deterministic: the same request produces the same plan.
+    const ReframeCommandResult repeat =
+        ReframeCommandRunner::prepare(request, nullptr, nullptr);
+    QVERIFY2(repeat.ok, qPrintable(repeat.error));
+    QCOMPARE(repeat.plan.toJsonObject(), result.plan.toJsonObject());
+
+    // A requested lens that can contain both is honoured exactly.
+    ReframeCommandRequest wide = request;
+    wide.instruction = QStringLiteral("keep both people in frame, wide");
+    const ReframeCommandResult wideResult =
+        ReframeCommandRunner::prepare(wide, nullptr, nullptr);
+    QVERIFY2(wideResult.ok, qPrintable(wideResult.error));
+    for (const CameraKeyframe &keyframe : wideResult.plan.keyframes()) {
+        QCOMPARE(keyframe.fieldOfViewDeg, 120.0);
+    }
+
+    // The single-target follow path is unchanged: same request shape, one
+    // subject, and the follow behaviour it always had.
+    ReframeCommandRequest single;
+    single.instruction = QStringLiteral("keep person 1 centered");
+    single.defaultRange = ReframePlan::TimeRange{ 0, 4000 };
+    single.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+    single.resolvedTracks = { pairTrack(QStringLiteral("t1"), -30.0, 0.0, 4.0,
+                                        4.0, times) };
+    const ReframeCommandResult singleResult =
+        ReframeCommandRunner::prepare(single, nullptr, nullptr);
+    QVERIFY2(singleResult.ok, qPrintable(singleResult.error));
+    QCOMPARE(singleResult.plan.keyframes().size(), 5);
+    for (const CameraKeyframe &keyframe : singleResult.plan.keyframes()) {
+        QCOMPARE(keyframe.fieldOfViewDeg, 90.0);
+        QVERIFY(qAbs(keyframe.yawDeg + 30.0) < 1e-6);
+    }
+}
+
+void ProjectTest::reframeCommandRunnerResolvesTwoDetectedPeople()
+{
+    // Two differently-coloured people, resolved by the real detector/tracker
+    // path — no injected tracks.
+    const QImage frame = buildTargetEquirect(
+        360, 180, { EquirectDisk{ -30.0, 0.0, 10.0, QColor(255, 0, 0) },
+                    EquirectDisk{ 30.0, 0.0, 10.0, QColor(0, 0, 255) } });
+    StaticEquirectProvider provider(frame);
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+    detector.addSpec(QColor(0, 0, 255), QStringLiteral("person"));
+
+    ReframeCommandRequest request;
+    request.instruction = QStringLiteral("keep both people in frame");
+    request.defaultRange = ReframePlan::TimeRange{ 0, 2000 };
+    request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+    request.resolveConfig = smallResolverConfig();
+
+    const ReframeCommandResult result =
+        ReframeCommandRunner::prepare(request, &detector, &provider);
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QCOMPARE(result.resolvedTargets.size(), 2);
+    QVERIFY(!result.plan.keyframes().isEmpty());
+    for (const CameraKeyframe &keyframe : result.plan.keyframes()) {
+        QVERIFY(qAbs(keyframe.yawDeg) < 12.0);
+        QVERIFY(subjectInsideFrame(keyframe.yawDeg, keyframe.pitchDeg,
+                                   keyframe.fieldOfViewDeg, 16.0 / 9.0, -30.0,
+                                   0.0, 10.0, 10.0));
+        QVERIFY(subjectInsideFrame(keyframe.yawDeg, keyframe.pitchDeg,
+                                   keyframe.fieldOfViewDeg, 16.0 / 9.0, 30.0,
+                                   0.0, 10.0, 10.0));
+    }
+
+    // The flagship phrasing: "keep both of us in frame" resolves the creator
+    // (selected at +30) and the one other visible person (at -30) through the
+    // existing identity rules, and frames them together.
+    ReframeCommandRequest us = request;
+    us.instruction = QStringLiteral("keep both of us in frame");
+    us.hasCreatorSelection = true;
+    us.creatorSelection.identity = QStringLiteral("me");
+    us.creatorSelection.timeMs = 0;
+    us.creatorSelection.yawDeg = 30.0;
+    us.creatorSelection.pitchDeg = 0.0;
+    us.creatorSelection.label = QStringLiteral("person");
+
+    const ReframeCommandResult usResult =
+        ReframeCommandRunner::prepare(us, &detector, &provider);
+    QVERIFY2(usResult.ok, qPrintable(usResult.error));
+    QCOMPARE(usResult.resolvedTargets.size(), 2);
+    QVERIFY(usResult.resolvedTargets.at(0).id != usResult.resolvedTargets.at(1).id);
+    QVERIFY(!usResult.plan.keyframes().isEmpty());
+    for (const CameraKeyframe &keyframe : usResult.plan.keyframes()) {
+        QVERIFY2(qAbs(keyframe.yawDeg) < 12.0,
+                 qPrintable(QString::number(keyframe.yawDeg)));
+        QVERIFY(subjectInsideFrame(keyframe.yawDeg, keyframe.pitchDeg,
+                                   keyframe.fieldOfViewDeg, 16.0 / 9.0, -30.0,
+                                   0.0, 10.0, 10.0));
+        QVERIFY(subjectInsideFrame(keyframe.yawDeg, keyframe.pitchDeg,
+                                   keyframe.fieldOfViewDeg, 16.0 / 9.0, 30.0,
+                                   0.0, 10.0, 10.0));
+    }
+}
+
+void ProjectTest::reframeCommandRunnerRejectsUnsatisfiableMultiSubject()
+{
+    const QList<qint64> times{ 0, 1000, 2000 };
+    const auto request = [&times](const QString &instruction) {
+        ReframeCommandRequest request;
+        request.instruction = instruction;
+        request.defaultRange = ReframePlan::TimeRange{ 0, 2000 };
+        request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+        return request;
+    };
+
+    // Subjects that cannot share one frame are refused with the requirement,
+    // never clamped and never silently reduced to one subject.
+    ReframeCommandRequest apart = request(QStringLiteral("keep both people in frame"));
+    apart.resolvedTracks = { pairTrack(QStringLiteral("t1"), -80.0, 0.0, 3.0, 3.0, times),
+                             pairTrack(QStringLiteral("t2"), 80.0, 0.0, 3.0, 3.0, times) };
+    const ReframeCommandResult apartResult =
+        ReframeCommandRunner::prepare(apart, nullptr, nullptr);
+    QVERIFY(!apartResult.ok);
+    QVERIFY2(apartResult.error.contains(QStringLiteral("maximum")),
+             qPrintable(apartResult.error));
+    QVERIFY(apartResult.plan.keyframes().isEmpty());
+
+    // A named lens that cannot contain both is refused rather than widened
+    // behind the creator's back.
+    // (Subjects 100 degrees apart need ~72 vertical degrees, so a 60 degree
+    // close-up genuinely cannot contain both.)
+    ReframeCommandRequest tight = request(
+        QStringLiteral("keep both people in frame, close-up"));
+    tight.resolvedTracks = { pairTrack(QStringLiteral("t1"), -50.0, 0.0, 4.0, 4.0, times),
+                             pairTrack(QStringLiteral("t2"), 50.0, 0.0, 4.0, 4.0, times) };
+    const ReframeCommandResult tightResult =
+        ReframeCommandRunner::prepare(tight, nullptr, nullptr);
+    QVERIFY(!tightResult.ok);
+    QVERIFY2(tightResult.error.contains(QStringLiteral("too narrow")),
+             qPrintable(tightResult.error));
+
+    // A lens CHANGE cannot be expressed by one multi-subject framing: two lenses
+    // are two camera instructions, and combining them is refused rather than
+    // rendered as a single framing decision.
+    ReframeCommandRequest changing = request(
+        QStringLiteral("keep both people in frame, start wide, then push in"));
+    changing.resolvedTracks = { pairTrack(QStringLiteral("t1"), -20.0, 0.0, 4.0, 4.0, times),
+                                pairTrack(QStringLiteral("t2"), 20.0, 0.0, 4.0, 4.0, times) };
+    const ReframeCommandResult changingResult =
+        ReframeCommandRunner::prepare(changing, nullptr, nullptr);
+    QVERIFY(!changingResult.ok);
+    QVERIFY2(changingResult.error.contains(
+                 QStringLiteral("cannot be combined with other camera")),
+             qPrintable(changingResult.error));
+
+    // "both people" needs EXACTLY two visible people: three is ambiguous and is
+    // reported with its candidates rather than silently choosing two.
+    ReframeCommandRequest three = request(QStringLiteral("keep both people in frame"));
+    three.resolvedTracks = { pairTrack(QStringLiteral("t1"), -40.0, 0.0, 3.0, 3.0, times),
+                             pairTrack(QStringLiteral("t2"), 0.0, 0.0, 3.0, 3.0, times),
+                             pairTrack(QStringLiteral("t3"), 40.0, 0.0, 3.0, 3.0, times) };
+    const ReframeCommandResult threeResult =
+        ReframeCommandRunner::prepare(three, nullptr, nullptr);
+    QVERIFY(!threeResult.ok);
+    QVERIFY2(threeResult.error.contains(QStringLiteral("exactly two visible people")),
+             qPrintable(threeResult.error));
+
+    // Subjects never observed together produce no honest framing at all.
+    ReframeCommandRequest disjoint = request(QStringLiteral("keep both people in frame"));
+    disjoint.resolvedTracks = {
+        pairTrack(QStringLiteral("t1"), -20.0, 0.0, 3.0, 3.0, { 0, 1000 }),
+        pairTrack(QStringLiteral("t2"), 20.0, 0.0, 3.0, 3.0, { 1500, 2000 })
+    };
+    const ReframeCommandResult disjointResult =
+        ReframeCommandRunner::prepare(disjoint, nullptr, nullptr);
+    QVERIFY(!disjointResult.ok);
+    QVERIFY2(disjointResult.error.contains(QStringLiteral("never observed together")),
+             qPrintable(disjointResult.error));
+
+    // A subject that leaves the range is refused, not dropped.
+    ReframeCommandRequest partial = request(QStringLiteral("keep both people in frame"));
+    partial.resolvedTracks = { pairTrack(QStringLiteral("t1"), -20.0, 0.0, 3.0, 3.0, times),
+                               pairTrack(QStringLiteral("t2"), 20.0, 0.0, 3.0, 3.0, { 9000 }) };
+    const ReframeCommandResult partialResult =
+        ReframeCommandRunner::prepare(partial, nullptr, nullptr);
+    QVERIFY(!partialResult.ok);
+    QVERIFY2(partialResult.error.contains(QStringLiteral("no usable observation")),
+             qPrintable(partialResult.error));
+
+    // "both of us" needs a selected creator target: no silent substitution.
+    ReframeCommandRequest us = request(QStringLiteral("keep both of us in frame"));
+    us.resolvedTracks = { pairTrack(QStringLiteral("t1"), -20.0, 0.0, 3.0, 3.0, times),
+                          pairTrack(QStringLiteral("t2"), 20.0, 0.0, 3.0, 3.0, times) };
+    const ReframeCommandResult usResult =
+        ReframeCommandRunner::prepare(us, nullptr, nullptr);
+    QVERIFY(!usResult.ok);
+    QVERIFY2(usResult.error.contains(QStringLiteral("could not resolve 'me'")),
+             qPrintable(usResult.error));
+
+    // Mixing a multi-subject framing with a direction or another camera
+    // instruction is refused rather than partially executed.
+    ReframeCommandRequest mixed = request(
+        QStringLiteral("pan right and keep both people in frame"));
+    mixed.resolvedTracks = { pairTrack(QStringLiteral("t1"), -20.0, 0.0, 3.0, 3.0, times),
+                             pairTrack(QStringLiteral("t2"), 20.0, 0.0, 3.0, 3.0, times) };
+    const ReframeCommandResult mixedResult =
+        ReframeCommandRunner::prepare(mixed, nullptr, nullptr);
+    QVERIFY(!mixedResult.ok);
+    QVERIFY2(mixedResult.error.contains(QStringLiteral("explicit camera direction")),
+             qPrintable(mixedResult.error));
+}
+
+void ProjectTest::reframeCommandRunnerFramesMovingSubjectsAndReplays()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable in this environment");
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString source;
+    QVERIFY(createEquirectReviewVideo(directory.path(),
+                                      FrameExtractor::defaultExecutablePath(), 8,
+                                      &source));
+    const QFileInfo sourceBefore(source);
+    const QString sourceDigestBefore = sha256Of(readFileBytes(source));
+
+    // Two subjects walking APART, sampled at the follow resolution the command
+    // path uses. The pair spans more and more, so the lens must be wide enough
+    // for the worst moment of the whole instruction.
+    QList<qint64> times;
+    for (int i = 0; i < 9; ++i) {
+        times.append(i * 500);
+    }
+    const auto yawAt = [](int i) { return 12.0 + 4.0 * i; };
+    TargetTrack left(QStringLiteral("t1"), QStringLiteral("person"));
+    TargetTrack right(QStringLiteral("t2"), QStringLiteral("person"));
+    for (int i = 0; i < times.size(); ++i) {
+        left.append(subjectObservation(times.at(i), -yawAt(i), 0.0, 3.0, 3.0));
+        right.append(subjectObservation(times.at(i), yawAt(i), 0.0, 3.0, 3.0));
+    }
+
+    ReframeCommandRequest request;
+    request.sourcePath = source;
+    request.sourceMediaId = QStringLiteral("multi-subject-media");
+    request.instruction = QStringLiteral("keep both people in frame");
+    request.defaultRange = ReframePlan::TimeRange{ 0, 4000 };
+    request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+    request.resolvedTracks = { left, right };
+
+    const QString firstOutput = directory.filePath(QStringLiteral("pair.mp4"));
+    request.outputPath = firstOutput;
+    const ReframeCommandResult result =
+        ReframeCommandRunner::run(request, nullptr, nullptr);
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QVERIFY(QFileInfo::exists(firstOutput));
+
+    const QList<CameraKeyframe> keyframes = result.plan.keyframes();
+    QVERIFY(keyframes.size() >= 5);
+    const double lens = keyframes.first().fieldOfViewDeg;
+    for (int i = 0; i < keyframes.size(); ++i) {
+        // The aim is the running midpoint of the two subjects: the pair is
+        // symmetric, so the camera stays at yaw 0 while the pair walks apart.
+        QVERIFY2(qAbs(keyframes.at(i).yawDeg) < 1e-6,
+                 qPrintable(QString::number(keyframes.at(i).yawDeg)));
+        QCOMPARE(keyframes.at(i).fieldOfViewDeg, lens);
+        if (i > 0) {
+            QVERIFY(keyframes.at(i).timeMs > keyframes.at(i - 1).timeMs);
+        }
+        // Both subjects, at the positions they actually had at this keyframe's
+        // time, really are inside the very same lens.
+        QVERIFY(subjectInsideFrame(keyframes.at(i).yawDeg,
+                                   keyframes.at(i).pitchDeg, lens, 16.0 / 9.0,
+                                   -yawAt(i), 0.0, 3.0, 3.0));
+        QVERIFY(subjectInsideFrame(keyframes.at(i).yawDeg,
+                                   keyframes.at(i).pitchDeg, lens, 16.0 / 9.0,
+                                   yawAt(i), 0.0, 3.0, 3.0));
+    }
+    // The lens was driven by the WIDEST moment, not the first one: at the end the
+    // pair needs far more than the initial separation would have.
+    QVERIFY(keyframes.size() == times.size());
+    QVERIFY(lens > 20.0);
+    QVERIFY(!subjectInsideFrame(0.0, 0.0, 20.0, 16.0 / 9.0, -yawAt(8), 0.0, 3.0,
+                                3.0));
+
+    // Deterministic: the same command renders the same frames.
+    ReframeCommandRequest repeat = request;
+    const QString repeatOutput = directory.filePath(QStringLiteral("pair_again.mp4"));
+    repeat.outputPath = repeatOutput;
+    const ReframeCommandResult repeatResult =
+        ReframeCommandRunner::run(repeat, nullptr, nullptr);
+    QVERIFY2(repeatResult.ok, qPrintable(repeatResult.error));
+    QCOMPARE(repeatResult.plan.toJsonObject(), result.plan.toJsonObject());
+    const QByteArray firstFrames = decodeAllFramesRaw(firstOutput);
+    QVERIFY(!firstFrames.isEmpty());
+    QCOMPARE(sha256Of(decodeAllFramesRaw(repeatOutput)), sha256Of(firstFrames));
+
+    // Replay: the persisted decision carries the whole multi-subject plan, so the
+    // perception-free path reproduces the render exactly.
+    const MediaItem media =
+        MediaItem::createFromFilePath(source, nullptr);
+    QVERIFY(media.isValid());
+    const EditDecision decision = EditDecision::fromPlan(
+        result.plan, media, request.instruction,
+        QDateTime::fromMSecsSinceEpoch(0, Qt::UTC));
+    const QString decisionPath = directory.filePath(QStringLiteral("decision.json"));
+    QString error;
+    QVERIFY2(decision.save(decisionPath, &error), qPrintable(error));
+    bool loaded = false;
+    const EditDecision restored = EditDecision::load(decisionPath, &loaded, &error);
+    QVERIFY2(loaded, qPrintable(error));
+    QCOMPARE(restored.plan().toJsonObject(), result.plan.toJsonObject());
+    QCOMPARE(restored.plan().keyframes().size(), keyframes.size());
+
+    const QString replayOutput = directory.filePath(QStringLiteral("pair_replay.mp4"));
+    const ReframePipeline::Result replayed =
+        ReframePipeline::renderPlan(restored.plan(), source, replayOutput, nullptr);
+    QVERIFY2(replayed.ok, qPrintable(replayed.error));
+    QCOMPARE(sha256Of(decodeAllFramesRaw(replayOutput)), sha256Of(firstFrames));
+
+    // Source media is untouched by any of it.
+    QCOMPARE(QFileInfo(source).size(), sourceBefore.size());
+    QCOMPARE(QFileInfo(source).lastModified(), sourceBefore.lastModified());
+    QCOMPARE(sha256Of(readFileBytes(source)), sourceDigestBefore);
 }
 
 void ProjectTest::mainWindowShowsReframeOutputs()

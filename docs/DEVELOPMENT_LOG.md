@@ -2160,3 +2160,46 @@ The 360 pipeline could aim and follow the camera but could not change its lens. 
 
 - Decision 049 recorded (natural-language framing is a lens on the existing plan: a framing clause is a camera move, the lens persists until changed, and IPC-4 guarantees a requested lens is reached). Decisions 017-048 preserved unchanged.
 
+
+
+## 2026-09-18 — Phase 4 Objective 30: Multi-Subject Framing
+
+### Objective
+
+Make "keep both of us in frame" work: resolve two EXISTING identities and produce one deterministic camera path that keeps both inside the frame whenever the geometry and the supported field of view permit it — without new perception, a new plan type or any persisted-schema change, and without ever dropping, substituting or clamping a subject.
+
+### What inspection found
+
+Three questions decided whether this was ready, and all three were answered from the code before anything was written:
+
+- **Representation already sufficient.** A `CameraKeyframe` carries yaw, pitch, roll and a vertical field of view, and `CameraPath` already interpolates all four. A framing that contains two subjects is a keyframe aimed between them at a lens wide enough for both, repeated over joint observation times. Nothing in `ReframePlan`, `CameraKeyframe`, `EditDecision` or the `Project` schema needed to change.
+- **Perception already sufficient.** `TargetResolver` returns every track it resolved; `TargetTrack` reports each observation's angular footprint (`yawRadiusDeg`/`pitchRadiusDeg`) and interpolates with `sampleAt`; `TargetSelector` resolves "me", "the other person" and the canonical "person 1"/"person 2" order deterministically, reporting ambiguity with candidates rather than choosing. No new detector, provider or model was needed — and none was added.
+- **The mathematics has an exact answer.** `EquirectView` builds its rays as `forward + right·(ndcX·tanHalfFov·aspect) + up·(ndcY·tanHalfFov)`, so a subject is inside the frame exactly when `|sin t·cos p| ≤ tan(v/2)·aspect` and `|sin p| ≤ tan(v/2)`. Inverting that conservatively gives the framing rule, with no invented threshold.
+- One gap was identified and deliberately **not** papered over: `ReframeContract` cannot verify this. Decision 035 established that the plan retains camera coordinates only, so "both subjects are inside the frame" is undecidable from `(intent, plan)`; a cosmetic IPC-5 asserting that two ids resolved would prove nothing. The guarantee is enforced where the identities and footprints exist — in the runner, before planning — and asserted by tests using the exact containment condition.
+
+### What was built
+
+- **`ReframeCameraMove::subjectGroup`** (`None`/`CreatorAndOther`/`TwoPeople`), an in-memory field like `followSubject`; the parser records the GROUP and never the tracks, so resolution happens at command time against current tracks and identity state and nothing is persisted.
+- **Plural phrasing** with a required framing verb: "both of us", "us both", "the two of us" (creator + the one other visible person) and "both people", "both persons", "both of them", "the two people", "the two of them" (exactly two visible people). A passing mention of two people is not turned into an instruction, and a plural clause that also carries a direction keeps both so the command can refuse the combination instead of silently dropping half of it.
+- **`TargetTrackPlanner::enclosingFramingDeg()`** — pure framing mathematics: yaw unwrapped around the first subject (so ±180 is framed the short way round), spans built from each subject's reported footprint, aim at the midpoint, lens from the conservative inversion of the renderer's basis and the output aspect, renderable limits enforced.
+- **`TargetTrackPlanner::planTracks()`** — one keyframe per timestamp where EVERY requested subject was actually observed (nothing interpolated or invented), ONE lens for the whole instruction (the tightest that contains both), and `CameraPath` holding the framing in between.
+- **A dedicated runner branch** that resolves the group through the existing selector/identity rules, uses the follow-resolution sampling budget (Objective 24), composes with the Objective 29 lens vocabulary and Objective 14 temporal edits, and refuses every unsatisfiable case with a specific reason.
+- **`ReframePlanBuilder`** refuses an unresolved plural move rather than approximating one.
+
+### Verification
+
+- 6 new model-free tests: `reframeIntentParsesMultiSubjectFraming`; `reframeMultiSubjectFramingGeometry` (containment checked with the exact camera basis, pitch-dominated pair, vertical output, ±180 wraparound, impossible pair refused, fewer than two observations rejected); `reframeCommandRunnerFramesTwoSubjects` (two identities, one keyframe per joint observation, one lens, containment everywhere, determinism, requested wide lens honoured, single-target follow unchanged); `reframeCommandRunnerResolvesTwoDetectedPeople` (two really detected people, plus the flagship "keep both of us in frame" through a creator selection and "the other person"); `reframeCommandRunnerRejectsUnsatisfiableMultiSubject` (cannot fit, requested lens too narrow, combination with another camera instruction, three people for "both people", never observed together, one subject unusable in range, unselected creator, plural plus direction); `reframeCommandRunnerFramesMovingSubjectsAndReplays` (a pair walking apart, rendered twice with equal frames, the plan persisted in an `EditDecision` and replayed to identical frames, source bytes/mtime/hash unchanged).
+- Targeted regression over the parser, builder, contract, command runner, planners, camera path, selector/resolver/tracker, pipeline, render equivalence, replay, application commands and the Objective 28/29 behaviours: **102 passed / 0 failed / 0 skipped** (39.7 s).
+- Official `scripts/build_and_test.sh`: exit 0, **478 passed / 0 failed / 9 skipped** (66.1 s). Objective 29 baseline was 472/0/9; the delta is exactly the 6 new tests, and the 9 skips are unchanged and by design (8 environment-gated real-media/model integrations plus the child-only replay slot).
+
+### Boundary notes / not implemented
+
+- Only TWO subjects are supported. Groups larger than two, dynamic group acquisition and per-subject framing differencing are out of scope.
+- The pair path is deliberately **not smoothed**: the existing symmetric smoothing is defined for one direction sequence, and smoothing a per-sample enclosure could move the camera off the framing that guarantees containment. A containment-preserving smoothing is a recorded follow-up.
+- Framing offsets/lead room remain deliberately absent (Decision 046); multiplier zoom is not implemented; a pair observed together only once produces a single static enclosing framing; joint framing requires exact timestamp agreement between the two tracks, which is exactly what one resolver pass produces.
+- Nothing else changed: no detection, tracking, identity, threshold, sampling-density, smoothing, camera-path, renderer, decoding, audio, temporal-edit, contract-rule, replay or persisted-schema change. No new dependency, no model, no LLM, no network; source media stays read-only.
+
+### Decisions
+
+- Decision 050 recorded (multi-subject framing is one enclosing framing decision on the existing plan; the contract cannot verify containment, so the guarantee is enforced before planning where identities and footprints exist). Decisions 017-049 preserved unchanged.
+

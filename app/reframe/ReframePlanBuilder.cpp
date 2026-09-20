@@ -67,6 +67,19 @@ ReframeBuildResult ReframePlanBuilder::build(
             "No camera instruction; using a static forward camera."));
     }
 
+    // Objective 30: a plural framing instruction needs the resolved subjects to
+    // decide its framing (a direction and a lens are not enough), so the builder
+    // refuses it rather than approximating one. ReframeCommandRunner resolves
+    // the group and plans it through TargetTrackPlanner before reaching here.
+    for (const ReframeCameraMove &move : moves) {
+        if (move.subjectGroup != ReframeSubjectGroup::None) {
+            result.error = QStringLiteral(
+                "A multi-subject framing instruction must be resolved into "
+                "framing before a plan is built.");
+            return result;
+        }
+    }
+
     // Resolve every move to a direction before building any keyframe.
     QList<QPair<double, double>> directions;
     for (const ReframeCameraMove &move : moves) {

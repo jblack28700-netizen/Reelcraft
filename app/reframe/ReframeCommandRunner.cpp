@@ -202,6 +202,34 @@ ReframeCommandResult ReframeCommandRunner::prepare(
     }
     QString followTrackId;
 
+    // Objective 30: a plural framing request ("keep both of us in frame"). The
+    // group is recorded by the parser and resolved HERE, against the current
+    // tracks and identity state, so nothing is fabricated at parse time.
+    ReframeSubjectGroup pluralGroup = ReframeSubjectGroup::None;
+    for (const ReframeCameraMove &move : result.intent.moves) {
+        if (move.subjectGroup != ReframeSubjectGroup::None) {
+            pluralGroup = move.subjectGroup;
+            break;
+        }
+    }
+    const bool wantsMultiSubject = pluralGroup != ReframeSubjectGroup::None;
+    if (wantsMultiSubject) {
+        // One framing decision cannot be combined with other camera
+        // instructions: the combined framing would have to drop one of them.
+        if (result.intent.moves.size() != 1) {
+            result.error = QStringLiteral(
+                "A multi-subject framing instruction cannot be combined with "
+                "other camera instructions.");
+            return result;
+        }
+        if (result.intent.moves.first().hasDirection) {
+            result.error = QStringLiteral(
+                "A multi-subject framing instruction cannot also carry an "
+                "explicit camera direction.");
+            return result;
+        }
+    }
+
     const bool wantsSpeaker = !speakerReferences.isEmpty();
     if (wantsSpeaker) {
         // Only an unambiguous speaker-follow request is supported in one
@@ -233,7 +261,7 @@ ReframeCommandResult ReframeCommandRunner::prepare(
 
     QList<TargetTrack> tracks;
     qint64 lastResolvedAtMs = range.endMs;
-    if (!references.isEmpty()) {
+    if (!references.isEmpty() || wantsMultiSubject) {
         if (!request.resolvedTracks.isEmpty()) {
             // The caller already resolved tracks; use them as-is.
             tracks = request.resolvedTracks;
@@ -242,10 +270,14 @@ ReframeCommandResult ReframeCommandRunner::prepare(
                     .arg(tracks.size()));
         } else {
             if (!detector) {
-                result.error = QStringLiteral(
-                    "Instruction references a subject (%1) but no target "
-                    "detector was provided.")
-                                   .arg(references.join(QStringLiteral(", ")));
+                result.error = wantsMultiSubject
+                    ? QStringLiteral(
+                          "Instruction references several subjects but no target "
+                          "detector was provided.")
+                    : QStringLiteral(
+                          "Instruction references a subject (%1) but no target "
+                          "detector was provided.")
+                          .arg(references.join(QStringLiteral(", ")));
                 return result;
             }
 
@@ -302,9 +334,12 @@ ReframeCommandResult ReframeCommandRunner::prepare(
             if (timestamps.isEmpty()) {
                 // A follow instruction samples the range at its own temporal
                 // resolution; every other command keeps the existing budget.
-                const int samples = followReference.isEmpty()
-                    ? qMax(1, request.maxResolveSamples)
-                    : followSampleCountFor(range, request);
+                // A multi-subject framing needs a trajectory like a follow
+                // command, so it uses the follow sampling budget (Objective 24).
+                const int samples =
+                    (followReference.isEmpty() && !wantsMultiSubject)
+                        ? qMax(1, request.maxResolveSamples)
+                        : followSampleCountFor(range, request);
                 timestamps = deriveTimestamps(range, samples);
             }
             lastResolvedAtMs = timestamps.last();
@@ -437,6 +472,142 @@ ReframeCommandResult ReframeCommandRunner::prepare(
             ReframeContract::check(result.intent, result.plan);
         if (!contract.isConsistent()) {
             result.error = contract.summary();
+            return result;
+        }
+        result.plan.setSourceMediaId(request.sourceMediaId);
+        result.ok = true;
+        return result;
+    }
+
+    // --- Multi-subject framing (Objective 30) --------------------------------
+    // "keep both of us in frame" resolves two EXISTING identities and produces
+    // one camera path that keeps both inside the frame. Every reference must
+    // resolve: an unresolved or ambiguous subject fails the command instead of
+    // being dropped, and a framing that cannot contain both is refused with the
+    // measured requirement instead of being clamped.
+    if (wantsMultiSubject) {
+        TargetIdentityRegistry registry(request.identityConfig);
+        if (request.hasCreatorSelection) {
+            QString bindError;
+            if (registry.bindFromSelection(request.creatorSelection, tracks,
+                                           &bindError)) {
+                registry.update(tracks, lastResolvedAtMs);
+            } else {
+                result.notes.append(QStringLiteral(
+                    "Creator selection did not bind: %1").arg(bindError));
+            }
+        }
+
+        QStringList groupReferences;
+        if (pluralGroup == ReframeSubjectGroup::CreatorAndOther) {
+            // The creator and the one other visible person, resolved through the
+            // existing identity rules ("me" needs a selection; "the other
+            // person" is ambiguous when more than one other is visible).
+            groupReferences = { QStringLiteral("me"),
+                                QStringLiteral("the other person") };
+        } else {
+            // "both people": EXACTLY two visible people, in the selector's own
+            // canonical order. More or fewer is ambiguous and is reported with
+            // its candidates rather than choosing.
+            QList<TargetTrack> active;
+            for (const TargetTrack &track : tracks) {
+                if (track.active() && !track.isEmpty()) {
+                    active.append(track);
+                }
+            }
+            QList<TargetTrack> people;
+            for (const TargetTrack &track : active) {
+                if (track.label().compare(QStringLiteral("person"),
+                                          Qt::CaseInsensitive) == 0) {
+                    people.append(track);
+                }
+            }
+            if (people.isEmpty()) {
+                people = active;
+            }
+            if (people.size() != 2) {
+                QStringList ids;
+                for (const TargetTrack &track : people) {
+                    ids.append(track.id());
+                }
+                result.error = QStringLiteral(
+                    "Keeping both people in frame needs exactly two visible "
+                    "people; %1 were resolved (%2).")
+                                   .arg(people.size())
+                                   .arg(ids.isEmpty()
+                                            ? QStringLiteral("none")
+                                            : ids.join(QStringLiteral(", ")));
+                return result;
+            }
+            groupReferences = { QStringLiteral("person 1"),
+                                QStringLiteral("person 2") };
+        }
+
+        QList<ReframeTarget> resolved;
+        QStringList resolvedIds;
+        for (const QString &reference : groupReferences) {
+            const TargetSelectionResult selection =
+                TargetSelector::select(reference, tracks, registry);
+            if (!selection.resolved) {
+                result.error = QStringLiteral(
+                    "Multi-subject framing could not resolve '%1': %2")
+                                   .arg(reference, selection.error);
+                return result;
+            }
+            if (resolvedIds.contains(selection.targetId)) {
+                result.error = QStringLiteral(
+                    "Multi-subject framing resolved two references to the same "
+                    "target (%1).")
+                                   .arg(selection.targetId);
+                return result;
+            }
+            resolvedIds.append(selection.targetId);
+            resolved.append(selection.target);
+            result.notes.append(QStringLiteral("Resolved '%1' to %2 (%3).")
+                                    .arg(reference, selection.targetId,
+                                         selection.method));
+        }
+        result.resolvedTargets = resolved;
+
+        const ReframePlan::OutputSpec pluralOutput =
+            result.intent.hasOutput
+                ? ReframePlan::OutputSpec{ result.intent.outputWidth,
+                                           result.intent.outputHeight,
+                                           result.intent.outputFps }
+                : request.defaultOutput;
+
+        // Objective 29 composes: a named lens is honoured when it can contain
+        // both subjects. A lens CHANGE cannot reach here at all — two lenses
+        // need two clauses, which is two camera instructions, and the check at
+        // the top of this branch refuses that combination rather than rendering
+        // one framing decision for a request that asked for two.
+        const QList<double> pluralFieldOfViews =
+            result.intent.requestedFieldOfViews();
+        TargetTrackPlanner::Config pluralConfig;
+        pluralConfig.minConfidence = request.resolveConfig.minConfidence;
+        if (pluralFieldOfViews.size() == 1) {
+            pluralConfig.requestedFieldOfViewDeg = pluralFieldOfViews.first();
+        }
+
+        ReframePlan pluralPlan;
+        QString pluralError;
+        if (!TargetTrackPlanner::planTracks(tracks, resolvedIds, range,
+                                            pluralOutput, pluralConfig,
+                                            &pluralPlan, &pluralError)) {
+            result.error = pluralError.isEmpty()
+                ? QStringLiteral("Multi-subject framing could not be planned.")
+                : pluralError;
+            return result;
+        }
+        result.plan = pluralPlan;
+        result.notes.append(QStringLiteral(
+            "Framed %1 subjects for the whole instruction.")
+                                .arg(resolvedIds.size()));
+        applyTemporal(&result.plan);
+        const ContractReport pluralContract =
+            ReframeContract::check(result.intent, result.plan);
+        if (!pluralContract.isConsistent()) {
+            result.error = pluralContract.summary();
             return result;
         }
         result.plan.setSourceMediaId(request.sourceMediaId);

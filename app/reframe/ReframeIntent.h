@@ -17,6 +17,24 @@ struct ReframeTarget
     double pitchDeg = 0.0;
 };
 
+// Objective 30: a PLURAL framing request. The parser records WHICH GROUP was
+// asked for and never which tracks: resolution happens against the current
+// tracks and identity state at command time, exactly as a single reference
+// does, so nothing is fabricated at parse time and nothing is persisted.
+enum class ReframeSubjectGroup
+{
+    // An ordinary single-subject (or direction-only) instruction.
+    None,
+    // "both of us", "us both", "the two of us": the creator and the one other
+    // visible person. Resolved through the existing identity rules, so an
+    // unselected creator or more than one other person is refused honestly.
+    CreatorAndOther,
+    // "both people", "both of them": exactly two visible people, in the
+    // selector's canonical order. More (or fewer) than two is ambiguous and is
+    // refused rather than silently choosing.
+    TwoPeople,
+};
+
 // One ordered camera instruction parsed from a natural-language request.
 struct ReframeCameraMove
 {
@@ -44,6 +62,13 @@ struct ReframeCameraMove
     // of view, so this introduces no schema change.
     bool hasFieldOfView = false;
     double fieldOfViewDeg = 90.0;
+
+    // Objective 30: set when the clause asked to keep SEVERAL subjects framed
+    // together ("keep both of us in frame"). Such a move carries no single
+    // `targetRef` and no direction: the group is resolved at command time and
+    // executed as one camera path that keeps every resolved subject inside the
+    // frame. In-memory only, like every other field here.
+    ReframeSubjectGroup subjectGroup = ReframeSubjectGroup::None;
 };
 
 // Structured interpretation of a natural-language reframing request. This is

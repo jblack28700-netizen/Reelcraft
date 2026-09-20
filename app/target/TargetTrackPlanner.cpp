@@ -2,6 +2,8 @@
 
 #include "target/EquirectProjection.h"
 
+#include <QtMath>
+
 #include <algorithm>
 #include <cmath>
 
@@ -162,3 +164,282 @@ bool TargetTrackPlanner::planTrack(const TargetTrack &track,
     *outPlan = plan;
     return true;
 }
+
+TargetTrackPlanner::EnclosingFraming TargetTrackPlanner::enclosingFramingDeg(
+    const QList<TargetObservation> &observations, int outputWidth,
+    int outputHeight)
+{
+    EnclosingFraming framing;
+    if (observations.size() < 2) {
+        framing.error = QStringLiteral(
+            "Framing several subjects needs at least two observations.");
+        return framing;
+    }
+    if (outputWidth <= 0 || outputHeight <= 0) {
+        framing.error = QStringLiteral(
+            "Enclosing framing needs a valid output geometry.");
+        return framing;
+    }
+    for (const TargetObservation &observation : observations) {
+        if (!observation.isValid()) {
+            framing.error =
+                QStringLiteral("Enclosing framing has an invalid observation.");
+            return framing;
+        }
+    }
+
+    // Yaw is unwrapped around the first observation, so a group that spans the
+    // +/-180 boundary is measured the short way round instead of across the
+    // whole sphere.
+    const double base =
+        EquirectProjection::normalizeYawDeg(observations.first().yawDeg);
+    double minYaw = 0.0;
+    double maxYaw = 0.0;
+    double minPitch = 0.0;
+    double maxPitch = 0.0;
+    bool first = true;
+    for (const TargetObservation &observation : observations) {
+        const double yaw = base + EquirectProjection::shortestYawDeltaDeg(
+                                      base, observation.yawDeg);
+        const double yawRadius = qMax(0.0, observation.yawRadiusDeg);
+        const double pitchRadius = qMax(0.0, observation.pitchRadiusDeg);
+        const double pitch =
+            EquirectProjection::clampPitchDeg(observation.pitchDeg);
+        const double lowYaw = yaw - yawRadius;
+        const double highYaw = yaw + yawRadius;
+        const double lowPitch = qMax(-EquirectProjection::MaxPitchDeg,
+                                     pitch - pitchRadius);
+        const double highPitch = qMin(EquirectProjection::MaxPitchDeg,
+                                      pitch + pitchRadius);
+        if (first) {
+            minYaw = lowYaw;
+            maxYaw = highYaw;
+            minPitch = lowPitch;
+            maxPitch = highPitch;
+            first = false;
+            continue;
+        }
+        minYaw = qMin(minYaw, lowYaw);
+        maxYaw = qMax(maxYaw, highYaw);
+        minPitch = qMin(minPitch, lowPitch);
+        maxPitch = qMax(maxPitch, highPitch);
+    }
+
+    const double yawSpan = maxYaw - minYaw;
+    const double pitchSpan = maxPitch - minPitch;
+    const double aspect =
+        static_cast<double>(outputWidth) / static_cast<double>(outputHeight);
+    // Vertical requirement from the pitch span, and the vertical requirement
+    // whose horizontal coverage equals the yaw span (the exact inversion of the
+    // renderer's basis). Both are conservative, as documented in the header.
+    const double verticalFromPitch = pitchSpan;
+    const double verticalFromYaw = qRadiansToDegrees(
+        2.0 * std::atan(std::tan(qDegreesToRadians(yawSpan / 2.0)) / aspect));
+    if (!std::isfinite(verticalFromPitch) || !std::isfinite(verticalFromYaw)) {
+        framing.error = QStringLiteral(
+            "Enclosing framing could not be computed from the observations.");
+        return framing;
+    }
+
+    double required = qMax(verticalFromPitch, verticalFromYaw);
+    if (required > EquirectProjection::MaxFieldOfViewDeg) {
+        framing.error = QStringLiteral(
+            "Keeping every requested subject in frame needs at least %1 "
+            "degrees of field of view, which exceeds the supported maximum of "
+            "%2 degrees.")
+                            .arg(QString::number(required, 'f', 1))
+                            .arg(QString::number(
+                                EquirectProjection::MaxFieldOfViewDeg, 'f', 1));
+        return framing;
+    }
+    // A framing tighter than the renderer's minimum is not renderable; raising
+    // it to the minimum still contains every subject, so this is not a clamp
+    // that could hide one.
+    required = qMax(required, EquirectProjection::MinFieldOfViewDeg);
+
+    framing.ok = true;
+    framing.yawDeg =
+        EquirectProjection::normalizeYawDeg((minYaw + maxYaw) / 2.0);
+    framing.pitchDeg =
+        EquirectProjection::clampPitchDeg((minPitch + maxPitch) / 2.0);
+    framing.fieldOfViewDeg = required;
+    return framing;
+}
+
+bool TargetTrackPlanner::planTracks(const QList<TargetTrack> &tracks,
+                                    const QList<QString> &trackIds,
+                                    const ReframePlan::TimeRange &range,
+                                    const ReframePlan::OutputSpec &output,
+                                    const Config &config, ReframePlan *outPlan,
+                                    QString *error)
+{
+    if (error) {
+        error->clear();
+    }
+    const auto fail = [error](const QString &message) {
+        if (error) {
+            *error = message;
+        }
+        return false;
+    };
+
+    if (!outPlan) {
+        return fail(QStringLiteral("Multi-subject plan output is null."));
+    }
+    if (!range.isValid()) {
+        return fail(QStringLiteral("Multi-subject plan range is invalid."));
+    }
+    if (!output.isValid()) {
+        return fail(QStringLiteral("Multi-subject plan output spec is invalid."));
+    }
+    if (trackIds.size() < 2) {
+        return fail(QStringLiteral(
+            "Framing several subjects needs at least two resolved targets."));
+    }
+
+    // Every requested subject must have a usable observation inside the range.
+    // A subject with none is refused: dropping it would answer a different
+    // question than the one that was asked.
+    QList<QList<TargetObservation>> usable;
+    for (const QString &trackId : trackIds) {
+        const TargetTrack *track = nullptr;
+        for (const TargetTrack &candidate : tracks) {
+            if (candidate.id() == trackId) {
+                track = &candidate;
+                break;
+            }
+        }
+        if (!track) {
+            return fail(QStringLiteral(
+                "Resolved target '%1' is no longer among the resolved tracks.")
+                            .arg(trackId));
+        }
+        QList<TargetObservation> selected;
+        for (const TargetObservation &observation : track->observations()) {
+            if (!observation.isValid()
+                || observation.confidence < config.minConfidence) {
+                continue;
+            }
+            if (observation.timeMs < range.startMs
+                || observation.timeMs > range.endMs) {
+                continue;
+            }
+            selected.append(observation);
+        }
+        if (selected.isEmpty()) {
+            return fail(QStringLiteral(
+                "Target '%1' has no usable observation in the requested range.")
+                            .arg(trackId));
+        }
+        usable.append(selected);
+    }
+
+    // A framing can only be computed where EVERY requested subject was observed.
+    // Nothing is interpolated or invented, so a subject that was not seen at a
+    // timestamp simply produces no keyframe there.
+    QList<qint64> jointTimes;
+    const auto observationAt = [](const QList<TargetObservation> &list,
+                                  qint64 timeMs) -> const TargetObservation * {
+        for (const TargetObservation &observation : list) {
+            if (observation.timeMs == timeMs) {
+                return &observation;
+            }
+        }
+        return nullptr;
+    };
+    for (const TargetObservation &observation : usable.first()) {
+        bool everySubjectObserved = true;
+        for (int i = 1; i < usable.size(); ++i) {
+            if (!observationAt(usable.at(i), observation.timeMs)) {
+                everySubjectObserved = false;
+                break;
+            }
+        }
+        if (everySubjectObserved) {
+            jointTimes.append(observation.timeMs);
+        }
+    }
+    if (jointTimes.isEmpty()) {
+        return fail(QStringLiteral(
+            "The requested subjects were never observed together in the "
+            "requested range."));
+    }
+
+    // The framing at every joint timestamp, and the tightest lens that contains
+    // every subject for the WHOLE instruction.
+    QList<EnclosingFraming> framings;
+    double requiredLens = 0.0;
+    qint64 requiredAtMs = jointTimes.first();
+    for (qint64 timeMs : jointTimes) {
+        QList<TargetObservation> atTime;
+        for (const QList<TargetObservation> &list : usable) {
+            if (const TargetObservation *observation =
+                    observationAt(list, timeMs)) {
+                atTime.append(*observation);
+            }
+        }
+        const EnclosingFraming framing =
+            enclosingFramingDeg(atTime, output.width, output.height);
+        if (!framing.ok) {
+            return fail(QStringLiteral("%1 (at %2 ms)")
+                            .arg(framing.error)
+                            .arg(timeMs));
+        }
+        framings.append(framing);
+        if (framing.fieldOfViewDeg > requiredLens) {
+            requiredLens = framing.fieldOfViewDeg;
+            requiredAtMs = timeMs;
+        }
+    }
+
+    // One lens for the whole instruction. A lens the instruction explicitly
+    // asked for is honoured when it can contain every subject, and refused when
+    // it cannot — never widened behind the creator's back, and never narrowed
+    // into a framing that drops someone.
+    double lensDeg = requiredLens;
+    if (config.requestedFieldOfViewDeg > 0.0) {
+        if (config.requestedFieldOfViewDeg + 1e-9 < requiredLens) {
+            return fail(QStringLiteral(
+                "The requested field of view (%1 degrees) is too narrow to "
+                "keep every requested subject in frame: at least %2 degrees is "
+                "needed (at %3 ms).")
+                            .arg(QString::number(config.requestedFieldOfViewDeg,
+                                                'f', 1))
+                            .arg(QString::number(requiredLens, 'f', 1))
+                            .arg(requiredAtMs));
+        }
+        lensDeg = config.requestedFieldOfViewDeg;
+    }
+
+    QList<CameraKeyframe> keyframes;
+    for (int i = 0; i < jointTimes.size(); ++i) {
+        CameraKeyframe frame;
+        frame.timeMs = jointTimes.at(i);
+        frame.yawDeg = framings.at(i).yawDeg;
+        frame.pitchDeg = framings.at(i).pitchDeg;
+        frame.rollDeg = 0.0;
+        frame.fieldOfViewDeg = lensDeg;
+        frame.interpolation = CameraKeyframe::Interpolation::Linear;
+        if (!keyframes.isEmpty() && frame.timeMs <= keyframes.last().timeMs) {
+            continue;
+        }
+        keyframes.append(frame);
+    }
+    if (keyframes.isEmpty()) {
+        return fail(QStringLiteral(
+            "The requested subjects produced no framing keyframe."));
+    }
+
+    ReframePlan plan;
+    plan.setSourceRange(range);
+    plan.setOutput(output);
+    plan.setKeyframes(keyframes);
+
+    QString validationError;
+    if (!plan.isValid(&validationError)) {
+        return fail(validationError);
+    }
+    *outPlan = plan;
+    return true;
+}
+

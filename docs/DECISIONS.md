@@ -1795,3 +1795,54 @@ This is a framing capability, not a direction capability. For automated reframin
 
 *Decisions 001-048 are preserved verbatim; this decision adds to them and supersedes none of them.*
 
+
+---
+
+# Decision 050 — Multi-Subject Framing Is One Enclosing Framing Decision on the Existing Plan
+
+**Status:** Accepted (2026-09-18, 360 Reframing Objective 30)
+
+## Context
+
+Every reframing decision the engine could express until this objective aimed the camera at ONE subject: `ReframePlanBuilder` resolved one direction per camera move, and the follow path built a trajectory through one track. "keep both of us in frame" had no representation at all — the parser found no direction and no subject, and the instruction was dropped unrecognized.
+
+Three questions had to be answered before implementing it, and inspection answered all three:
+
+- **Can the executable representation express it?** Yes, unchanged. A camera keyframe already carries yaw, pitch, roll and a vertical field of view, and `CameraPath` already interpolates all of them. A framing that contains two subjects is a keyframe aimed between them at a lens wide enough for both; a pair that moves is a sequence of such keyframes. **No plan type, no keyframe field and no schema change is required.**
+- **Can perception supply two identities at once?** Yes. `TargetResolver` already returns every track it resolved, `TargetTrack` exposes observations with their reported angular footprints and an interpolating `sampleAt`, and `TargetSelector` resolves "me", "the other person" and the canonical "person 1"/"person 2" order deterministically, reporting ambiguity rather than choosing. No new detector, provider or model is needed.
+- **What is the smallest defensible framing rule?** The one that is the exact inverse of the renderer's own camera basis.
+
+## Decision
+
+- **A plural request is a GROUP, resolved at command time.** `ReframeCameraMove` gains `subjectGroup` (`None` / `CreatorAndOther` / `TwoPeople`), an in-memory field exactly like `followSubject` and `hasFieldOfView`. The parser records WHICH group was asked for and never which tracks, so nothing is fabricated at parse time, nothing is persisted, and the same instruction resolves against whatever the current tracks and identity state are.
+  - "both of us", "us both", "the two of us" → the creator and the one other visible person, through the existing identity rules (an unselected creator, or more than one other visible person, is refused honestly).
+  - "both people", "both of them", "the two people" → EXACTLY two visible people in the selector's canonical order; more or fewer is ambiguous and is reported with its candidates rather than silently choosing two.
+  - A framing verb (or an explicit "in frame"/"in shot"/"in view") must be present, so a passing mention of two people is not turned into a framing instruction.
+- **The framing rule is the exact inversion of the renderer's camera basis.** A ray at yaw offset t and pitch p is inside a vertical-FOV v view when `|sin t · cos p| ≤ tan(v/2) · aspect` and `|sin p| ≤ tan(v/2)`. Since `tan x ≥ sin x`, requiring `tan(span/2) ≤ tan(v/2)` for both axes is **conservative** — it can never under-frame — and every subject's own reported footprint contributes to the spans. The aim is the midpoint of the two footprints (the only preference-free choice: no subject is privileged, as instructed), yaw is unwrapped first so a pair straddling ±180 is framed the short way round, and the lens is the tightest one that contains them for the WHOLE instruction. The renderer's own limits (20°-140°) bound the result; a tighter requirement is raised to the renderable minimum, which still contains both, so it is not a clamp that could hide one.
+- **It is ONE framing decision, executed as a camera path.** Framing is computed only at the timestamps where EVERY requested subject was actually observed — nothing is interpolated or invented — and between them the existing `CameraPath` interpolation holds the framing. Keyframe times come from those joint observations, which for a command path are the resolver's own follow-resolution samples (Objective 24), so the pair path is as dense as a follow path and costs the same to resolve.
+- **Objective 29 composes.** A named lens is honoured exactly when it can contain both subjects ("keep both of us in frame, wide" frames at 120°); a lens too narrow to contain them is **refused with the measured requirement**, never widened behind the creator's back. Because one framing decision has one lens, a request that names two lenses is refused as a combination of camera instructions rather than rendered at one of them.
+- **Nothing is dropped, clamped or substituted.** A subject with no usable observation in the range, subjects never observed together, a group that cannot fit inside the renderable field of view, an unresolved or ambiguous reference, or a plural request mixed with a direction or another camera instruction each fail the command with a specific reason.
+
+## Why the contract checker does NOT verify this (recorded explicitly)
+
+`ReframeContract` checks the final `(ReframeIntent, ReframePlan)` pair, and Decision 035 already established that **the plan retains camera coordinates only** — it carries no subject identity and no subject geometry. A rule asserting "both subjects are inside the frame" is therefore **not decidable** from those two values, and a rule that merely asserted "two ids were resolved" would prove nothing about the framing. Rather than add a cosmetic IPC-5, the guarantee is enforced where the identities and footprints actually exist — in `ReframeCommandRunner::prepare()` before any plan is built — and is asserted by tests that check the *exact* containment condition at every keyframe with the subjects' real positions. The existing contract rules (IPC-1..IPC-4) continue to hold and to be checked on the resulting plan, including the requested lens.
+
+## Consequences
+
+- "keep both of us in frame", "keep us both in frame", "follow both of us", "keep both people in frame", "keep both of them in frame" now produce a real framing; "…, wide" and "…, close-up" compose with the Objective 29 lens vocabulary, and compound temporal commands ("keep both of us in frame and keep 0:00 to 0:30") work through the existing composition rule.
+- **Single-target behaviour is untouched**: the ordinary builder, the single-track follow path (including its smoothing), the speaker path, aim instructions, temporal editing, audio preservation and replay are all unchanged, and the parser only classifies a clause as plural when a plural phrase AND a framing verb are present.
+- **Replay is unchanged and perception-free**: the multi-subject framing lives entirely in the persisted `ReframePlan` (yaw/pitch/FOV keyframes), so a stored decision replays to the same frames, verified by decoding.
+- **No schema, no plan type, no dependency, no model.** `ReframeIntent` is never persisted; `ReframePlan`, `CameraKeyframe`, `EditDecision` and the `Project` schema are untouched.
+- Recorded limitations: only TWO subjects are supported (a group is `CreatorAndOther` or `TwoPeople`); the pair path is not smoothed (the existing symmetric smoothing is defined for one direction sequence, and smoothing a per-sample enclosure could break the containment guarantee — a follow-up needs a containment-preserving smoothing); framing offsets and composition rules remain deliberately absent (Decision 046); a pair that is only observed together once produces a single, static enclosing framing; and the joint-framing rule requires exact timestamp agreement between the two tracks, which is what one resolver pass produces.
+- Not in this objective: arbitrary multi-person detection, new providers, face recognition, identity guessing, cinematic composition, offsets or lead room, automatic subject preference, more than two subjects, creator UI, Analysis→Reasoning, speaker/dialogue automation, in-app audio playback. Decisions 001-049 are preserved.
+
+## Verification
+
+- 6 new model-free tests: the parser (both groups, all phrasings, single-subject non-regression, a passing mention not becoming an instruction, a plural clause that also carries a direction keeping both, and composition with a named lens); the pure framing mathematics (midpoint aim, footprint- and aspect-driven lens, containment verified with the exact camera-basis condition, a pitch-dominated pair, a vertical output, ±180 wraparound, an impossible pair refused with the measured requirement, and fewer than two observations rejected); the runner with two injected tracks (two distinct resolved targets, one keyframe per joint observation, one lens, containment at every keyframe, determinism, a requested wide lens honoured, and single-target follow unchanged); the real detector/tracker path (two detected people framed together, and the flagship "keep both of us in frame" resolved through a creator selection plus "the other person"); every honest refusal (cannot fit, requested lens too narrow, combination with another camera instruction, three people for "both people", never observed together, one subject unusable in range, unselected creator, plural plus direction); and a moving pair through the real pipeline (rendered twice with equal frames, the whole plan persisted in an `EditDecision` and replayed to identical frames, with the source untouched).
+- Targeted regression over the parser, builder, contract, command runner, planners, camera path, target selector/resolver/tracker, pipeline, render equivalence, replay, application commands and the Objective 28/29 behaviours: **102 passed / 0 failed / 0 skipped** (39.7 s).
+- Official `scripts/build_and_test.sh` run at the checkpoint.
+
+---
+
+*Decisions 001-049 are preserved verbatim; this decision adds to them and supersedes none of them.*
+

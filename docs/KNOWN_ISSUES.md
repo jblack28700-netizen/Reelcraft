@@ -670,3 +670,31 @@ Each of these is a future scoped objective if it serves the 360 workflow: a mult
 
 *Related, resolved by Objective 29: no instruction could change the field of view at all. Earlier statements that every keyframe is built at a fixed 90 degrees describe the state before Decision 049 and are preserved as history.*
 
+
+# Issue — Multi-subject framing is bounded to two subjects and is unsmoothed (2026-09-18)
+
+### Status
+
+Open — intentional boundary, not a defect (Decision 050).
+
+### Description
+
+Objective 30 frames two existing identities together. Four limits are deliberate:
+
+- **Exactly two subjects.** A plural request resolves either the creator plus the one other visible person, or exactly two visible people. Larger groups, dynamic group acquisition and per-subject framing differencing are not supported; a third visible person makes "both people" ambiguous (reported with candidates) rather than being silently ignored.
+- **The pair path is not smoothed.** The Objective 26 smoothing is a centred average of one direction sequence; applied to a per-sample enclosure it could move the camera off the framing that guarantees containment. A containment-preserving smoothing is a follow-up, not a tuning change.
+- **Framing is computed only where every subject was observed together.** Nothing is interpolated or invented, so a pair seen together only once yields a single static framing, and between joint observations the existing camera-path interpolation holds the last framing.
+- **Containment is not contract-checked.** By Decision 035 the executable plan retains camera coordinates only, so "both subjects are in frame" cannot be decided from `(ReframeIntent, ReframePlan)`. The guarantee is enforced in the command runner before planning and asserted by tests that evaluate the renderer's exact containment condition.
+
+### Impact
+
+A creator can hold two people in one shot, including while they move, and is told precisely when a request cannot be satisfied. They cannot frame three or more people, cannot have two subjects framed with cinematic asymmetry, and cannot ask for a smoothed pair pan.
+
+### Planned Resolution
+
+Each is a future scoped objective if it serves the 360 workflow: groups larger than two (a general enclosure over N tracks, with an explicit ambiguity rule for which subjects), containment-preserving smoothing for pair paths, and framing offsets behind a decision that changes the meaning of "centered".
+
+---
+
+*Related, resolved by Objective 30: no instruction could frame more than one subject. Earlier statements that every camera path aims at a single resolved track describe the state before Decision 050 and are preserved as history.*
+

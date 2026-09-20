@@ -247,6 +247,48 @@ No change to `ReframePlan`, `CameraKeyframe`, `EditDecision`, the `Project` sche
 
 ---
 
+## 360 Reframing Objective 30 — Multi-Subject Framing — Complete
+
+Status: **Complete — implemented and verified (2026-09-18).**
+
+### Objective
+
+A natural-language request such as "keep both of us in frame" resolves two existing targets and produces a deterministic camera path that keeps both inside the requested framing whenever the geometry and the supported field of view permit it — without dropping, substituting or clamping either subject, and without new perception, a new plan type or any persisted-schema change.
+
+### Inspection (why this was GO)
+
+- **Representation: ready.** A `CameraKeyframe` already carries yaw, pitch, roll and a vertical field of view, and `CameraPath` already interpolates all four. A framing containing two subjects is a keyframe aimed between them at a lens wide enough for both, repeated over joint observation times — expressible with **no change** to `ReframePlan`, `CameraKeyframe` or any schema.
+- **Perception: ready.** `TargetResolver` already returns every track; `TargetTrack` reports each observation's angular footprint (`yawRadiusDeg`/`pitchRadiusDeg`); `TargetSelector` resolves "me", "the other person" and the canonical "person 1"/"person 2" order deterministically and reports ambiguity instead of choosing. No new detector, provider or model.
+- **Mathematics: ready and exact.** The enclosure rule is the exact inversion of `EquirectView`'s own basis, so it is conservative by construction (see Decision 050).
+
+### Scope (implemented)
+
+- `ReframeCameraMove::subjectGroup` (`None`/`CreatorAndOther`/`TwoPeople`) — in-memory only, resolved at command time.
+- Plural phrases: "both of us", "us both", "the two of us" (creator + the one other visible person) and "both people", "both persons", "both of them", "the two people", "the two of them" (exactly two visible people), each requiring a framing verb.
+- `TargetTrackPlanner::enclosingFramingDeg()` — pure, stateless framing mathematics: midpoint aim on unwrapped yaw, footprint-driven lens from both subjects' reported extents and the output aspect, conservative containment, ±180 wraparound, renderable limits enforced.
+- `TargetTrackPlanner::planTracks()` — one keyframe per timestamp where EVERY requested subject was actually observed, one lens for the whole instruction (the tightest that contains them, or the named one when it fits), nothing interpolated or invented between them.
+- `ReframeCommandRunner` — a dedicated multi-subject branch: group resolution through the existing selector/identity rules, the follow-resolution sampling budget (Objective 24), composition with Objective 29 lenses and Objective 14 temporal edits, and honest refusals for every unsatisfiable case.
+- `ReframePlanBuilder` refuses an unresolved plural move rather than approximating one.
+
+### Verification
+
+- 6 new model-free tests: `reframeIntentParsesMultiSubjectFraming`, `reframeMultiSubjectFramingGeometry`, `reframeCommandRunnerFramesTwoSubjects`, `reframeCommandRunnerResolvesTwoDetectedPeople` (including the flagship "keep both of us in frame" via a creator selection), `reframeCommandRunnerRejectsUnsatisfiableMultiSubject`, `reframeCommandRunnerFramesMovingSubjectsAndReplays`.
+- Containment is asserted with the **exact** camera-basis condition at every keyframe using the subjects' real positions, not merely "a number was returned".
+- Targeted regression: **102 passed / 0 failed / 0 skipped** (39.7 s).
+- Full model-free suite run at the checkpoint (Objective 29 baseline 472/0/9).
+
+### Boundary
+
+Single-target reframing, follow (including smoothing), aim, speaker commands, temporal editing, audio preservation, the contract checker's existing rules, replay and every persisted artifact are unchanged. No new dependency, no model, no LLM, no network. Recorded limitations: exactly two subjects; the pair path is not smoothed; framing offsets and composition rules remain absent (Decision 046).
+
+### Decision
+
+- Decision 050 (multi-subject framing is one enclosing framing decision on the existing plan; the contract cannot verify containment and the guarantee is enforced before planning, where the identities and footprints exist). Decisions 017-049 preserved.
+
+---
+
+
+
 ## Next Objective (Phase 3, Objective 5) — NOT STARTED (deferred behind the 360 priority)
 
 Application-level player lifecycle orchestration: have `Application` own/create/replace/dispose the media source, frame pump, and player in step with the active-media contract, and define how an event-loop driver (not the `Player`) invokes `tick()`. Preserve the Objective 10 preview-time contract and keep the viewer presentation-only. UI playback controls, duration/ffprobe, audio, and timeline remain deferred. Requires its own scoped objective before implementation. Do not begin automatically while the 360 reframing priority is active.
@@ -676,7 +718,7 @@ The established product direction is that Reelcraft must first become a working 
 
 - **creator review and revision surface** over persisted decisions (`decisionProvenance()` and `reviseEditDecision()` exist as APIs with no UI);
 - **speaker/dialogue capability**, which first needs a licensing-and-capability evaluation before any engineering;
-- **framing depth** — objects `zoom` reaches but the vocabulary does not: framing offsets (lead room / rule of thirds, deliberately refused by Decision 046 until a decision changes the meaning of "centered"), **multi-subject framing** ("keep both of us in frame", which needs plural references, two resolved tracks and an enclosure policy), and multiplier zoom ("2x"). Each needs its own scoped objective; none is started.
+- **framing depth** — **multi-subject framing is DONE for exactly two subjects by Objective 30 (Decision 050)**; what remains in this family is framing offsets (lead room / rule of thirds, deliberately refused by Decision 046 until a decision changes the meaning of "centered"), groups larger than two, containment-preserving smoothing for the pair path, and multiplier zoom ("2x"). Each needs its own scoped objective; none is started.
 
 **Carried-forward constraint (Decisions 033 / 034, binding):** persisted decisions are **immutable**. A revision is expressed as a **new decision referencing the prior one through a single parent hash**, never as a mutation.
 
