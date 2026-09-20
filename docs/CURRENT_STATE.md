@@ -71,6 +71,13 @@ repeated here: it lives in `DEVELOPMENT_LOG.md` (chronological record), `DECISIO
   container in any case: Qt 6 is not installed here (`qmake` and `libQt6Core.so*` are absent), so
   `scripts/checkpoint_check.sh`'s build-tree freshness checks report an environmental failure that is
   unrelated to documentation edits.
+- **Re-verified in the restored container (2026-09-20, Qt `6.4.2+dfsg-21.1build5`, gcc 13.3.0)**:
+  after the Objective 41 container was replaced, Qt was reinstalled, both trees were rebuilt from clean
+  with that toolchain, and the full suite ran: `Totals: 530 passed, 0 failed, 14 skipped, 0 blacklisted,
+  79853ms` with `scripts/build_and_test.sh` exiting 0, and `scripts/checkpoint_check.sh` reporting
+  **PASS**. The counts equal the Objective 41 baseline exactly, so the baseline above stands unchanged;
+  the Architecture Obj A1 note above describes the state before this restoration and no longer describes
+  this container.
 
 ## Validation status
 
