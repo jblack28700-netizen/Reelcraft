@@ -484,6 +484,9 @@ consumes it. This is an index, not a replacement for the sections above or for `
 | Decision provenance (the "why") | `app/application/DecisionProvenance.h`, `Application::decisionProvenance` | read-only view of a persisted decision: origin, instruction, parent hash + whether that parent is held, source status, plan summary; never executes, never modifies | UI provenance readout, tests |
 | UI shell | `app/ui/{MainWindow,ViewerWidget}.*` | presentation only; no decoding or planning logic (the review panel displays a plan and emits accept/reject requests; it cannot edit it) | user |
 
+> This index covers boundaries that exist in code. The web presentation boundary (Decision 059,
+> §25) is authorised but not yet implemented and is deliberately absent from it.
+
 ## 24. Behaviour -> test index
 
 Which tests verify which guarantee. Use it to size a regression run instead of re-deriving the set.
@@ -522,4 +525,41 @@ Section headers in `tests/test_project.cpp` name the objective each group belong
 | Creator review: inspect, accept, reject (Obj 34) | `creatorReview*` |
 | Source playback + rendered playback | `sourcePlayback*`, `applicationPlayback*`, `realSourcePlaybackIntegration` |
 | Environment-gated real-media / model validation | `real*` (see `NEXT_TASK.md` §4) |
+
+---
+
+## 25. Web presentation boundary — 2026-09-20 (Decision 059)
+
+A browser presentation/control layer is authorised over the **existing** application. It introduces a
+transport boundary, not a second editor: no part of Reelcraft's editing, planning, rendering, review,
+revision, lineage, destination or media-identity logic is reimplemented on the browser side.
+
+    Browser (static HTML/CSS/JS, no build step)
+      |  thin HTTP transport, conceptually versioned (/api/v1)
+      v
+    Headless backend process  -- owns ONE authoritative Application instance; one owner/thread
+      |  job/operation bookkeeping only
+      v
+    Application  -->  plan / review / revision / destinations / render records / media identity
+      |
+      v
+    existing deterministic engine (ReframeCommandRunner -> ReframePipeline -> ReframeRenderer)
+
+- **Authority.** `Application` (`app/application/Application.h:94`) remains the sole orchestration seam;
+  the browser is a second presentation consumer, a peer of `MainWindow`. It is already QtWidgets-free and
+  therefore already satisfies the Platform Boundary Constraint above.
+- **Process boundary.** A separate headless process owns the `Application` instance rather than an HTTP
+  listener embedded in the GUI process, because planning and rendering are synchronous and blocking and
+  `Application` holds no synchronisation primitive.
+- **Job boundary.** Long-running work — rendering **and** plan preparation — is identified as an operation
+  and returns promptly; an HTTP request never waits for a render. The operation registry is bookkeeping and
+  derives its terminal state from `Application`'s own result signals; it is not an execution path.
+- **Media boundary.** Uploaded bytes do not become canonical media until staged, finalised and accepted by
+  the existing import path, with the canonical path established before any path-derived identity or
+  fingerprint. Original media stays read-only.
+- **Camera authority.** `ViewportState` and `EquirectView` remain the single camera/projection model; no
+  browser-side projection convention is permitted.
+- **Not present and not decided by Decision 059:** any server, route, upload handler, preview mechanism
+  (WebGL / server-rendered frames / canvas / streaming), serving implementation, event transport,
+  authentication, media storage lifecycle, or new dependency.
 

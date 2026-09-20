@@ -3177,3 +3177,90 @@ result looked identical to an original command, and the recorded explanation was
 ### Decisions
 
 - None required. Decisions 001-058 preserved.
+
+---
+
+## 2026-09-20 — Architecture Obj A1: The Browser Presentation/Control Boundary (Decision 059)
+
+### Objective
+
+Formalise, as an architectural decision, how a browser-based presentation and control layer may drive
+Reelcraft without any part of the engine being reimplemented. Documentation only: no server, route, upload
+handler, preview endpoint, browser asset or new dependency was authorised or created.
+
+### What inspection found
+
+- `Application` (`app/application/Application.h:94`) is the sole orchestration seam, is already
+  QtWidgets-free, and is the only thing `app/main.cpp` connects to `MainWindow` (40 `connect` calls, no
+  intervening logic). The boundary a web layer needs already exists and was built for it — the
+  `ARCHITECTURE.md` Platform Boundary Constraint requires project state and application orchestration to
+  stay independent of QtWidgets, and `MainWindow::chooseMediaFilePath()` is `virtual` precisely so another
+  presentation consumer can supply paths differently.
+- No HTTP, socket, server, upload, byte-range, MIME or browser-asset code exists anywhere in the repository,
+  and `QtNetwork`/`QtWebEngine` are not linked (`reelcraft.pro:1` is `QT += widgets concurrent`).
+- Planning and rendering are synchronous and blocking, with no job, operation, progress or cancellation
+  abstraction, and `Application` holds no synchronisation primitive anywhere.
+- **Plan preparation is also long-running.** Target resolution runs one detector subprocess **per covering
+  view** (`TargetResolver.cpp:93-107`; default view plan 6 yaw × 3 pitch, `EquirectViewPlan.h:20-25`) for
+  each resolved timestamp, and a follow instruction resolves up to 24 timestamps. This finding shaped the job
+  boundary: it is not only the render that a request must not await.
+- `MediaItem::id` is the SHA-256 of the canonical file path, so an upload or cleanup policy that later
+  moved or deleted a referenced file would silently invalidate every decision made against it.
+- `ViewportState`/`EquirectView` are the single camera/projection authority (four consumers, one
+  implementation), so a browser-side projection would be a second camera model — and would disagree with the
+  model that seeds the creator's "me" identity from the viewport.
+- Two pre-existing properties were identified that become contractual once bytes are served over HTTP:
+  render output is written directly to its final path with no atomic publication, and destination guards
+  compare non-canonical `QFileInfo::absoluteFilePath()` against canonical media paths.
+
+### What was built
+
+Documentation only.
+
+- **`DECISIONS.md` gains Decision 059** — 24 numbered items plus consequences, a consolidated list of
+  thirteen open questions, and a documentation-level verification section. It authorises a boundary:
+  `Application` stays the sole authority; the browser is a second presentation consumer with no engine logic
+  and no second domain model; a separate headless process owns one `Application`; mutations are serialised
+  through one owner; HTTP is a thin, conceptually versioned transport; long-running work is an operation and
+  never an open request; uploads are staged and finalised before becoming canonical media; serving rendered
+  media is transport and not rendering; one camera/projection model stays in C++; a structured error model is
+  required and the browser must not parse prose; status reporting must survive disconnection; no arbitrary
+  filesystem or command access may follow from browser-supplied input; and no new dependency is authorised.
+- **`ARCHITECTURE.md` gains §25** describing the boundary and its non-goals, with a pointer added at §23 so
+  the seam index is not read as exhaustive.
+- **`CURRENT_STATE.md`**: version, checkpoint and current-objective lines, and a limitation recording that
+  no browser or network surface exists yet and that the final UI framework remains open.
+- **`NEXT_TASK.md`**: §2 corrected (it still described Objective 35 as the current objective), register rows
+  for the browser layer and for render-output publication atomicity, candidate rows, and blocked entries
+  stating the missing prerequisite for each.
+- **`CHANGELOG.md`**: v0.2.78, stating plainly that nothing user-visible changed.
+
+### Verification
+
+- Documentation validation: `scripts/checkpoint_check.sh`.
+- Decision numbering: Decision 059 is the next number after 058; no number reused and none renumbered.
+- Contradiction check: Decision 013 (Qt 6 Phase 1 desktop foundation), Decision 014 (platform strategy),
+  Decisions 054-058 (review, revision, destination policy, lens widening) and the `ARCHITECTURE.md` Platform
+  Boundary Constraint are each explicitly preserved by Decision 059. `DECISIONS.md` remains append-only: the
+  only change to that file is the appended decision.
+- Discoverability: `ARCHITECTURE.md` §25 and `NEXT_TASK.md` §2/§3/§5/§6 all name Decision 059.
+- No code was changed, so no test suite was run and the baseline was **not re-measured**: it is carried
+  forward from the Objective 41 checkpoint as **530 passed / 0 failed / 14 skipped**.
+- `checkpoint_check.sh` reports two **build-tree freshness** failures in this container. They are
+  environmental and provably unrelated to this objective: `make -q` dies on the Makefile-remaking rule
+  (`Makefile:444`) because `/usr/lib/qt6/bin/qmake` is not installed, and `grep -c 'docs/' Makefile
+  tests/Makefile` returns 0, so a documentation-only change cannot make the tree stale. The remaining checks
+  pass (suite timeout consistent, 59 decisions present).
+
+### Boundary notes / not implemented
+
+- No web server, HTTP route, upload handler, preview endpoint, media-serving implementation, event transport,
+  browser asset or dependency. Decision 059's thirteen open questions live in the decision itself rather than
+  being duplicated here.
+- Decision 059 identifies two pre-existing properties that become contractual once media is served over HTTP
+  and deliberately does not fix them; both are now `NEXT_TASK.md` register entries.
+- The final UI framework question (`ARCHITECTURE.md` §20) is explicitly left open.
+
+### Decisions
+
+- **Decision 059** created. Decisions 001-058 preserved verbatim; none superseded.

@@ -20,9 +20,12 @@ structured edit/reframe plan -> virtual-camera decisions -> deterministic execut
 
 ## 2. Current objective
 
-**None selected.** Objective 35 (creator revision v1 — record-level revision with a fresh sibling
-destination, derived supersession and a provenance readout, Decision 055) is complete, following
-Objective 34 (creator review, Decision 054). Each delivered objective has its own commit.
+**None selected.** Architecture Obj A1 (**Decision 059** — the browser presentation/control boundary
+over the existing application) is complete; it authorises a **boundary only** and created no server, route,
+browser asset or dependency. It follows Objective 41 (creator modifications visible in the render list and
+the provenance readout), Objective 40 (creator lens widening, Decision 058), Objective 39 (render-list
+selection), Objective 38 (record preservation) and Objective 37 (render destinations, Decision 057). Each
+delivered objective has its own commit.
 
 **The next capability is chosen by the human from §5** after the post-objective gate; nothing in this
 file authorises starting one automatically.
@@ -72,6 +75,8 @@ file authorises starting one automatically.
 | Automatic speaker / dialogue attribution | blocked | `SpeakerEvidenceProvider` seam ready | permissively licensed AV/diarization provider | — | — |
 | Analysis -> Reasoning seam | blocked | Decision 039 defines the shape | app-level analysis action + defined reasoning semantics + evidence granularity | — | — |
 | Phase 3 Obj 5 player lifecycle orchestration | deferred | `Player`/`FramePump` exist | 360 priority; own scoped objective | partial (fixture) | — |
+| **Browser presentation/control layer** (headless backend process + thin HTTP control boundary) | missing | Decision 059 authorises the boundary; nothing exists — no server, socket, upload, serving, event or browser-asset code, and `QtNetwork` is not linked | the Decision 059 open questions that gate its shape (exposure boundary, authentication, project/session identity, media storage lifecycle, dependency authorisation) | — | — |
+| **Render-output publication atomicity + identity-based destination comparison** | missing | `ReframeRenderer::encodeVideo`/`encodeVideoWithAudio` write to the final output path; `Application::recordHoldingOutputPath` compares `absoluteFilePath()` against canonical media paths | a decision (the first changes observable render behaviour; the second tightens Decisions 056/057) | — | — |
 
 ---
 
@@ -150,6 +155,8 @@ file authorises starting one automatically.
 | **Containment-preserving pair smoothing** | candidate | measured jitter evidence from the validation sweep | quality refinement; weak evidence today (see §6) |
 | **Analysis -> Reasoning seam** | blocked | app-level analysis action, reasoning semantics, evidence granularity | the documented successor stage (Decision 039) |
 | **In-app audio playback** | blocked | dependency decision (Decision 036 follow-up) | creator review of rendered audio |
+| **Render-output publication atomicity + identity-based destination comparison** | ready (needs a decision) | a decision authorising a change to observable render behaviour and a tightening of Decisions 056/057 | makes "serve the rendered file" safe and closes a path-string-reachable route to overwriting a recorded render or the source media (Decision 059, Consequences) |
+| **Web/backend boundary v1** (headless backend + thin HTTP control boundary) | blocked on decisions | the gating Decision 059 open questions: exposure boundary (local-only vs LAN/remote), authentication/authorization, project and session identity, media storage location/retention/lifecycle, and any new dependency | the authorised browser presentation/control layer — the largest remaining gap between the engine and a creator |
 
 ## 6. Deferred / blocked, with the missing prerequisite stated
 
@@ -170,6 +177,18 @@ file authorises starting one automatically.
   lens is constant, so the jitter profile is milder than the case that motivated Objective 26, and
   the pair path has never run on real footage. Measured 40°->4° step reduction justified Objective
   26; nothing equivalent exists here yet.
+- **Browser presentation/control layer** — Decision 059 authorises the boundary and deliberately leaves
+  thirteen questions open rather than settling them by default. Implementation may not begin until the
+  gating ones are decided: exposure boundary (local-only vs LAN/remote), authentication/authorization,
+  project and session identity, media storage location/retention/lifecycle, and any new dependency. The
+  remaining open questions (event transport, preview mechanism, upload resumability, render
+  progress/cancellation, review persistence, multi-user scope, concurrent desktop/backend ownership, audio
+  playback) are listed in Decision 059 itself and do not all gate the first slice.
+- **Render-output publication atomicity and identity-based destination comparison** — renders are currently
+  written directly to their final path by FFmpeg with no atomic publication, and destination comparisons are
+  path-string based rather than identity-based. Decision 059 makes both **contractual** once bytes are served
+  over HTTP, but fixing them requires a decision first: the first changes observable render behaviour and the
+  second tightens Decisions 056/057.
 
 ## 7. How work is authorised
 

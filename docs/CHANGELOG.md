@@ -974,6 +974,16 @@ Date: 2026-09-20
 - Nothing about how edits are made, planned, rendered, saved or replayed changed: this is the same stored information, now visible where you decide.
 - 2 new tests; full model-free suite 530 passed / 0 failed / 14 skipped.
 
+## v0.2.78 — The web boundary is defined (architecture only)
+
+Date: 2026-09-20
+
+- Nothing you can see or do in Reelcraft changed in this release. It records the architecture for a future browser-based way to use Reelcraft, so that it can be built without a second copy of the editing, planning, rendering, review or save logic appearing on the web side.
+- The recorded direction is that Reelcraft's existing application layer stays the single authority: a browser would be another way to look at and drive Reelcraft, alongside the desktop window — not a second editor.
+- It also records that a long edit or analysis must never leave a browser request waiting: the work is started, and its progress is looked up separately.
+- Uploaded footage would not become project media merely because the bytes arrived. It must be staged and accepted first, and the original file is never modified — the same rule that already applies to every other way footage enters Reelcraft.
+- No feature, behaviour, project file or saved result changed, and no code was changed at all — so the test baseline is carried forward unchanged from the previous release (530 passed / 0 failed / 14 skipped) rather than re-measured. Decision 059 records the architecture, and it deliberately leaves the open questions (how Reelcraft is reached, sign-in, where uploaded footage is stored) for a later decision.
+
 
 
 

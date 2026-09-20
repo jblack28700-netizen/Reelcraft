@@ -7,10 +7,10 @@ repeated here: it lives in `DEVELOPMENT_LOG.md` (chronological record), `DECISIO
 
 ## Version and branch
 
-- Version: **0.2.77** (user-facing history: `CHANGELOG.md`).
-- Branch: `main`. Current checkpoint: this commit (Objective 41); the previous checkpoint was
-  `3a807c26813c83063b0c2c1082c6953a2ef5b2d9` (Objective 40), preceded by
-  `050dd9f6cdc20451a84221eede00b637a1bbdcbb` (Objective 39).
+- Version: **0.2.78** (user-facing history: `CHANGELOG.md`).
+- Branch: `main`. Current checkpoint: this commit (Architecture Obj A1, Decision 059); the previous
+  checkpoint was `a1386f36ca6b7c05fe51cd5c196ccbf40d95deb0` (Objective 41), preceded by
+  `3a807c26813c83063b0c2c1082c6953a2ef5b2d9` (Objective 40).
 
 ## Priority and stage
 
@@ -19,12 +19,13 @@ repeated here: it lives in `DEVELOPMENT_LOG.md` (chronological record), `DECISIO
   structured edit/reframe plan -> virtual-camera decisions -> deterministic execution -> flat output.
 - **Stage:** Phase 4 (360 reframing engine) — 41 objectives complete and verified; Phase 3 media
   engine is open, its player-lifecycle objective deferred behind the 360 priority.
-- **Current objective:** none selected. Objective 41 (creator modifications are visible in the render list
-  and the provenance readout) is complete, following Objective 40 (creator lens widening — the one
-  constrained plan-level adjustment Decision 058 permits), Objective 39 (render-list selection), Objective 38
-  (record preservation), Objective 37 (render destinations, Decision 057), Objective 36 (revision safety,
-  Decision 056) and Objective 35 (creator revision v1, Decision 055). The next capability is chosen by the
-  human from `NEXT_TASK.md` §5.
+- **Current objective:** none selected. Architecture Obj A1 (**Decision 059** — the browser
+  presentation/control boundary over the existing application) is complete and authorises a **boundary only**:
+  no server, route, browser asset or dependency exists. It follows Objective 41 (creator modifications visible
+  in the render list and the provenance readout), Objective 40 (creator lens widening, Decision 058),
+  Objective 39 (render-list selection), Objective 38 (record preservation), Objective 37 (render destinations,
+  Decision 057), Objective 36 (revision safety, Decision 056) and Objective 35 (creator revision v1,
+  Decision 055). The next capability is chosen by the human from `NEXT_TASK.md` §5.
 
 ## Subsystem status
 
@@ -65,6 +66,11 @@ repeated here: it lives in `DEVELOPMENT_LOG.md` (chronological record), `DECISIO
   fresh-process replay slot. Which capabilities are therefore fixture-only is tracked in
   `NEXT_TASK.md` §4 (validation debt).
 - The normal suite is model-free and requires no detector, model, network or real footage.
+- **Not re-measured for Architecture Obj A1 (0.2.78)**: that change is documentation-only, so the baseline
+  above is carried forward from the Objective 41 checkpoint unchanged. No suite could be run in this
+  container in any case: Qt 6 is not installed here (`qmake` and `libQt6Core.so*` are absent), so
+  `scripts/checkpoint_check.sh`'s build-tree freshness checks report an environmental failure that is
+  unrelated to documentation edits.
 
 ## Validation status
 
@@ -133,8 +139,14 @@ renderer is byte-identical to the reviewed plan.
 - **A persisted render record this build cannot read is preserved but never repaired**: it is re-emitted
   verbatim and refused by every execution path, so a project can carry an entry that is visible but
   unusable (labelled as such in the render list).
-- Technology choices that remain open: final AI provider/model selection, local/cloud split, GPU
-  acceleration, packaging/deployment (see `ARCHITECTURE.md` §20).
+- **No browser or network surface exists.** A browser presentation/control layer is authorised as a
+  boundary (Decision 059), but nothing is implemented: there is no HTTP server or client, no upload path, no
+  media serving, no browser asset, and `QtNetwork` is not linked. The Qt desktop shell remains the only
+  presentation consumer. Decision 059 also records thirteen deliberately unresolved questions (exposure
+  boundary, authentication, project/session identity, media storage lifecycle and others) that gate any
+  implementation.
+- Technology choices that remain open: final UI framework, final AI provider/model selection, local/cloud
+  split, GPU acceleration, packaging/deployment (see `ARCHITECTURE.md` §20).
 
 ## Development environment
 

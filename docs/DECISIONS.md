@@ -2581,4 +2581,278 @@ behaviour.
 
 *Decisions 001-057 are preserved verbatim; this decision adds to them and supersedes none of them.*
 
+---
+
+# Decision 059 — A Browser Presentation/Control Layer Over the Existing Application, With a Job Boundary for Long-Running Work
+
+**Status:** Accepted (2026-09-20, Architecture Obj A1; human-approved scope). This decision authorises a
+**boundary**, not an implementation: no server, route, upload handler, preview endpoint, browser asset or
+new dependency is created by it.
+
+## Context
+
+Reelcraft's 360 reframing engine is complete enough to be driven by a creator (41 objectives), but it has
+exactly **one** presentation consumer: the Qt desktop shell, wired in `app/main.cpp` by 40
+`QObject::connect` calls that join `Application` to `MainWindow` and contain no logic of their own. A
+repository-wide search finds **no** HTTP client or server, socket, upload, byte-range, MIME or browser-asset
+code anywhere, and `QtNetwork` is not linked (`reelcraft.pro:1` is `QT += widgets concurrent`).
+
+A browser-based presentation and control surface is required. The risk this decision exists to foreclose is
+the obvious one: a browser front end that re-implemented editing, planning, rendering, review, revision,
+lineage, destination policy or media identity would be a second Reelcraft — and every guarantee the last
+twenty objectives established would then hold only in the desktop half.
+
+Three verified properties of the existing engine determine the shape of the boundary.
+
+**1. Planning and rendering are synchronous and blocking.** `Application::runReframeCommandInternal`
+(`app/application/Application.cpp:707`) calls its injected executor (`:766`, defaulting to
+`ReframeCommandRunner::run`) and returns only when the work is finished; execution continues through
+`ReframePipeline::renderPlan` (`app/reframe/ReframePipeline.cpp:70`) into `ReframeRenderer` and out to
+an FFmpeg `QProcess`. There is no job, operation, progress or cancellation abstraction anywhere in the
+repository.
+
+**2. `Application` is single-threaded and holds no synchronisation primitive.** There is no mutex,
+read-write lock, semaphore or atomic in `app/application/`. Serialisation today is a consequence of "one
+caller, one thread", not a mechanism. An HTTP listener embedded in the same process would therefore have to
+choose between blocking its own event loop for the whole operation and mutating application state from a
+second thread — and the second option is not available at all.
+
+**3. Plan preparation is not the cheap step it appears to be.** Target resolution runs one detector
+subprocess **per covering view** (`app/target/TargetResolver.cpp:93-107`; the default view plan is 6 yaw ×
+3 pitch, `app/target/EquirectViewPlan.h:20-25`) for **each** resolved timestamp, and a follow instruction
+resolves up to 24 timestamps (`app/reframe/ReframeCommandRunner.h`, `followResolveSamplesMax`).
+`Application::prepareReframeCommand` (`Application.cpp:933`) is therefore a long-running operation in its
+own right, not only `acceptReframeReview` (`:989`).
+
+The boundary drawn here is the one `ARCHITECTURE.md` already required. Its **Platform Boundary Constraint**
+states that project state and application orchestration must be kept independent of QtWidgets, and that the
+boundary must be maintained *"where the UI supplies paths/data rather than core code invoking platform
+dialogs directly."* `Application` honours that — `app/application/` contains no QtWidgets symbol — and
+`MainWindow::chooseMediaFilePath()` is `virtual` precisely so a different presentation consumer can supply
+its paths differently. Decision 013 selected Qt 6 for the Phase 1 desktop foundation after evaluating
+Electron and Tauri 2; **that decision is preserved, not superseded** — the desktop UI remains a first-class
+consumer. `ARCHITECTURE.md` §19 lists web-based UI technologies as a candidate and §20 leaves the final UI
+framework open; this decision settles the **boundary** and deliberately leaves the final framework question
+open.
+
+## Decision
+
+### Authority and non-duplication
+
+1. **`Application` remains the sole authoritative orchestration seam.** The browser is a **second
+   presentation/control consumer**, a peer of `MainWindow`, and it reaches Reelcraft exclusively through
+   `Application`'s public API and signals. A backend must not call `ReframeCommandRunner`,
+   `ReframePipeline`, `ReframeRenderer`, `ReframePlanBuilder`, `ReframePlanAdjustment`,
+   `ReframeContract`, `TargetResolver` or `EditDecision` directly; those sit behind `Application` for
+   exactly the guarantees listed in item 4.
+2. **The browser contains no Reelcraft logic.** It must not implement, in any form: an editing engine; a
+   planner or intent parser; a renderer or encoder; a reframe-plan representation; subject or target
+   resolution; a creator review system; a revision or lineage system; a destination or no-overwrite policy;
+   or a media-identity/fingerprint implementation. Presentation, intent capture and request issuance only.
+3. **No second domain model.** Transport DTOs may exist, but every field must map to an existing
+   authoritative Reelcraft value type (`ReframeCommandOutcome`, `ReframePlan`, `EditDecision`,
+   `ReframePlanReview`, `DecisionProvenance`, `MediaItem`, `Project`), and none may become a second
+   source of truth. Where an existing type already serialises itself — `ReframeCommandOutcome::toJsonObject()`,
+   `ReframePlanReview::summaryLines()`, `Project` — that serialisation is used rather than a parallel one.
+4. **These existing invariants are preserved unchanged and may not be weakened, duplicated or re-derived at
+   the boundary:** sacred read-only original media; the deterministic plan as the single edit representation;
+   deterministic rendering and replay; creator review as a read-only view over the authoritative plan;
+   creator revision lineage (single-parent, hashed, immutable decisions); the no-overwrite destination
+   policy; unreadable render-record and unreadable-decision preservation; creator selection semantics;
+   lens-widening revision semantics; provenance and decision lineage; and the `Application` orchestration
+   boundary itself.
+
+### Process, ownership and the job boundary
+
+5. **A separate headless Reelcraft backend process owns the authoritative `Application` instance.** The
+   HTTP listener is **not** embedded in the existing GUI process. The reason is Context item 2: an embedded
+   server has no safe concurrency model over a synchronous, non-thread-safe `Application`, whereas a
+   separate process obtains a single owner and serialised mutation for free.
+6. **One owner and one thread mutate `Application` state.** Mutations that touch application state are
+   serialised through that single owner. No concurrent mutation is permitted unless the application layer is
+   explicitly redesigned for it, which this decision does not authorise.
+7. **Long-running work must not require holding an HTTP request open.** Because the pipeline is synchronous
+   and blocking (Context item 1), a request that waits for a render or a plan preparation is architecturally
+   forbidden. The required shape is:
+
+   ```
+   HTTP request
+     -> validate / accept the command
+     -> create or identify an operation
+     -> return promptly
+     -> the authoritative backend executes through the existing Application/engine
+     -> the operation reaches a terminal state (completed / failed / ...)
+     -> the browser observes operation state
+   ```
+
+8. **Plan preparation is a long-running operation, not a fast call**, and must be modelled as one for the
+   same reason as rendering (Context item 3).
+9. **The job/operation boundary is a bookkeeping boundary, never a second engine.** It identifies work,
+   reports its state and holds its terminal outcome. It must not plan, render, re-plan, retry by re-deriving
+   an edit, or hold a shadow copy of application state. Its terminal state derives from the authoritative
+   `Application` result (`reframeCommandFinished`, `reframeOutputsChanged`, `reframeReviewChanged`) —
+   never from a parallel execution path.
+10. **The exact worker implementation, progress granularity, cancellation semantics and event transport are
+    deliberately left open by this decision.** They are implementation decisions for the objective that
+    builds the boundary, subject to items 6, 7 and 9.
+
+### Media input
+
+11. **Bytes arriving over HTTP do not make canonical Reelcraft media.** Uploaded content becomes a
+    `MediaItem` only after the existing import path accepts it:
+    - uploads are **streamed**, not accumulated in memory;
+    - bytes are written to a **controlled staging location**;
+    - the content is **validated and finalised before** it is exposed as canonical media;
+    - the **stable canonical path is established before** any identity or fingerprint is derived from it —
+      `MediaItem::id` is the SHA-256 of the canonical file path (`app/core/MediaItem.cpp:59-60`) and an
+      `EditDecision` fingerprints size and modification time, so a path that later changed would silently
+      invalidate every decision made against it;
+    - a **browser-supplied path, filename or URL may never escape the application's controlled media storage
+      boundary**;
+    - the sacred/read-only original-media invariant applies unchanged to the finalised file.
+12. **No media storage database, retention policy, cleanup policy, resumable-upload protocol or multi-user
+    storage model is chosen here.** Those remain open architecture questions (Open Questions 4 and 10).
+
+### Media output and its serving
+
+13. **Serving rendered media to a browser is a transport concern, not a rendering concern.** It introduces no
+    new render path, no new encode and no new artifact: the bytes served are the file the existing
+    deterministic renderer already produced and that a render record already names.
+14. Any such serving must account for normal browser media behaviour — **correct MIME type,
+    `Content-Length`, byte-range requests, `206 Partial Content`, invalid-range handling, stable file
+    identity while the media is being served, and no serving of arbitrary filesystem paths**. This decision
+    records the requirement and implements nothing.
+
+### 360 camera and projection authority
+
+15. **There is exactly ONE authoritative Reelcraft camera/projection model and it stays in C++.**
+    `ViewportState` (`app/viewer/ViewportState.h`) owns the camera state and `EquirectView`
+    (`app/viewer/EquirectView.h`, implementation `EquirectView.cpp:127`) is the single image-projection
+    primitive — already shared by the viewer, the renderer, the target resolver and the crop extractor. A
+    browser preview must not introduce a divergent convention: JavaScript that recomputed yaw/pitch/roll/FOV
+    projection would be a second camera model, and would disagree with the model that seeds the creator's
+    "me" identity from the viewport (`Application::selectCreatorTargetFromViewport`).
+16. **This decision does not choose the preview mechanism.** WebGL, server-rendered PNG/JPEG frames, canvas
+    rendering, a video-streaming format, a preview frame rate and a preview encoding are all explicitly
+    **not decided here**; each is an implementation decision for a later objective. What is fixed is item 15.
+
+### API boundary
+
+17. **The HTTP layer is a thin transport/control boundary and is conceptually versioned** (`/api/v1/...`).
+    Route names are illustrative and not immutable. The capabilities it may expose are project/session
+    establishment, media upload/import, active-media selection, media listing, 360 preview access, viewport
+    interaction, natural-language plan preparation, creator review, accept/reject, render execution, render
+    status, render listing, rendered-media playback, creator lens widening/revision, and operation/event
+    status. Any route that would require the browser to hold domain state is out of bounds by item 2.
+
+### Errors
+
+18. **A structured, machine-distinguishable error model is an architectural requirement.** The browser must
+    be able to distinguish at least: malformed request; invalid Reelcraft command; unavailable capability;
+    failed operation; missing media; missing render; conflict/state violation; unsupported operation; and
+    internal/unexpected failure. **The browser must never depend on parsing human-readable error text.** The
+    concrete schema is an implementation decision.
+
+### Status and events
+
+19. **Whatever mechanism reports operation state must survive disconnection.** It must account for reconnecting
+    clients, events missed during a temporary disconnection, operation identity, current-state recovery after
+    reconnect, and must not depend on one permanently open connection. **This decision does not select the
+    transport**: polling is an acceptable implementation fallback if the architecture stays clean, and SSE (or
+    anything else) is not assumed correct.
+
+### Security and network scope
+
+20. **The non-negotiable invariant: the HTTP boundary must never expose arbitrary filesystem access or
+    arbitrary command execution merely because a browser supplied a path, filename, URL, executable or
+    argument.** Every path a request influences is resolved inside application-controlled storage, and every
+    path comparison the boundary relies on must be identity-based rather than string-based.
+21. **The following remain explicitly UNRESOLVED and are not decided here:** local-only vs LAN/remote access;
+    authentication; authorization; TLS; multi-user support; project/session ownership; cross-origin policy;
+    and CSRF considerations if browser credentials are ever used. `ARCHITECTURE.md` §15 already makes access
+    control, project isolation, secure media handling and temporary processing artifacts architectural
+    requirements; this decision does not narrow that to a mechanism.
+
+### Concurrency, ownership and dependencies
+
+22. **One authoritative backend process owns application state; the browser maintains no independent editing
+    state; and simultaneous desktop and backend ownership of one project remains an unresolved
+    deployment/product decision.** Reelcraft's no-overwrite guarantee is enforced *within one `Application`
+    instance* (`Application::recordHoldingOutputPath`), so two live owners of one project would break it.
+    Until that is decided, one writer is assumed.
+23. **No database, distributed lock, multi-user architecture, message broker or service mesh is introduced.**
+24. **No new runtime dependency is authorised by this decision.** React, Vue, Node/npm, TypeScript, Electron,
+    Tauri, Qt WebEngine and any third-party HTTP framework are not authorised. A plain static
+    HTML/CSS/JavaScript presentation layer served as files, plus the smallest appropriate existing
+    Qt/network mechanism, remain the default direction. **If a new dependency proves necessary it is an
+    explicit dependency gate requiring human authorisation** — it may not be introduced silently as an
+    implementation detail.
+
+## Consequences
+
+- The browser becomes a first-class way to drive the existing engine without any part of the engine being
+  reimplemented, and the desktop UI keeps working unchanged as a peer consumer.
+- `Application`'s seam is now load-bearing for two presentation consumers. Its contract — established by the
+  Platform Boundary Constraint and by the injection seams the model-free tests already use — becomes the de
+  facto public API of Reelcraft, and a change to it now has two consumers to consider.
+- Long-running work acquires an identity it does not have today. `Application` reports a command only when it
+  finishes (`reframeCommandFinished`), and `m_lastReframeOutcome` is a single slot; a browser needs to ask
+  "what is running, and how did the thing I started end?" That is new bookkeeping, and item 9 is what keeps it
+  from becoming a second engine.
+- Uploads introduce a media lifecycle Reelcraft does not have today. `Application` has no project path, no
+  staging area and no storage root, and `importMediaFile` accepts only a path to a file that already exists.
+  Where uploaded bytes live is therefore a foundational decision this one deliberately does not make (Open
+  Question 4), because `MediaItem` identity is path-derived and a cleanup policy that deleted a referenced
+  file would invalidate decisions.
+- Two pre-existing properties become **contractual** rather than incidental once bytes are served over HTTP:
+  render output is currently written directly to its final path by FFmpeg with no atomic publication, and the
+  destination guards compare non-canonical `QFileInfo::absoluteFilePath()` against canonical media paths.
+  Serving a partially written file, or resolving a destination through a symlink, are boundary-reachable
+  versions of those properties. Item 20 states the invariant; the concrete hardening is implementation work
+  this decision identifies but does not perform.
+- The final UI framework question (`ARCHITECTURE.md` §20) stays open, and the deployment/packaging strategy is
+  untouched.
+
+## Open questions (deliberately unresolved)
+
+1. Local-only vs LAN/remote access (item 21).
+2. Authentication and authorization (item 21).
+3. Project/session identity and persistence — `Application` has no project path and `Project` stores no
+   self-path (item 21; see Consequences).
+4. Media storage location, retention, lifecycle and cleanup (items 11, 12).
+5. Concurrent desktop/backend ownership and simultaneous access (item 22).
+6. Multi-user scope (items 12, 21, 22).
+7. Review persistence — creator review is session state today (Decision 054) (item 19).
+8. Event transport details (item 19).
+9. Preview transport and rendering strategy (item 16).
+10. Upload resumability (item 12).
+11. Render progress and cancellation semantics (item 10).
+12. Audio playback and dependency architecture (Decision 036 follow-up), where applicable to a browser client.
+13. Any new dependency requiring approval (item 24).
+
+## Verification
+
+Documentation-level, as this decision authorises no code. Verified during inspection at
+`a1386f36ca6b7c05fe51cd5c196ccbf40d95deb0`:
+
+- `Application` (`app/application/Application.h:94`) is the sole orchestration seam and contains no
+  QtWidgets symbol; `app/main.cpp` wires it to `MainWindow` with no intervening logic.
+- No HTTP, socket, server, upload, byte-range, MIME or browser-asset code exists anywhere in the repository,
+  and `QtNetwork`/`QtWebEngine` are not linked.
+- The render and planning paths are synchronous and blocking, with no job, progress or cancellation
+  abstraction.
+- No synchronisation primitive exists in `app/application/`.
+- `MediaItem` identity is the SHA-256 of the canonical path; `MediaItem` never probes content.
+- The destination guards use `absoluteFilePath()`; `MediaItem::path()` is canonical.
+- `ViewportState`/`EquirectView` are the single camera/projection authority, with four consumers and one
+  implementation.
+- Decision 013 (Qt 6 desktop foundation), Decision 014 (platform strategy), Decisions 054-058 (review,
+  revision, destinations, lens widening) and `ARCHITECTURE.md`'s Platform Boundary Constraint are all
+  preserved by this decision, and none is superseded.
+
+---
+
+*Decisions 001-058 are preserved verbatim; this decision adds to them and supersedes none of them.*
+
+
 
