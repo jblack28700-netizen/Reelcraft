@@ -965,6 +965,16 @@ Date: 2026-09-20
 - Making a shot **tighter**, moving the camera, changing timing or trimming is deliberately not part of this: those need a fresh instruction so the subjects are re-checked, and Reelcraft says so rather than silently cropping.
 - 7 new tests, including containment checks at intermediate camera times; full model-free suite 528 passed / 0 failed / 14 skipped. Decision 058 records the rule.
 
+## v0.2.77 — You can see which results came from your own revision, and why
+
+Date: 2026-09-20
+
+- The results list now shows when a result came from a **change you made** to an earlier one — a revised edit or a widened lens — naming the result it descends from, instead of looking identical to an original command.
+- The "Why This Decision?" readout now also shows the explanation recorded with the result, so the reason a plan differs from the instruction (for example "Lens widened from 90.0 to 120.0 degrees by the creator") is readable in the application rather than only in the project file.
+- Nothing about how edits are made, planned, rendered, saved or replayed changed: this is the same stored information, now visible where you decide.
+- 2 new tests; full model-free suite 530 passed / 0 failed / 14 skipped.
+
+
 
 
 

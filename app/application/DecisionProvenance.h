@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QString>
+#include <QStringList>
 
 // Read-only provenance view of the decision behind a render record (Objective
 // 17). Inspection never executes anything and never modifies the artifact.
@@ -14,6 +15,10 @@ struct DecisionProvenance
     QString error;               // why it is unavailable, when it is not
     QString origin;
     QString instruction;
+    // Objective 41: the record's own notes, which is where a creator modification
+    // explains its parameter (for example a lens widening). Presentation of stored
+    // facts; the FACT of a modification is the hashed origin/parentDecisionHash.
+    QStringList notes;
     QString parentDecisionHash;
     // Referential lineage check: does the referenced parent actually exist among
     // the records this application holds? A syntactically valid hash is not

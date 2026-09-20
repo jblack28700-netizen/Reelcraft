@@ -1550,6 +1550,7 @@ DecisionProvenance Application::decisionProvenance(int index) const
     view.available = true;
     view.origin = decision.origin();
     view.instruction = decision.instruction();
+    view.notes = record.notes;
     view.parentDecisionHash = decision.parentDecisionHash();
     view.hasParent = decision.hasParentDecision();
 

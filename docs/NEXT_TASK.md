@@ -58,6 +58,7 @@ file authorises starting one automatically.
 | **Group framing (2-10 subjects)** | done | `TargetTrackPlanner::{planTracks,enclosingFramingDeg}` (exact basis), `ReframeSubjectGroup`/`subjectCount`, runner group resolution | two or more resolved tracks | **fixture only** | `5592118`, this checkpoint (Obj 31) |
 | Persistent media analysis (artifact + runner) | partial | `app/analysis/{MediaAnalysis,MediaAnalysisRunner}.*` | detector / ffprobe | fixture; **no consumer** | `90f671c` |
 | **Creator review (inspect the plan, accept or reject)** | done | `app/application/ReframePlanReview.*`, `Application` review API + preparer seam, `MainWindow` review panel | — | **fixture only** | this checkpoint (Obj 34) |
+| **Creator modification visibility** (lineage marker in the render list, recorded notes in the provenance readout) | done | `MainWindow` list/readout, `DecisionProvenance::notes` | — | **fixture only** | this checkpoint (Obj 41) |
 | **Creator lens widening** (constrained plan adjustment: monotone FOV increase only, no perception) | done | `app/reframe/ReframePlanAdjustment.*`, `Application::{widenRenderedLens,nextWiderLensFor}` | — | **fixture only** | this checkpoint (Obj 40) |
 | **Project round-trip preservation** (an unreadable render record or edit decision is kept verbatim, never destroyed by open+save) | done | `Application::{reframeOutputsJson,restoreReframeOutputsFromJson}`, `ReframeCommandOutcome::rawRecord` | — | **fixture only** | this checkpoint (Obj 38) |
 | **Non-destructive render destinations** (no render writes to a path a render record owns; derived names are fresh) | done | `Application::{defaultReframeOutputPath,recordHoldingOutputPath}` + `buildReframeCommandContext`/`acceptReframeReview` guards | — | **fixture only** | this checkpoint (Obj 37) |
@@ -83,6 +84,8 @@ file authorises starting one automatically.
   `realReframePlaybackIntegration`, `realTemporalEditIntegration`, `realCompoundCommandIntegration`,
   `realUserCommandIntegration`, `realApplicationCommandIntegration`), the 5 Objective 28-32 harness
   tests below, and the child-only `replayFreshProcessChild` slot.
+- **Objective 41 adds no validation debt either.** It presents stored facts in the creator surfaces and adds
+  no perception, geometry or rendering behaviour.
 - **Objective 40 adds no validation debt either.** The lens adjustment is a pure transformation over a plan
   plus application orchestration; it adds no perception, geometry or rendering behaviour, and its containment
   guarantee is asserted with the existing renderer-equivalent predicate.

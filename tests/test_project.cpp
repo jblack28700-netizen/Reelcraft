@@ -1356,6 +1356,9 @@ private slots:
     void applicationWidenRenderedLensReplayIsPerceptionFree();
     void applicationWidenRenderedLensIsDeterministic();
     void mainWindowWidenLensSurface();
+    // Objective 41: creator modifications are visible in the creator surfaces.
+    void mainWindowListsCreatorRevisionsDistinctly();
+    void mainWindowProvenanceShowsRecordedNotes();
 };
 
 void ProjectTest::initTestCase()
@@ -23789,6 +23792,29 @@ void ProjectTest::applicationWidenRenderedLensRefusesHonestly()
     QCOMPARE(planless.nextWiderLensFor(0), 0.0);
     QCOMPARE(planless.reframeOutputs().size(), 1);
 
+    // (e2) A PRESERVED unreadable record (Objective 38) has no decision to widen
+    // either, and must not be treated as one.
+    {
+        Project preservedProject;
+        QJsonArray preservedRecords;
+        QJsonObject orphan;
+        orphan.insert(QStringLiteral("instruction"), QStringLiteral("orphan"));
+        preservedRecords.append(orphan);
+        preservedProject.setReframeOutputs(preservedRecords);
+        const QString preservedPath =
+            planlessDirectory.filePath(QStringLiteral("preserved.reel"));
+        QVERIFY(preservedProject.save(preservedPath));
+        Application preservedApp;
+        QVERIFY(preservedApp.openProject(preservedPath));
+        QCOMPARE(preservedApp.reframeOutputs().size(), 1);
+        QVERIFY(preservedApp.reframeOutputs().at(0).hasRawRecord());
+        QCOMPARE(preservedApp.nextWiderLensFor(0), 0.0);
+        const RevisionResult preserved = preservedApp.widenRenderedLens(0, 120.0);
+        QVERIFY(!preserved.ok);
+        QVERIFY(preserved.error.contains(QStringLiteral("no edit decision")));
+        QCOMPARE(preservedApp.reframeOutputs().size(), 1);
+    }
+
     // (f) A source that no longer matches the record.
     {
         QFile file(mediaPath);
@@ -23984,6 +24010,113 @@ void ProjectTest::mainWindowWidenLensSurface()
     widenButton->click();
     QCOMPARE(widenSpy.count(), 1);
     QCOMPARE(widenSpy.first().at(0).toInt(), 1);
+}
+
+void ProjectTest::mainWindowListsCreatorRevisionsDistinctly()
+{
+    MainWindow window;
+    auto *outputsList =
+        window.findChild<QListWidget *>(QStringLiteral("reframeOutputsList"));
+    QVERIFY(outputsList);
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandExecutor(revisionExecutor(nullptr, /*writeOutput=*/true));
+    int renderCalls = 0;
+    app.setReframeReplayRenderer(countingReplayRenderer(&renderCalls));
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("follow person 1"), 0, 4000,
+                                    directory.filePath(QStringLiteral("clip_reframe.mp4"))));
+    // A creator revision (a lens widening IS one) and a failed attempt.
+    QVERIFY(app.widenRenderedLens(0, 120.0).ok);
+    QCOMPARE(app.reframeOutputs().size(), 2);
+
+    // A record this build cannot read keeps its own label.
+    ReframeCommandOutcome unreadable;
+    unreadable.setRawRecord(QJsonObject{ { QStringLiteral("instruction"),
+                                           QStringLiteral("orphan") } });
+
+    QList<ReframeCommandOutcome> records = app.reframeOutputs();
+    records.append(unreadable);
+    window.showReframeOutputs(records);
+    QCOMPARE(outputsList->count(), 3);
+
+    // The original command carries no lineage marker ...
+    QVERIFY(outputsList->item(0)->text().contains(QStringLiteral("[ok]")));
+    QVERIFY(!outputsList->item(0)->text().contains(QStringLiteral("creator revision")));
+    QVERIFY(outputsList->item(0)->text().contains(QStringLiteral("follow person 1")));
+    // ... the widened record says what it descends from, naming the parent decision.
+    const QString parentShort =
+        app.reframeOutputs().at(0).editDecision().decisionHash().left(12);
+    QVERIFY(outputsList->item(1)->text().contains(QStringLiteral("creator revision of")));
+    QVERIFY(outputsList->item(1)->text().contains(parentShort));
+    QVERIFY(outputsList->item(1)->text().contains(
+        app.reframeOutputs().at(1).outputPath));
+    // ... and an unreadable record is still described as unreadable.
+    QVERIFY(outputsList->item(2)->text().contains(QStringLiteral("[unreadable]")));
+
+    // The marker is derived from the stored decision, so it survives a reopen.
+    const QString projectPath = directory.filePath(QStringLiteral("lineage.reel"));
+    QVERIFY(app.saveProject(projectPath));
+    Application reopened;
+    QVERIFY(reopened.openProject(projectPath));
+    QCOMPARE(reopened.reframeOutputs().size(), 2);
+    window.showReframeOutputs(reopened.reframeOutputs());
+    QVERIFY(outputsList->item(1)->text().contains(QStringLiteral("creator revision of")));
+    QVERIFY(outputsList->item(1)->text().contains(parentShort));
+}
+
+void ProjectTest::mainWindowProvenanceShowsRecordedNotes()
+{
+    MainWindow window;
+    auto *provenanceLabel =
+        window.findChild<QLabel *>(QStringLiteral("decisionProvenanceLabel"));
+    QVERIFY(provenanceLabel);
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandExecutor(revisionExecutor(nullptr, true));
+    int renderCalls = 0;
+    app.setReframeReplayRenderer(countingReplayRenderer(&renderCalls));
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("follow person 1"), 0, 4000,
+                                    directory.filePath(QStringLiteral("clip_reframe.mp4"))));
+    const ReframeCommandOutcome original = app.reframeOutputs().at(0);
+
+    // The widening records WHY its plan differs from the instruction; that
+    // explanation is the thing a reader needs, and it used to be invisible.
+    QVERIFY(app.widenRenderedLens(0, 120.0).ok);
+    const DecisionProvenance widenedView = app.decisionProvenance(1);
+    QVERIFY(widenedView.available);
+    QVERIFY(!widenedView.notes.isEmpty());
+    window.showDecisionProvenance(widenedView, 1, app.revisionsOf(1));
+    QVERIFY(provenanceLabel->text().contains(QStringLiteral("origin: creator-revision")));
+    QVERIFY(provenanceLabel->text().contains(QStringLiteral("revises: ")));
+    QVERIFY(provenanceLabel->text().contains(QStringLiteral("held by this project")));
+    QVERIFY(provenanceLabel->text().contains(QStringLiteral("note: Lens widened from 90.0 to 120.0 degrees")));
+    QVERIFY(provenanceLabel->text().contains(QStringLiteral("Rendered from the widened plan")));
+    QVERIFY(provenanceLabel->text().contains(QStringLiteral("superseded: no later revision")));
+
+    // The provenance view carries the notes of whatever record it describes, and a
+    // record without notes simply has none.
+    const DecisionProvenance originalView = app.decisionProvenance(0);
+    QVERIFY(originalView.available);
+    window.showDecisionProvenance(originalView, 0, app.revisionsOf(0));
+    QVERIFY(provenanceLabel->text().contains(QStringLiteral("origin: command")));
+    QVERIFY(provenanceLabel->text().contains(QStringLiteral("revised by record 1")));
+    QVERIFY(!provenanceLabel->text().contains(QStringLiteral("note: ")));
+
+    // An unavailable view still says so honestly, notes or not.
+    DecisionProvenance unavailable;
+    unavailable.error = QStringLiteral("This render record has no edit decision.");
+    window.showDecisionProvenance(unavailable, 7, QList<int>());
+    QVERIFY(provenanceLabel->text().contains(QStringLiteral("no decision to explain")));
+
+    // The record's own notes are what the view reports (no re-derivation).
+    QCOMPARE(widenedView.notes, app.reframeOutputs().at(1).notes);
+    QCOMPARE(originalView.notes, original.notes);
 }
 
 QTEST_MAIN(ProjectTest)

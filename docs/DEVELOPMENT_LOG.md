@@ -3116,3 +3116,64 @@ existing render seam, lineage, destination and append-gate machinery, with no pe
 ### Decisions
 
 - Decision 058 recorded (the 16 approved boundaries). Decisions 001-057 otherwise preserved.
+
+
+## 2026-09-20 — 360 Reframing Objective 41: Creator Modifications Are Visible in the Creator Surfaces
+
+### Objective
+
+Close a visibility gap created by the revision and adjustment work: the application RECORDS why a plan
+differs from its instruction (Objective 35's revision notes, Objective 40's lens-widening note, the hashed
+creator-revision attribution), but the creator could not see any of it. In the render list a widened
+result looked identical to an original command, and the recorded explanation was readable nowhere.
+
+### What inspection found
+
+- The list built every row from `[ok]/[failed] instruction -> output`, so a record produced by a creator
+  modification (origin `creator-revision`, with a parent decision) was indistinguishable from an original
+  command unless the creator clicked "Why This Decision?" on that exact row.
+- `DecisionProvenance` carried origin, instruction, lineage, source status and a plan summary, but **not
+  the record's notes** — and the notes are where a modification explains its parameter ("Lens widened from
+  90.0 to 120.0 degrees …"). The explanation was persisted, hashed-adjacent and completely invisible.
+- Both facts were already stored, so this needed presentation only: no new field on any artifact, no new
+  semantic, and nothing to decide.
+
+### What was built
+
+- **`DecisionProvenance` gained `notes`** (additive, display-only value type), populated by
+  `Application::decisionProvenance()` from the record's own `notes`.
+- **The render list names lineage**: a record whose decision carries a parent is marked
+  `[creator revision of <first 12 hex of the parent decision hash>]`; originals, failures and preserved
+  unreadable entries keep their existing labels (an unreadable entry still shows `[unreadable]`). The
+  marker is derived from the stored decision, so it survives a project reopen.
+- **The provenance readout shows the recorded notes** ("note: Lens widened from 90.0 to 120.0 degrees by
+  the creator (Decision 058) …"), alongside the origin, the revised-from hash and whether that parent is
+  held, the source status, the supersession and the plan summary. A record without notes shows none.
+
+### Verification
+
+- `mainWindowListsCreatorRevisionsDistinctly`: an original command has no lineage marker, a widened record
+  names the parent decision hash it descends from, an unreadable record is still `[unreadable]`, and the
+  marker survives save/reopen.
+- `mainWindowProvenanceShowsRecordedNotes`: the widened record's readout reports
+  `origin: creator-revision`, the resolved parent, the supersession line and the widening explanation; the
+  original record's readout reports `origin: command` and no notes; an unavailable view still says so
+  honestly; and the view's notes are the record's notes verbatim (no re-derivation).
+- `applicationWidenRenderedLensRefusesHonestly` was EXTENDED with the Objective 38 ↔ Objective 40
+  interaction: a preserved unreadable record has no decision to widen, offers no ladder step, and is refused
+  honestly.
+- The pre-existing UI tests pass unchanged, which is the evidence that the row format change did not break
+  the established behaviour.
+- Targeted regression and the official full suite: recorded in `CURRENT_STATE.md`.
+
+### Boundary notes / not implemented
+
+- Presentation only: no new persisted field, no schema or artifact change, no change to decisions, plans,
+  lineage or the append gate, no new signal, and no interactive per-row controls.
+- Supersession remains in the provenance readout (it is an Application-level derivation); the list marker is
+  the stored `parentDecisionHash`, so the list never claims more than the artifact says.
+- No decision was required. No real-media claim.
+
+### Decisions
+
+- None required. Decisions 001-058 preserved.

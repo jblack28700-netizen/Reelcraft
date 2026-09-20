@@ -648,6 +648,9 @@ void MainWindow::showDecisionProvenance(const DecisionProvenance &view, int inde
                      .arg(view.outputHeight)
                      .arg(view.outputFps)
                      .arg(view.planFrameCount));
+    for (const QString &note : view.notes) {
+        lines.append(QStringLiteral("  note: %1").arg(note));
+    }
     m_provenanceLabel->setText(lines.join(QStringLiteral("\n")));
 }
 
@@ -676,8 +679,18 @@ void MainWindow::showReframeOutputs(const QList<ReframeCommandOutcome> &outputs)
         }
         const QString status =
             outcome.ok ? QStringLiteral("ok") : QStringLiteral("failed");
-        QString text = QStringLiteral("[%1] %2 -> %3")
-                           .arg(status, outcome.instruction, outcome.outputPath);
+        // Objective 41: a record produced by a creator modification names what it
+        // descends from, so a revision (or a lens widening) is distinguishable from
+        // an original command in the list itself rather than only in the readout.
+        const QString lineage =
+            outcome.hasEditDecision()
+                && !outcome.editDecision().parentDecisionHash().isEmpty()
+            ? QStringLiteral(" [creator revision of %1]")
+                  .arg(outcome.editDecision().parentDecisionHash().left(12))
+            : QString();
+        QString text = QStringLiteral("[%1]%2 %3 -> %4")
+                           .arg(status, lineage, outcome.instruction,
+                                outcome.outputPath);
         if (!outcome.ok && !outcome.error.isEmpty()) {
             text += QStringLiteral(" (%1)").arg(outcome.error);
         }
