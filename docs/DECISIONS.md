@@ -1846,3 +1846,74 @@ Three questions had to be answered before implementing it, and inspection answer
 
 *Decisions 001-049 are preserved verbatim; this decision adds to them and supersedes none of them.*
 
+
+---
+
+# Decision 051 — Development Management: One Home Per Fact, a Capability Register, and Controlled Batches
+
+**Status:** Accepted (2026-09-18, Process Objective P1)
+
+## Context
+
+Thirty objectives produced 478 passing tests, clean checkpoints and additive history, but the
+management layer around that work had grown faster than the product. Measured at the Objective 30
+checkpoint: **11,518 lines / ~900 KB of documentation**; each objective wrote **~200 new doc lines
+into 5-8 documents**, so every milestone was narrated four to eight times in different words;
+`CURRENT_STATE.md` carried **74 objective narrative sections** that duplicate the 74 dated
+`DEVELOPMENT_LOG.md` entries one-for-one; `NEXT_TASK.md` mixed a stale candidate prose list with
+per-objective history; the objective prompts restated rules that `AGENT_WORKFLOW.md` already
+defines as canonical; validation debt (Objectives 28-30 are fixture-only) was invisible without
+reading thousands of lines; and a documented configuration value had already drifted from its script
+(`timeout 240` in `DEVELOPMENT_ENVIRONMENT.md` vs 900 in `scripts/build_and_test.sh`).
+
+## Decision
+
+- **One home per fact.** `DEVELOPMENT_LOG.md` is the single detailed chronological record (one entry
+  per objective, append-only). `DECISIONS.md` carries decisions only. `CURRENT_STATE.md` describes
+  the system as it is now. `NEXT_TASK.md` is the capability register. `ARCHITECTURE.md` carries the
+  architecture plus indexes. `CHANGELOG.md` is user-facing only. `PROJECT_HISTORY.md` is
+  milestone-level narrative. `AGENT_WORKFLOW.md` is the canonical policy. `KNOWN_ISSUES.md` carries
+  open limitations with reasons. An objective must not be narrated in several of them.
+- **`NEXT_TASK.md` becomes the operational register**: one row per capability with status
+  (done/partial/missing/blocked/deferred), implementation seam, dependency, **validation level**,
+  verification commit, plus an explicit **validation debt** section, a candidates table with stated
+  prerequisites, and the human-approved priority. It is a register, not a history.
+- **Living indexes, kept cheap.** `ARCHITECTURE.md` §23 maps stable seams to implementation,
+  guarantee and consumers; §24 maps behavioural guarantees to the tests that verify them, so a
+  regression set is looked up rather than re-derived. Both are indexes, not explanations.
+- **Controlled batches with a mandatory gate** (`AGENT_WORKFLOW.md` §12). A human approves a
+  capability family and 2-3 dependency-adjacent objectives; each objective still gets its own
+  implementation, tests, documentation and commit; between objectives the agent re-verifies the next
+  objective's prerequisites and stops if anything in the stop list has changed (architecture,
+  semantics, schema, dependency/licence, source-media risk, unresolved failure, scope growth, or
+  anything that invalidates the batch). Autonomy grows for routine engineering; selecting a new
+  product direction remains a human act.
+- **Lightweight checkpoint hygiene** (`AGENT_WORKFLOW.md` §13, `scripts/checkpoint_check.sh`):
+  build-tree freshness, present-tense script/document value drift, and documented-vs-actual test
+  totals. No documentation-validation framework.
+
+## Consequences
+
+- No product behaviour, persisted schema, plan/keyframe semantics, rendering, perception, decision or
+  replay semantics change; Decisions 001-050 are untouched and remain the architectural record.
+- The engineering loop itself is unchanged: smallest coherent change, incremental compile, focused
+  tests, targeted regression, one official full-suite run, one commit, clean tree.
+- Per-objective documentation shrinks sharply and the reading side of an objective becomes the
+  register plus the indexes plus the files to be touched, instead of thousands of narrative lines.
+- New duties, deliberately small: keep the register and the two indexes accurate at each checkpoint,
+  and run the checkpoint script before declaring completion. A stale index is a defect of the same
+  kind as a stale test.
+- Deferred detail remains retrievable: git history holds every previous document version, and
+  `DEVELOPMENT_LOG.md` holds the per-objective record.
+
+## Verification
+
+- Documentation-only diff; the test suite is unchanged (478 passed / 0 failed / 9 skipped) and
+  `scripts/checkpoint_check.sh` passes. The trimmed `CURRENT_STATE.md` narrative was verified to be
+  preserved: its 74 objective headings correspond one-to-one with the 74 dated `DEVELOPMENT_LOG.md`
+  entries, and the file states where the detail lives.
+
+---
+
+*Decisions 001-050 are preserved verbatim; this decision adds to them and supersedes none of them.*
+

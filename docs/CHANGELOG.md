@@ -36,7 +36,8 @@ Future entries should:
 - Include the date of the change.
 - Describe meaningful user-facing or project-level changes.
 - Avoid claiming functionality that has not been implemented and verified.
-- Keep internal implementation details primarily in DEVELOPMENT_LOG.md.
+- Keep internal implementation details, measurements and test counts in DEVELOPMENT_LOG.md:
+  this file is user/creator-facing only, not an engineering diary.
 - Preserve historical entries rather than rewriting them.
 
 ## 0.1.1 — Product and AI Architecture Contracts

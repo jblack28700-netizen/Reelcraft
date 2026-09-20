@@ -279,11 +279,15 @@ After installation `ffmpeg` resolves to `/usr/bin/ffmpeg` (Debian 8.0.1,
 
 ### Why it matters beyond the tests
 
-`scripts/build_and_test.sh` runs the suite under `timeout 240`. With the leaked
-Termux ffmpeg the suite took 850-1,021 s and **could never have finished inside that
-ceiling**, so the repository's own documented verification workflow was unviable for
-reasons unrelated to the product. With the Debian build the suite completes in
-`221-241 s and the script is viable again.
+When this incident was diagnosed, `scripts/build_and_test.sh` ran the suite under
+`timeout 240`. With the leaked Termux ffmpeg the suite took 850-1,021 s and **could
+never have finished inside that ceiling**, so the repository's own documented
+verification workflow was unviable for reasons unrelated to the product. With the
+Debian build the suite completed in `221-241 s` and the script was viable again.
+
+The ceiling is now **900 s** (raised as the suite grew; the script's own comment carries
+the current measured runtime and headroom reasoning). Do not restate that value in other
+documents: `scripts/checkpoint_check.sh` flags script/doc drift.
 
 Do **not** set `REELCRAFT_FFMPEG` to the Termux binary. Leave it unset (PATH
 resolves `/usr/bin/ffmpeg`) or set it explicitly to `/usr/bin/ffmpeg`.

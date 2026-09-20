@@ -6,6 +6,15 @@ This document records major milestones in the development of Reelcraft.
 
 It provides chronological context for the project so future developers and AI agents do not need to reconstruct history from chat conversations.
 
+## Maintenance policy (2026-09-18)
+
+This file records **milestone-level** narrative, not a per-objective diary. The authoritative
+per-objective engineering record is `DEVELOPMENT_LOG.md` (one entry per objective), and the
+architectural rules live in `DECISIONS.md`. Write a new entry here when a milestone, phase or
+capability family completes — for example "Objectives 23-30, the reframing quality arc" — rather than
+once per objective. Existing entries are preserved unchanged: they document what was understood at
+the time, including numbers and plans that later changed.
+
 ---
 
 # 2026-09-02 — Project Foundation

@@ -1,5 +1,13 @@
 # Reelcraft — Development Log
 
+## Purpose and update rule
+
+This is the **authoritative chronological engineering record**: one entry per objective, written
+once, append-only (never rewrite history). Other documents must not restate it — `CURRENT_STATE.md`
+records current system state, `NEXT_TASK.md` the capability register and validation debt,
+`DECISIONS.md` the architectural decisions, `CHANGELOG.md` user-facing changes, and
+`PROJECT_HISTORY.md` the milestone-level narrative. See `AGENT_WORKFLOW.md` §10.
+
 ## Purpose
 
 This document records meaningful development activity chronologically.
@@ -2202,4 +2210,84 @@ Three questions decided whether this was ready, and all three were answered from
 ### Decisions
 
 - Decision 050 recorded (multi-subject framing is one enclosing framing decision on the existing plan; the contract cannot verify containment, so the guarantee is enforced before planning where identities and footprints exist). Decisions 017-049 preserved unchanged.
+
+
+
+## 2026-09-18 — Process Objective P1: Development-Management Consolidation
+
+### Objective
+
+Make the development-management layer as scalable as the engineering loop: remove duplicated
+documentation, replace stale candidate prose with a capability register, make validation debt
+visible, make stable architecture and test relationships cheap to look up, and give batches of
+related objectives a controlled execution mechanism. Documentation and policy only — no product
+behaviour, schema, semantics or test change.
+
+### What inspection found (measured, not assumed)
+
+- **11,518 doc lines / ~900 KB**; ~200 new doc lines per objective written into 5-8 documents, so
+  each milestone was narrated 4-8 times.
+- `CURRENT_STATE.md` held **74 objective narrative sections** — exactly one per dated
+  `DEVELOPMENT_LOG.md` entry — plus stale Phase 1 boilerplate ("no 360 viewer or reframing system
+  exists", "next stage: implement the Phase 1 foundation", project directory `/root/reelcraft`).
+- `NEXT_TASK.md` mixed a candidate prose list (stale twice) with per-objective history; the
+  actionable content was ~20 lines at the tail of 726.
+- No seam index and no behaviour→test index existed anywhere (`ARCHITECTURE.md` never used the word
+  "seam"), so each objective re-derived its regression set and re-read stable interfaces.
+- Validation debt was invisible: Objectives 28 (rendered audio), 29 (lens control) and 30
+  (two-subject framing) are fixture-only, and nothing surfaced that without reading thousands of
+  lines.
+- `DEVELOPMENT_ENVIRONMENT.md` still claimed the suite runs under `timeout 240` while
+  `scripts/build_and_test.sh` uses 900 — a live example of claim drift.
+- `AGENT_WORKFLOW.md` already is the canonical policy and already says prompts should reference it,
+  so a second protocol document would have added a fourth overlapping governance file.
+
+### What changed
+
+- **`NEXT_TASK.md` rewritten as the operational register** (726 -> 119 lines): priority, current
+  objective, a 30-row capability table (status, seam, dependency, validation level, verification
+  commit), an explicit **validation debt** section naming the 9 skips and the three fixture-only
+  objectives, a candidates table with prerequisites, and blocked/deferred entries each stating the
+  missing prerequisite.
+- **`CURRENT_STATE.md` rewritten as current state** (1,352 -> 132 lines): version, priority, stage,
+  subsystem table, test baseline, validation status, current limitations, environment, rules, a
+  "where information lives" map, and a completed-objectives index with commits. The removed narrative
+  is authoritatively in `DEVELOPMENT_LOG.md` (verified 74 headings -> 74 entries) and in git history.
+- **`ARCHITECTURE.md` gained §23 seam index** (31 seams: implementation, guarantee, consumers) **and
+  §24 behaviour→test index** (23 rows mapping guarantees to test groups).
+- **`AGENT_WORKFLOW.md` gained §12 controlled batches and gates** (human approves a capability family
+  and 2-3 dependency-adjacent objectives; per-objective commit/tests/docs unchanged; a mandatory
+  prerequisite gate between objectives with an explicit stop list; autonomy for routine engineering,
+  never for product direction) **and §13 checkpoint hygiene**; §4 now points at the test index, §9/§11
+  refer to §12, and §10 states the one-home-per-fact rule.
+- **`scripts/checkpoint_check.sh`** (new, ~90 lines, no dependencies): build-tree freshness in both
+  trees, present-tense script/document value drift, documented-vs-actual test totals, and a decision
+  count. It immediately caught the real drift and a missing canonical baseline line.
+- **`AI_HANDOFF.md` §3 compressed** (126 -> 61 lines) from a second changelog into orientation:
+  priority, pipeline map, the stop-and-report invariants, the four known traps, what is deliberately
+  not built, and the build-integrity rule — all pointing at the decisions that own them.
+- **Convention notes** added to `DEVELOPMENT_LOG.md` (authoritative record), `PROJECT_HISTORY.md`
+  (milestone-level from now on; existing entries preserved unchanged), `CHANGELOG.md` (user-facing
+  only) and `DEVELOPMENT_ENVIRONMENT.md` (timeout claim corrected to 900 s, with the historical
+  sentence preserved as history).
+- **Decision 051** records the policy: one home per fact, the register, the indexes, batches with
+  gates, checkpoint hygiene.
+
+### Preserved deliberately
+
+Decisions 001-050 byte-identical (one appended hunk); all per-objective detail retained in
+`DEVELOPMENT_LOG.md` and git history; historical numbers and plans inside dated entries left exactly
+as they were (including the old 240 s timeout references); no product source, test or schema file
+touched.
+
+### Verification
+
+- Documentation-only diff; no `app/`, `tests/` or script-behaviour change other than the new
+  `scripts/checkpoint_check.sh`.
+- `scripts/checkpoint_check.sh` passes, including against the Objective 30 log.
+- Full suite: **478 passed / 0 failed / 9 skipped** — identical to the Objective 30 baseline.
+
+### Decisions
+
+- Decision 051 recorded. Decisions 001-050 preserved unchanged.
 

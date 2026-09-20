@@ -93,6 +93,9 @@ Before running tests, identify **what behavior changed**:
 - Which existing tests exercise them?
 - Which contracts could a caller observe as changed?
 
+The **behaviour -> test index** (`docs/ARCHITECTURE.md` §24) maps guarantees to the tests that
+verify them; use it to size a regression run instead of re-deriving the set.
+
 Run only the materially affected tests during the development loop. Reserve
 broad regression suites and expensive end-to-end validation for:
 
@@ -163,8 +166,9 @@ rather than rediscovering them each session.
 
 ## 9. Scope control
 
-- **One approved objective at a time.**
-- Do not automatically begin the next objective.
+- **One approved objective at a time**, or the next objective of an explicitly approved **batch**
+  (§12) after passing its gate.
+- Do not automatically begin the next objective outside an approved batch.
 - Do not expand scope because an interesting adjacent improvement was found.
 - Document worthwhile future work (`NEXT_TASK.md`, `KNOWN_ISSUES.md`, or the
   relevant technology doc) and continue the approved objective.
@@ -182,9 +186,15 @@ The repository is the persistent source of truth; chat history is not.
   new numbered decision with context, rationale, and consequences.
 - **Never rewrite architectural history.** Do not edit or reinterpret accepted
   decisions in place; add a new decision that supersedes or extends them.
-- Update `CURRENT_STATE.md`, `NEXT_TASK.md`, `DEVELOPMENT_LOG.md`,
-  `PROJECT_HISTORY.md`, `CHANGELOG.md`, and `KNOWN_ISSUES.md` as the change
-  requires.
+- **One home per fact.** Write an objective's detailed record **once**, in
+  `DEVELOPMENT_LOG.md`. Do not restate it in `CURRENT_STATE.md` (current system
+  state), `NEXT_TASK.md` (capability register, ~one row per capability with status
+  and validation level), `PROJECT_HISTORY.md` (milestone-level narrative only),
+  `CHANGELOG.md` (user-facing only), or `AI_HANDOFF.md` (orientation and rules).
+  `DECISIONS.md` carries decisions, not narratives; `KNOWN_ISSUES.md` carries open
+  limitations with reasons.
+- Update only the documents whose facts actually changed, and keep
+  `NEXT_TASK.md` §3 (register) and §4 (validation debt) accurate.
 - Use **dedicated Git checkpoints** with understandable, logically scoped
   commits.
 - **Never** `reset`, `amend`, `force-push`, or silently overwrite previous
@@ -209,8 +219,57 @@ The report states what was implemented, what was verified (with exact results),
 what was deliberately not done, the decision number if any, and the commit SHA.
 The working tree must be clean when the objective is declared complete.
 
-**Do not begin the next objective automatically.** Wait for an approved
-objective.
+**Do not begin the next objective automatically** unless it belongs to an
+approved batch (§12) and the gate has been passed.
+
+---
+
+## 12. Controlled batches and gates
+
+The default remains one objective at a time. A **batch** lets a human approve a capability family
+plus **2-3 dependency-adjacent objectives** in a single authorisation, so routine work does not need
+a new prompt per objective. A batch does not relax any approval requirement in §1.
+
+**What the human approves:** the capability family, the ordered objective list, and each objective's
+scope and Definition of Done. The agent may not add, reorder or substitute an objective.
+
+**Per objective, unchanged:** implementation, focused then targeted tests, **one** official
+full-suite run, documentation in its single home (§10), and **one Git commit**. Never batch commits,
+and never batch a full-suite run across objectives.
+
+**The gate between objectives.** Before starting objective N+1 of a batch, re-verify that its
+prerequisites still hold — the `NEXT_TASK.md` register rows it depends on, the files it will touch,
+and the outcome of the objective just finished — and report a short gate note. Then continue or stop.
+
+**Stop at the gate** (and wait for a new authorisation) if:
+
+- a new architectural decision, contract or semantic change is needed;
+- a schema or persisted-artifact change is needed;
+- a new dependency, provider, model or licensing decision is needed;
+- source media could be modified, or a destructive operation is implied;
+- an unresolved failure, flake or unexplained result remains;
+- the next objective's material scope has grown beyond its approved Definition of Done;
+- anything invalidates the batch (a discovered defect, a re-ranked candidate, a wrong premise).
+
+**Autonomy inside a batch:** routine engineering decisions stay autonomous — names, file
+organisation inside the touched subsystem, test design and fixtures, refactors confined to the
+touched area, documentation wording, and choosing between equivalent deterministic rules **provided
+the choice is recorded**. The agent may **not** silently select a product direction, a capability
+family, a dependency or an architectural change; those return to the human.
+
+## 13. Checkpoint hygiene
+
+Run `scripts/checkpoint_check.sh` before declaring an objective complete. It is deliberately
+small — a few deterministic checks, not a validation framework:
+
+- **build trees current** — `make -q` in the repository root and in `tests/`. A stale tree once
+  produced a binary mixing two object revisions (`DEVELOPMENT_ENVIRONMENT.md`).
+- **claimed numbers match reality** — test totals claimed in a document or report can be compared
+  with the last run's `Totals:` line.
+- **no stale configuration values** — a value that appears both in a script and in the docs (the
+  240 s -> 900 s suite timeout was the precedent) is flagged when the two disagree.
+
+Full-suite totals belong to the checkpoint record; do not restate them across several documents.
 
 ---
 
@@ -227,7 +286,7 @@ Approved objective
   |-- Update docs (+ DECISIONS.md if architectural)
   |-- Dedicated Git checkpoint
   |-- Clean tree + report
-  '-- STOP (do not start the next objective)
+  '-- STOP; or, inside an approved batch, run the §12 gate and continue to the next objective
 ```
 
 ## Relationship to other documents

@@ -434,3 +434,77 @@ The analysis stage the workflow always assumed now exists. It sits **beside** th
 - **Degradation is a status.** Artifact missing, unreadable, mismatched, stale, source moved or gone are reported conditions, never project corruption.
 - Deliberately not present: transcript, diarization, scene segmentation, quality/salience, B-roll reasoning, LLM reasoning, Creator Memory, embeddings.
 
+
+---
+
+## 23. Seam index (stable boundaries)
+
+Compact map of the stable architectural boundaries: where each lives, what it guarantees, and who
+consumes it. This is an index, not a replacement for the sections above or for `DECISIONS.md`.
+
+| Seam | Implementation | Guarantee | Major consumers |
+|---|---|---|---|
+| Project / edit model | `app/core/Project.*`, `MediaItem.*` | deterministic project state; additive schema v3; original media never modified | Application, UI, decision/analysis artifacts |
+| Media-source seam | `app/media/FrameSource.h` (abstract) | bounded reads; Ok / EndOfStream / Error / Timeout; caller-supplied geometry | `FramePump`, `Player`, playback |
+| Persistent FFmpeg source | `app/media/FfmpegFrameSource.*` | one subprocess per open; input seek; aspect-preserving proxy; `-an` | source playback, analysis runner, stream provider |
+| Frame pump | `app/media/FramePump.*` | synchronous, caller-driven; no timer/thread | `Player` |
+| Player / timing | `app/playback/{Player,Playhead,Clock,SystemClock,PacingPolicy,DefaultPacingPolicy}.*` | explicit-tick state machine; injected clock and pacing | Application playback paths |
+| Single-frame decode | `app/media/FrameExtractor.*` | external ffmpeg CLI; `-ss` seek; read-only | Objective 10 preview, provider fallback |
+| Duration / stream-facts probe | `app/media/MediaDurationProbe.h`, `FfprobeDurationProbe.*` | duration, frame rate, `streamSummary` (hasAudio/sample rate/channels); additive defaults report *unknown* | whole-clip ranges, audio decision, analysis |
+| Equirect -> camera renderer | `app/viewer/EquirectView.*` | vertical-FOV pinhole basis; FOV bounded [20,140]; bilinear, seam-safe | viewer presentation, reframe renderer, crops |
+| Viewer camera / state | `app/viewer/{ViewerProjection,ViewportState}.*` | yaw/pitch/roll/FOV conventions shared across engine and UI | viewer, reframe math |
+| 360 geometry | `app/target/EquirectProjection.*` | equirect/view pixel <-> direction; detection -> direction + angular radii; seam-safe distance | resolver, tracker, planner, crops |
+| Covering views | `app/target/EquirectViewPlan.*` | deterministic overlapping tangent coverage (+polar views) | resolver, analysis |
+| Detector seam | `app/target/TargetDetector.h`, `ProcessTargetDetector.*` | subprocess file/JSON protocol; no CV runtime linked; deterministic failure | resolver, analysis, command path |
+| Spherical tracker | `app/target/SphericalTargetTracker.*` | deterministic NMS + gated association; duplicates consolidated by overlapping yaw footprints | resolver, identity, planner |
+| Resolver | `app/target/TargetResolver.*` | views -> detections -> observations -> tracks; unresolved is never fabricated | command path, analysis |
+| Identity + selection | `app/target/{TargetIdentity,TargetSelector}.*` | "me" binding, ordinals, left/right; ambiguity reported with candidates | command path, appearance re-ID |
+| Appearance re-identification | `app/target/{Appearance*,IdentityReidentifier}.*` | optional, replaceable embeddings; can veto geometry, never overrides an explicit selection | identity registry |
+| Speaker evidence | `app/target/Speaker*` | optional speech intervals, deterministic association and timeline; audio is evidence, never identity | speaker commands, plans |
+| Intent boundary | `app/reframe/ReframeIntent.*` | deterministic parse of directions/subjects/temporal/framing/plural groups; in-memory only, never persisted | builder, command runner, contract |
+| Plan model | `app/reframe/ReframePlan.*`, `CameraKeyframe.*` | validated, JSON-serializable decision; FOV [20,140]; ordered retained segments | camera path, renderer, decisions, replay |
+| Camera path | `app/reframe/CameraPath.*` | pure evaluation; shortest-yaw interpolation; hold; FOV interpolation | renderer, tests |
+| Plan builder | `app/reframe/ReframePlanBuilder.*` | intent + resolved targets -> validated plan; carries the lens state; refuses unresolved plural moves | command runner, pipeline |
+| Track/plan planner | `app/target/TargetTrackPlanner.*` | follow path from one track (smoothed); enclosing framing for several tracks | command runner |
+| Frame provider seam (render/resolve) | `app/reframe/ReframeFrameProvider.h` | deterministic frame per timestamp; injectable | renderer, resolution, tests |
+| Persistent stream provider | `app/reframe/ReframeStreamFrameProvider.*` | one stream per anchor; bounded window; seek fallback; frames byte-identical to the seek path | renderer, resolution |
+| Renderer + encoder | `app/reframe/ReframeRenderer.*` | deterministic frames from (plan, timestamp); H.264/yuv420p; optional source-audio mux | pipeline, replay |
+| Pipeline | `app/reframe/ReframePipeline.*` | orchestration; audio decision from probe facts; notes surfaced | command runner, Application, replay |
+| Command runner | `app/reframe/ReframeCommandRunner.*` | single composition entry point; never fabricates a direction; refuses unsupported combinations | Application |
+| Contract checker | `app/reframe/ReframeContract.*` | pure IPC-1..4 checks over the final (intent, plan) pair | command runner |
+| Edit-decision artifact | `app/reframe/EditDecision.*` | versioned, hashed, immutable; strict loader; replay without perception | Application, replay |
+| Media-analysis artifact | `app/analysis/MediaAnalysis.*`, `MediaAnalysisRunner.*` | versioned layered evidence with explicit lifecycle/coverage; never an editorial decision | project references only (no consumer yet) |
+| Application orchestration | `app/application/{Application,ReframeCommandOutcome}.*` | owns project/media/selection/playback/commands; injectable seams for model-free tests | UI |
+| UI shell | `app/ui/{MainWindow,ViewerWidget}.*` | presentation only; no decoding or planning logic | user |
+
+## 24. Behaviour -> test index
+
+Which tests verify which guarantee. Use it to size a regression run instead of re-deriving the set.
+Section headers in `tests/test_project.cpp` name the objective each group belongs to.
+
+| Behaviour / guarantee | Tests |
+|---|---|
+| Project + media model, schema, open/save | `project*`, `saveAndLoad*`, `mediaItem*`, `applicationImport*`, `activeMedia*`, `reopen*` |
+| Viewer state, projection, equirect presentation | `viewportState*`, `viewerProjection*`, `viewerWidget*`, `equirectView*` |
+| Frame source seam, pump, player/timing | `framePump*`, `fmpegFrameSource*`, `player*`, `playhead*`, `persistentStreamProbe*` |
+| Duration/stream-facts probe | `ffprobeDurationProbe*`, `applicationWholeClip*` |
+| Plan model + validation | `reframePlan*`, `reframeCameraKeyframe*` |
+| Camera path (interpolation, wraparound, bounds) | `cameraPath*` |
+| Deterministic render + encode | `reframeRenderer*`, `reframePipelineRendersRealVideoEndToEnd`, `reframePipelineRendersTemporalSegments` |
+| Decode equivalence / process bounds | `reframeStreamProvider*`, `reframeRenderEquivalenceStreamingVersusSeek`, `ffmpegFrameSourceLifecycleIsSafe` |
+| Intent grammar | `reframeIntent*` |
+| Plan building | `reframeBuilder*` |
+| Contract rules IPC-1..4 | `reframeContract*` |
+| Follow path + density + smoothing | `reframeCommandRunnerFollow*`, `followResolvesWithDefaultMergeDistance`, `targetTrackPlanner*`, `followSmoothing*`, `reframePipelineFollowsMovingSubjectOnRealMedia` |
+| Duplicate consolidation (covering views) | `targetResolverReproducesCoveringViewDuplicate`, `coveringViewMergeDoesNotOverMerge` |
+| Target geometry / tracking / selection | `equirect*`, `targetTracker*`, `targetResolver*`, `targetSelector*`, `targetIdentity*` |
+| Speaker evidence + appearance re-ID | `speaker*`, `appearance*` |
+| Temporal editing + compound commands | `temporalEditPlan*`, `reframeCommandRunner*Temporal*`, `reframeCommandRunnerComposesCompoundCommands`, `applicationTemporal*` |
+| Persisted decisions, revision, replay | `editDecision*`, `replay*`, `reviseEditDecision*`, `decisionProvenance*` |
+| Media analysis (artifact, lifecycle, one pass) | `mediaAnalysis*`, `projectAnalysisRefs*`, `replayIsIndependentOfMediaAnalysis` |
+| Rendered-output audio (Obj 28) | `reframeRenderPreservesSourceAudio`, `reframeRenderAudioFollowsRetainedSegments`, `reframeRenderAudioTrimsToSourceRange`, `reframeRenderSilentSourceStaysSilent`, `reframeRenderUnusableAudioFactsDegradesHonestly`, `reframeRenderLeavesSourceMediaUntouched`, `replayReproducesRenderedAudio` |
+| Lens / FOV control (Obj 29) | `reframeIntentParsesFraming`, `reframeBuilderAppliesRequestedFraming`, `reframeContractFieldOfViewFidelity`, `reframeCommandRunnerFollowsAtRequestedFraming`, `reframeCommandRunnerSpeakerFramingIsHonest`, `reframePipelineRendersRequestedFraming` |
+| Multi-subject framing (Obj 30) | `reframeIntentParsesMultiSubjectFraming`, `reframeMultiSubjectFramingGeometry`, `reframeCommandRunnerFramesTwoSubjects`, `reframeCommandRunnerResolvesTwoDetectedPeople`, `reframeCommandRunnerRejectsUnsatisfiableMultiSubject`, `reframeCommandRunnerFramesMovingSubjectsAndReplays` |
+| Source playback + rendered playback | `sourcePlayback*`, `applicationPlayback*`, `realSourcePlaybackIntegration` |
+| Environment-gated real-media / model validation | `real*` (see `NEXT_TASK.md` §4) |
+
