@@ -11,6 +11,7 @@
 #include <memory>
 
 #include "analysis/MediaAnalysis.h"
+#include "reframe/ReframePlanAdjustment.h"
 #include "media/FfprobeDurationProbe.h"
 #include "media/FfmpegFrameSource.h"
 #include "media/FrameExtractor.h"
@@ -1707,6 +1708,171 @@ QList<int> Application::revisionsOf(int index) const
         }
     }
     return revisions;
+}
+
+// --- Objective 40: creator lens widening (Decision 058) ----------------------
+//
+// The adjustment itself is a pure transformation over a plan
+// (ReframePlanAdjustment). What this entry point adds is the surrounding
+// guarantees, all of which already existed:
+//   * the parent decision's plan is adjusted, never replaced;
+//   * the adjusted plan is rendered through the SAME deterministic render seam
+//     every render uses (no second rendering path, no perception, no parsing);
+//   * the result is recorded through the SAME append gate as a NEW immutable
+//     decision whose origin and parent hash are the existing creator-revision
+//     vocabulary, so the modification is hashed and auditable;
+//   * the destination is the existing fresh sibling from Decisions 055-057, so no
+//     held render can be overwritten and the parent file is untouched.
+
+double Application::nextWiderLensFor(int index) const
+{
+    if (index < 0 || index >= m_reframeOutputs.size()) {
+        return 0.0;
+    }
+    const ReframeCommandOutcome &record = m_reframeOutputs.at(index);
+    if (!record.hasEditDecision()) {
+        return 0.0;
+    }
+    return ReframePlanAdjustment::nextWiderLensDeg(
+        ReframePlanAdjustment::widestKeyframeFieldOfViewDeg(
+            record.editDecision().plan()));
+}
+
+RevisionResult Application::widenRenderedLens(int index, double targetFieldOfViewDeg)
+{
+    RevisionResult result;
+
+    if (index < 0 || index >= m_reframeOutputs.size()) {
+        result.error = QStringLiteral("There is no such reframe output to widen.");
+        return result;
+    }
+    const ReframeCommandOutcome &record = m_reframeOutputs.at(index);
+    if (!record.hasEditDecision()) {
+        result.error = record.editDecisionError().isEmpty()
+            ? QStringLiteral("This render record has no edit decision, so its lens "
+                             "cannot be widened.")
+            : record.editDecisionError();
+        return result;
+    }
+
+    const EditDecision parentDecision = record.editDecision();
+
+    // The adjustment is made against the source the record was made from. A source
+    // that no longer matches is refused rather than widened against other footage.
+    QString sourceDetail;
+    if (parentDecision.checkSource(&sourceDetail)
+        != EditDecision::SourceStatus::Matches) {
+        result.error = QStringLiteral("Cannot widen the lens: %1").arg(sourceDetail);
+        return result;
+    }
+
+    // The whole adjustment: a pure, deterministic transformation over the stored
+    // plan. No instruction is parsed and no perception runs.
+    ReframePlan adjusted;
+    QString adjustmentError;
+    if (!ReframePlanAdjustment::widenLens(parentDecision.plan(),
+                                          targetFieldOfViewDeg, &adjusted,
+                                          &adjustmentError)) {
+        result.error = adjustmentError;
+        return result;
+    }
+
+    // The new decision carries the same source reference the parent did, so the
+    // record's own media is resolved by id rather than assuming the active one.
+    const MediaItem *media = nullptr;
+    for (const MediaItem &candidate : m_mediaItems) {
+        if (candidate.id() == parentDecision.source().mediaId) {
+            media = &candidate;
+            break;
+        }
+    }
+    if (!media) {
+        result.error = QStringLiteral(
+            "The source media of this render is no longer in the project, so its "
+            "lens cannot be widened.");
+        return result;
+    }
+
+    // Existing destination policy (Decisions 055-057): a fresh sibling that no held
+    // record claims. The derived name cannot be the parent's own output.
+    const QString destination = revisionOutputPath(index);
+    if (destination.isEmpty()) {
+        result.error = QStringLiteral(
+            "No free destination could be derived for the widened render.");
+        return result;
+    }
+    const QString absoluteOutput = QFileInfo(destination).absoluteFilePath();
+    if (recordHoldingOutputPath(absoluteOutput) >= 0) {
+        // Defence in depth: the derivation already excludes claimed paths.
+        result.error = QStringLiteral(
+                           "The widened render may not overwrite a recorded render: "
+                           "record %1 already writes to %2")
+                           .arg(recordHoldingOutputPath(absoluteOutput))
+                           .arg(absoluteOutput);
+        return result;
+    }
+
+    // The SAME deterministic render seam every render uses.
+    const ReframePipeline::Result executed =
+        m_replayRenderer(adjusted, media->path(), absoluteOutput);
+
+    const double previousWidest =
+        ReframePlanAdjustment::widestKeyframeFieldOfViewDeg(parentDecision.plan());
+    const double widenedWidest =
+        ReframePlanAdjustment::widestKeyframeFieldOfViewDeg(adjusted);
+
+    ReframeCommandOutcome outcome;
+    outcome.ok = executed.ok;
+    // The instruction recorded is the one this plan DESCENDS FROM, carried verbatim:
+    // the adjusted plan does not honour it (it no longer reaches the lens that
+    // instruction asked for), and it was not re-derived from it either.
+    outcome.instruction = parentDecision.instruction();
+    outcome.sourceMediaId = record.sourceMediaId;
+    outcome.sourcePath = media->path();
+    outcome.outputPath = absoluteOutput;
+    outcome.startMs = record.startMs;
+    outcome.endMs = record.endMs;
+    const ReframePlan::OutputSpec output = adjusted.output();
+    outcome.outputWidth = output.width;
+    outcome.outputHeight = output.height;
+    outcome.outputFps = output.fps;
+    outcome.frameCount = executed.frameCount;
+    outcome.temporalSegments = record.temporalSegments;
+    outcome.resolvedTargets = record.resolvedTargets;
+    outcome.notes = record.notes;
+    // The adjustment is recorded in the record's existing notes AND, decisively, in
+    // the hashed decision fields below (origin + parent hash): the note explains the
+    // parameter, the decision attests the modification.
+    outcome.notes.append(
+        QStringLiteral("Lens widened from %1 to %2 degrees by the creator "
+                       "(Decision 058); the instruction above is the one this plan "
+                       "descends from and was not re-run.")
+            .arg(QString::number(previousWidest, 'f', 1),
+                 QString::number(widenedWidest, 'f', 1)));
+    if (executed.ok) {
+        outcome.notes.append(QStringLiteral(
+            "Rendered from the widened plan (creator lens adjustment)."));
+    } else {
+        outcome.error = executed.error.isEmpty()
+            ? QStringLiteral("The widened render failed.")
+            : executed.error;
+    }
+    // Existing creator-revision lineage: a NEW immutable decision whose single
+    // parent is the record being adjusted.
+    outcome.setEditDecision(EditDecision::revisedFrom(parentDecision, adjusted,
+                                                      *media,
+                                                      outcome.instruction));
+
+    m_lastReframeOutcome = outcome;
+    appendReframeOutput(outcome);
+    emit reframeCommandFinished(m_lastReframeOutcome);
+
+    result.ok = executed.ok;
+    result.newRecordIndex = m_reframeOutputs.size() - 1;
+    if (!executed.ok) {
+        result.error = outcome.error;
+    }
+    return result;
 }
 
 ReplayResult Application::replayEditDecision(int index, const QString &outputPath)

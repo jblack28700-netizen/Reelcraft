@@ -135,6 +135,12 @@ struct ReframeIntent
     // the default value", because only the first is compatible with silently
     // using the default lens.
     QList<double> requestedFieldOfViews() const;
+
+    // Objective 40 (Decision 058): the distinct field-of-view values the framing
+    // VOCABULARY can request, ascending. Derived from the same table the parser
+    // uses, so a lens a creator may widen to can never be a number this layer
+    // invented.
+    static QList<double> framingLadderFieldOfViews();
 };
 
 // Deterministic, rule-based parser for a small, documented instruction

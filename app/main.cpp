@@ -85,6 +85,26 @@ int main(int argc, char *argv[])
                              application.decisionProvenance(index), index,
                              application.revisionsOf(index));
                      });
+    // Objective 40: widen the lens of a rendered decision. The application picks
+    // the next wider ladder step and refuses honestly (already widest, no decision,
+    // drifted source, out-of-bounds target); nothing is rendered on a refusal.
+    QObject::connect(&window, &MainWindow::widenRenderLensRequested, &application,
+                     [&application, &window](int index) {
+                         const double target = application.nextWiderLensFor(index);
+                         if (target <= 0.0) {
+                             window.showStatus(QStringLiteral(
+                                 "No wider lens is available for the selected "
+                                 "render."));
+                             return;
+                         }
+                         const RevisionResult result =
+                             application.widenRenderedLens(index, target);
+                         if (!result.ok) {
+                             window.showStatus(
+                                 QStringLiteral("Lens widening refused: %1")
+                                     .arg(result.error));
+                         }
+                     });
     QObject::connect(&window, &MainWindow::selectCreatorTargetRequested,
                      &application, &Application::selectCreatorTargetFromViewport);
     QObject::connect(&window, &MainWindow::clearCreatorTargetRequested,

@@ -7,22 +7,23 @@ repeated here: it lives in `DEVELOPMENT_LOG.md` (chronological record), `DECISIO
 
 ## Version and branch
 
-- Version: **0.2.75** (user-facing history: `CHANGELOG.md`).
-- Branch: `main`. Current checkpoint: this commit (Objective 39); the previous checkpoint was
-  `d9f600cff2f5e11ee4436459e570627041e88415` (Objective 38), preceded by
-  `abfafc99c252749ec7241b93a3da75481f5e20be` (Objective 37).
+- Version: **0.2.76** (user-facing history: `CHANGELOG.md`).
+- Branch: `main`. Current checkpoint: this commit (Objective 40); the previous checkpoint was
+  `050dd9f6cdc20451a84221eede00b637a1bbdcbb` (Objective 39), preceded by
+  `d9f600cff2f5e11ee4436459e570627041e88415` (Objective 38).
 
 ## Priority and stage
 
 - **Human-approved priority:** a working **360 reframing / editing capability**.
   Pipeline: 360 source -> scene/subject understanding -> natural-language or structured request ->
   structured edit/reframe plan -> virtual-camera decisions -> deterministic execution -> flat output.
-- **Stage:** Phase 4 (360 reframing engine) — 39 objectives complete and verified; Phase 3 media
+- **Stage:** Phase 4 (360 reframing engine) — 40 objectives complete and verified; Phase 3 media
   engine is open, its player-lifecycle objective deferred behind the 360 priority.
-- **Current objective:** none selected. Objective 39 (the render list keeps the creator's selection across
-  refreshes) is complete, following Objective 38 (record preservation), Objective 37 (render destinations,
-  Decision 057), Objective 36 (revision safety, Decision 056) and Objective 35 (creator revision v1,
-  Decision 055). The next capability is chosen by the human from `NEXT_TASK.md` §5.
+- **Current objective:** none selected. Objective 40 (creator lens widening — the one constrained plan-level
+  adjustment Decision 058 permits) is complete, following Objective 39 (render-list selection), Objective 38
+  (record preservation), Objective 37 (render destinations, Decision 057), Objective 36 (revision safety,
+  Decision 056) and Objective 35 (creator revision v1, Decision 055). The next capability is chosen by the
+  human from `NEXT_TASK.md` §5.
 
 ## Subsystem status
 
@@ -44,12 +45,13 @@ repeated here: it lives in `DEVELOPMENT_LOG.md` (chronological record), `DECISIO
 | Persistent media analysis (artifact + one-pass runner) | implemented; **no consumer yet** | `app/analysis/` |
 | Creator review (inspect the prepared plan, accept or reject) | implemented, verified (fixtures) | `app/application/ReframePlanReview.*`, `Application` review API, `MainWindow` panel |
 | Creator revision (record level) + provenance/supersession readout | implemented, verified (fixtures) | `Application::{revisionOutputPath,reviseReframeOutput,revisionsOf,recordHoldingOutputPath}`, `MainWindow` revision/provenance controls |
+| Creator lens widening (constrained plan adjustment, widening only) | implemented, verified (fixtures) | `app/reframe/ReframePlanAdjustment.*`, `Application::widenRenderedLens`, `MainWindow` widen action |
 | Non-destructive render destinations (no render overwrites a recorded render) | implemented, verified (fixtures) | `Application::{defaultReframeOutputPath,buildReframeCommandContext,acceptReframeReview}` over `recordHoldingOutputPath` |
 | In-app audio playback | **missing** (Decision 036 follow-up) | — |
 
 ## Test baseline
 
-- Current result: **521 passed, 0 failed, 14 skipped** (Objective 39 checkpoint; this is the
+- Current result: **528 passed, 0 failed, 14 skipped** (Objective 40 checkpoint; this is the
   canonical form `scripts/checkpoint_check.sh` reads). Full suite with
   `scripts/build_and_test.sh`; a focused set by passing QtTest function names to
   `tests/reelcraft_tests`.
@@ -88,6 +90,11 @@ renderer is byte-identical to the reviewed plan.
 
 - **No audio output in the application**: rendered files carry audio (Obj 28), but source and
   rendered-result playback are video-only (Decision 036).
+- **One plan-level adjustment exists, and it is deliberately narrow**: a rendered plan's lens can be
+  widened (perception-free, containment preserved by construction) and nothing else can be adjusted at the
+  plan level. Narrowing, aim, roll, timing, retained segments, output geometry, subjects, keyframes and
+  pre-render adjustment all remain outside it; a creator who wants any of those re-issues an instruction,
+  which re-runs perception (Decision 058).
 - **Revision is record-level and free-text**: a RENDERED edit can be revised with a new instruction
   (a new immutable decision whose parent is the record it revises, written to a fresh
   `<base>_reframe_rev<N>.mp4` sibling), and a recorded decision's provenance can be read in the UI.
@@ -180,6 +187,7 @@ each objective.
 | Phase 4 Obj 36 | revision safety (never target a held render's output path) and visible derived supersession | `dae2864` |
 | Phase 4 Obj 37 | render destinations never overwrite a recorded render; creator workflow covered end to end | `abfafc9` |
 | Phase 4 Obj 38 | unreadable render records preserved verbatim instead of discarded (recorded KI resolution) | `d9f600c` |
-| Phase 4 Obj 39 | the render list keeps the creator's selection across refreshes (interaction defect fix) | this checkpoint |
+| Phase 4 Obj 39 | the render list keeps the creator's selection across refreshes (interaction defect fix) | `050dd9f` |
+| Phase 4 Obj 40 | creator lens widening: constrained monotone plan adjustment recorded as a creator revision | this checkpoint |
 
 ^ `f4ad631` also carries the canonical workflow policy (Objective 7's precedent).

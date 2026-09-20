@@ -51,7 +51,9 @@
 #include "reframe/ReframeContract.h"
 #include "reframe/EditDecision.h"
 #include "reframe/ReframeIntent.h"
+#include "reframe/ReframeMath.h"
 #include "reframe/ReframePlan.h"
+#include "reframe/ReframePlanAdjustment.h"
 #include "reframe/ReframePlanBuilder.h"
 #include "reframe/ReframePipeline.h"
 #include "reframe/TemporalEditPlan.h"
@@ -1346,6 +1348,14 @@ private slots:
     // Objective 39: the render list keeps the creator's selection across refreshes.
     void mainWindowRenderListKeepsSelectionAcrossRefresh();
     void mainWindowRevisionWorksAfterARefresh();
+    // Objective 40: constrained plan-level creator lens widening (Decision 058).
+    void reframePlanWidenLensIsAPureVerifiedTransformation();
+    void reframePlanWidenLensPreservesContainment();
+    void applicationWidenRenderedLensCreatesAnAttributedChildRecord();
+    void applicationWidenRenderedLensRefusesHonestly();
+    void applicationWidenRenderedLensReplayIsPerceptionFree();
+    void applicationWidenRenderedLensIsDeterministic();
+    void mainWindowWidenLensSurface();
 };
 
 void ProjectTest::initTestCase()
@@ -23249,6 +23259,731 @@ void ProjectTest::mainWindowRevisionWorksAfterARefresh()
     provenanceButton->click();
     QCOMPARE(provenanceSpy.count(), 1);
     QCOMPARE(provenanceSpy.first().at(0).toInt(), 1);
+}
+
+// ============ Objective 40: creator lens widening (Decision 058) =============
+// One constrained plan-level adjustment: FOV_new,i = max(FOV_old,i, T) over an
+// already-valid plan, rendered through the existing seam and recorded as a new
+// immutable creator-revision decision. Model-free throughout.
+
+namespace {
+
+// A valid two-keyframe plan with a lens ramp and two retained segments, so the
+// transformation has every field to preserve.
+ReframePlan widenFixturePlan(double firstFovDeg, double secondFovDeg)
+{
+    ReframePlan plan;
+    plan.setSourceMediaId(QStringLiteral("media-1"));
+    plan.setSourceRange(ReframePlan::TimeRange{ 0, 4000 });
+    plan.setOutput(ReframePlan::OutputSpec{ 640, 360, 2.0 });
+    plan.setSegments({ ReframePlan::TimeRange{ 0, 1000 },
+                       ReframePlan::TimeRange{ 3000, 4000 } });
+    CameraKeyframe first;
+    first.timeMs = 0;
+    first.yawDeg = 12.5;
+    first.pitchDeg = -3.0;
+    first.rollDeg = 2.0;
+    first.fieldOfViewDeg = firstFovDeg;
+    first.interpolation = CameraKeyframe::Interpolation::Linear;
+    CameraKeyframe second;
+    second.timeMs = 1500;
+    second.yawDeg = 40.0;
+    second.pitchDeg = 5.0;
+    second.rollDeg = -1.0;
+    second.fieldOfViewDeg = secondFovDeg;
+    second.interpolation = CameraKeyframe::Interpolation::Hold;
+    plan.setKeyframes({ first, second });
+    return plan;
+}
+
+} // namespace
+
+void ProjectTest::reframePlanWidenLensIsAPureVerifiedTransformation()
+{
+    const ReframePlan original = widenFixturePlan(60.0, 90.0);
+    QVERIFY(original.isValid());
+    const QJsonObject beforeJson = original.toJsonObject();
+    QVERIFY(ReframePlanAdjustment::isLensWidening(original, original));
+
+    // Pure transformation: every keyframe is raised to at least the target, and
+    // nothing else moves.
+    ReframePlan adjusted;
+    QString error;
+    QVERIFY2(ReframePlanAdjustment::widenLens(original, 120.0, &adjusted, &error),
+             qPrintable(error));
+    QCOMPARE(adjusted.keyframes().size(), 2);
+    QCOMPARE(adjusted.keyframes().at(0).fieldOfViewDeg, 120.0); // 60 -> 120
+    QCOMPARE(adjusted.keyframes().at(1).fieldOfViewDeg, 120.0); // 90 -> 120
+    QCOMPARE(ReframePlanAdjustment::widestKeyframeFieldOfViewDeg(adjusted), 120.0);
+    // Monotone at every keyframe.
+    for (int i = 0; i < original.keyframes().size(); ++i) {
+        QVERIFY(adjusted.keyframes().at(i).fieldOfViewDeg
+                >= original.keyframes().at(i).fieldOfViewDeg);
+    }
+    // The validator re-derives the invariants from the two plans.
+    QString validateError;
+    QVERIFY2(ReframePlanAdjustment::isLensWidening(original, adjusted, &validateError),
+             qPrintable(validateError));
+    // ... and the result is a valid plan.
+    QString planError;
+    QVERIFY2(adjusted.isValid(&planError), qPrintable(planError));
+
+    // The input plan is untouched, including every non-FOV field.
+    QCOMPARE(original.toJsonObject(), beforeJson);
+    QCOMPARE(original.keyframes().at(0).fieldOfViewDeg, 60.0);
+    QCOMPARE(original.keyframes().at(1).fieldOfViewDeg, 90.0);
+
+    // A partial target widens only what is below it.
+    ReframePlan partial;
+    error.clear();
+    QVERIFY2(ReframePlanAdjustment::widenLens(original, 70.0, &partial, &error),
+             qPrintable(error));
+    QCOMPARE(partial.keyframes().at(0).fieldOfViewDeg, 70.0);
+    QCOMPARE(partial.keyframes().at(1).fieldOfViewDeg, 90.0);
+    QVERIFY(ReframePlanAdjustment::isLensWidening(original, partial));
+
+    // The same request twice is the same plan (idempotent, deterministic).
+    ReframePlan repeated;
+    error.clear();
+    QVERIFY(ReframePlanAdjustment::widenLens(original, 70.0, &repeated, &error));
+    QCOMPARE(repeated.toJsonObject(), partial.toJsonObject());
+
+    // Refusals: a target that widens nothing (which includes EVERY narrowing
+    // request), a target outside the supported bounds, and a non-finite target.
+    // NOTE on the fixture below: the mixed fixture's FIRST keyframe is at 60, so a
+    // target of 90 legitimately widens it (it is only the second keyframe that is
+    // already at 90). "Widens nothing" therefore needs a plan whose every keyframe
+    // is at or above the target.
+    const ReframePlan constant = widenFixturePlan(90.0, 90.0);
+    QVERIFY(constant.isValid());
+    ReframePlan refused;
+    error.clear();
+    QVERIFY(!ReframePlanAdjustment::widenLens(constant, 90.0, &refused, &error));
+    QVERIFY(error.contains(QStringLiteral("would not widen any keyframe")));
+    error.clear();
+    QVERIFY(!ReframePlanAdjustment::widenLens(constant, 45.0, &refused, &error));
+    QVERIFY(error.contains(QStringLiteral("would not widen any keyframe")));
+    // A mixed plan is widened even when the target only affects some keyframes.
+    error.clear();
+    QVERIFY2(ReframePlanAdjustment::widenLens(original, 90.0, &refused, &error),
+             qPrintable(error));
+    QCOMPARE(refused.keyframes().at(0).fieldOfViewDeg, 90.0);
+    QCOMPARE(refused.keyframes().at(1).fieldOfViewDeg, 90.0);
+    error.clear();
+    QVERIFY(!ReframePlanAdjustment::widenLens(original, 150.0, &refused, &error));
+    QVERIFY(error.contains(QStringLiteral("outside the supported range")));
+    error.clear();
+    QVERIFY(!ReframePlanAdjustment::widenLens(original, 141.0, &refused, &error));
+    QVERIFY(error.contains(QStringLiteral("outside the supported range")));
+    error.clear();
+    QVERIFY(!ReframePlanAdjustment::widenLens(original,
+                                              std::numeric_limits<double>::quiet_NaN(),
+                                              &refused, &error));
+    QVERIFY(error.contains(QStringLiteral("finite")));
+    // The maximum itself is allowed.
+    error.clear();
+    QVERIFY2(ReframePlanAdjustment::widenLens(original, 140.0, &refused, &error),
+             qPrintable(error));
+    QCOMPARE(ReframePlanAdjustment::widestKeyframeFieldOfViewDeg(refused), 140.0);
+
+    // An invalid input plan is refused rather than adjusted.
+    error.clear();
+    QVERIFY(!ReframePlanAdjustment::widenLens(ReframePlan(), 120.0, &refused, &error));
+    QVERIFY(error.contains(QStringLiteral("not valid")));
+
+    // The validator is a real check, not a rubber stamp: perturbing one field of a
+    // copy invalidates it, field by field.
+    struct Perturbation
+    {
+        const char *what;
+        void (*apply)(ReframePlan &);
+    };
+    const Perturbation perturbations[] = {
+        { "yaw", [](ReframePlan &p) {
+             QList<CameraKeyframe> k = p.keyframes();
+             k[0].yawDeg += 1.0;
+             p.setKeyframes(k);
+         } },
+        { "pitch", [](ReframePlan &p) {
+             QList<CameraKeyframe> k = p.keyframes();
+             k[0].pitchDeg += 1.0;
+             p.setKeyframes(k);
+         } },
+        { "roll", [](ReframePlan &p) {
+             QList<CameraKeyframe> k = p.keyframes();
+             k[0].rollDeg += 1.0;
+             p.setKeyframes(k);
+         } },
+        { "timestamp", [](ReframePlan &p) {
+             QList<CameraKeyframe> k = p.keyframes();
+             k[1].timeMs += 1;
+             p.setKeyframes(k);
+         } },
+        { "interpolation", [](ReframePlan &p) {
+             QList<CameraKeyframe> k = p.keyframes();
+             k[0].interpolation = CameraKeyframe::Interpolation::Hold;
+             p.setKeyframes(k);
+         } },
+        { "narrowing", [](ReframePlan &p) {
+             QList<CameraKeyframe> k = p.keyframes();
+             k[0].fieldOfViewDeg = 20.0;
+             p.setKeyframes(k);
+         } },
+        { "keyframe count", [](ReframePlan &p) {
+             QList<CameraKeyframe> k = p.keyframes();
+             k.removeLast();
+             p.setKeyframes(k);
+         } },
+        { "source range", [](ReframePlan &p) {
+             p.setSourceRange(ReframePlan::TimeRange{ 0, 3000 });
+         } },
+        { "segments", [](ReframePlan &p) { p.setSegments({}); } },
+        { "output", [](ReframePlan &p) {
+             p.setOutput(ReframePlan::OutputSpec{ 320, 180, 2.0 });
+         } },
+        { "source media", [](ReframePlan &p) {
+             p.setSourceMediaId(QStringLiteral("other-media"));
+         } },
+    };
+    for (const Perturbation &perturbation : perturbations) {
+        ReframePlan perturbed = adjusted;
+        perturbation.apply(perturbed);
+        QString why;
+        QVERIFY2(!ReframePlanAdjustment::isLensWidening(original, perturbed, &why),
+                 perturbation.what);
+        QVERIFY2(!why.isEmpty(), perturbation.what);
+    }
+
+    // The widening ladder is DERIVED from the framing vocabulary, never invented:
+    // every value above the default lens is one the vocabulary can request.
+    const QList<double> ladder = ReframePlanAdjustment::wideningLadderDegrees();
+    QVERIFY(!ladder.isEmpty());
+    for (int i = 0; i < ladder.size(); ++i) {
+        QVERIFY(ladder.at(i) <= reframe::kMaxFieldOfViewDeg);
+        QVERIFY(ladder.at(i) >= reframe::kMinFieldOfViewDeg);
+        if (i > 0) {
+            QVERIFY(ladder.at(i) > ladder.at(i - 1));
+        }
+        if (ladder.at(i) > 90.0 + 1e-9) {
+            QVERIFY(ReframeIntent::framingLadderFieldOfViews().contains(ladder.at(i)));
+        }
+    }
+    QVERIFY(ladder.contains(120.0));
+    QVERIFY(ladder.contains(140.0));
+    // The step offered to a creator is the next wider value, and none past the top.
+    QCOMPARE(ReframePlanAdjustment::nextWiderLensDeg(60.0), 90.0);
+    QCOMPARE(ReframePlanAdjustment::nextWiderLensDeg(90.0), 120.0);
+    QCOMPARE(ReframePlanAdjustment::nextWiderLensDeg(115.0), 120.0);
+    QCOMPARE(ReframePlanAdjustment::nextWiderLensDeg(120.0), 140.0);
+    QCOMPARE(ReframePlanAdjustment::nextWiderLensDeg(140.0), 0.0);
+    QCOMPARE(ReframePlanAdjustment::nextWiderLensDeg(150.0), 0.0);
+}
+
+namespace {
+
+// A track whose subject MOVES across the observations, so the joint framing's aim
+// varies between keyframes and intermediate camera states are exercised.
+TargetTrack movingTrack(const QString &id, const QList<double> &yaws,
+                        const QList<double> &pitches, double yawRadiusDeg,
+                        double pitchRadiusDeg, const QList<qint64> &times)
+{
+    TargetTrack track(id, QStringLiteral("person"));
+    for (int i = 0; i < times.size(); ++i) {
+        TargetObservation observation;
+        observation.timeMs = times.at(i);
+        observation.targetId = id;
+        observation.label = QStringLiteral("person");
+        observation.confidence = 0.9;
+        observation.yawDeg = yaws.at(i);
+        observation.pitchDeg = pitches.at(i);
+        observation.yawRadiusDeg = yawRadiusDeg;
+        observation.pitchRadiusDeg = pitchRadiusDeg;
+        track.append(observation);
+    }
+    return track;
+}
+
+} // namespace
+
+void ProjectTest::reframePlanWidenLensPreservesContainment()
+{
+    const double aspect = 640.0 / 360.0;
+    const QList<qint64> times = { 0, 1000, 2000, 3000, 4000 };
+    const QList<double> leftYaws = { -25.0, -20.0, -15.0, -10.0, -5.0 };
+    const QList<double> leftPitches = { 0.0, 1.0, 2.0, 3.0, 4.0 };
+    const QList<double> rightYaws = { 30.0, 25.0, 20.0, 15.0, 10.0 };
+    const QList<double> rightPitches = { 6.0, 6.0, 5.0, 5.0, 4.0 };
+    const TargetTrack left = movingTrack(QStringLiteral("left"), leftYaws, leftPitches,
+                                         6.0, 8.0, times);
+    const TargetTrack right = movingTrack(QStringLiteral("right"), rightYaws,
+                                          rightPitches, 5.0, 7.0, times);
+
+    TargetTrackPlanner::Config config;
+    config.smoothingWindow = 1;
+    ReframePlan plan;
+    QString error;
+    QVERIFY2(TargetTrackPlanner::planTracks(
+                 { left, right }, { left.id(), right.id() },
+                 ReframePlan::TimeRange{ 0, 4000 },
+                 ReframePlan::OutputSpec{ 640, 360, 2.0 }, config, &plan, &error),
+             qPrintable(error));
+    QVERIFY(plan.isValid());
+    QVERIFY(plan.keyframes().size() >= 2);
+
+    // The directions the original plan must contain: the CENTRE and every CORNER of
+    // both subjects' reported footprints at every observation time.
+    struct Witness
+    {
+        double yawDeg = 0.0;
+        double pitchDeg = 0.0;
+    };
+    QList<Witness> witnesses;
+    const auto addFootprint = [&witnesses](double yaw, double pitch, double yawRadius,
+                                           double pitchRadius) {
+        for (double dy : { -yawRadius, yawRadius }) {
+            for (double dp : { -pitchRadius, pitchRadius }) {
+                witnesses.append(Witness{ yaw + dy, pitch + dp });
+            }
+        }
+        witnesses.append(Witness{ yaw, pitch });
+    };
+    for (int i = 0; i < times.size(); ++i) {
+        addFootprint(leftYaws.at(i), leftPitches.at(i), 6.0, 8.0);
+        addFootprint(rightYaws.at(i), rightPitches.at(i), 5.0, 7.0);
+    }
+
+    // Sample the CONTINUOUS camera path: keyframe times plus intermediate times, so
+    // the property is checked against interpolated camera states too.
+    QList<qint64> sampleTimes;
+    const qint64 startMs = plan.sourceRange().startMs;
+    const qint64 endMs = plan.sourceRange().endMs;
+    for (int i = 0; i <= 16; ++i) {
+        sampleTimes.append(startMs + (endMs - startMs) * i / 16);
+    }
+    for (const CameraKeyframe &keyframe : plan.keyframes()) {
+        if (!sampleTimes.contains(keyframe.timeMs)) {
+            sampleTimes.append(keyframe.timeMs);
+        }
+    }
+    std::sort(sampleTimes.begin(), sampleTimes.end());
+
+    // The existing renderer-equivalent predicate: no second geometry definition.
+    const auto inside = [aspect](const CameraState &state, const Witness &witness) {
+        return subjectInsideFrame(state.yawDeg, state.pitchDeg,
+                                  state.fieldOfViewDeg, aspect, witness.yawDeg,
+                                  witness.pitchDeg, 0.0, 0.0);
+    };
+
+    int containedBefore = 0;
+    for (qint64 timeMs : sampleTimes) {
+        const CameraState state = CameraPath::stateAt(plan, timeMs);
+        for (const Witness &witness : witnesses) {
+            if (inside(state, witness)) {
+                ++containedBefore;
+            }
+        }
+    }
+    // Non-vacuous: the planner's own guarantee means the framed footprints ARE
+    // contained before widening, at least at the observation times.
+    QVERIFY(containedBefore > 0);
+
+    const double originalWidest =
+        ReframePlanAdjustment::widestKeyframeFieldOfViewDeg(plan);
+    const QList<double> targets = { originalWidest + 1.0, originalWidest + 20.0,
+                                    140.0 };
+    for (double target : targets) {
+        ReframePlan widened;
+        QString adjustError;
+        QVERIFY2(ReframePlanAdjustment::widenLens(plan, target, &widened,
+                                                  &adjustError),
+                 qPrintable(adjustError));
+        int checked = 0;
+        for (qint64 timeMs : sampleTimes) {
+            const CameraState before = CameraPath::stateAt(plan, timeMs);
+            const CameraState after = CameraPath::stateAt(widened, timeMs);
+            // The lens never narrows at any time, not merely at keyframes.
+            QVERIFY(after.fieldOfViewDeg >= before.fieldOfViewDeg - 1e-9);
+            for (const Witness &witness : witnesses) {
+                if (!inside(before, witness)) {
+                    continue;
+                }
+                ++checked;
+                const QString detail = QStringLiteral(
+                                           "t=%1 ms, witness yaw=%2 pitch=%3, lens %4 -> %5")
+                                           .arg(timeMs)
+                                           .arg(witness.yawDeg)
+                                           .arg(witness.pitchDeg)
+                                           .arg(before.fieldOfViewDeg)
+                                           .arg(after.fieldOfViewDeg);
+                QVERIFY2(inside(after, witness), qPrintable(detail));
+            }
+        }
+        // Every previously contained witness was re-checked and held.
+        QCOMPARE(checked, containedBefore);
+    }
+}
+
+void ProjectTest::applicationWidenRenderedLensCreatesAnAttributedChildRecord()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QString mediaPath;
+    QVERIFY(setupActiveMedia(app, directory, &mediaPath));
+    app.setReframeCommandExecutor(revisionExecutor(nullptr, /*writeOutput=*/true));
+
+    int renderCalls = 0;
+    ReframePlan renderedPlan;
+    QString renderedSource;
+    QString renderedOutput;
+    app.setReframeReplayRenderer(
+        recordingRenderer(&renderCalls, &renderedPlan, &renderedSource, &renderedOutput));
+
+    const QString parentOutput = directory.filePath(QStringLiteral("clip_reframe.mp4"));
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("follow person 1"), 0, 4000,
+                                    parentOutput));
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    const ReframeCommandOutcome parentBefore = app.reframeOutputs().at(0);
+    const QJsonObject parentJsonBefore = parentBefore.toJsonObject();
+    const QByteArray parentHash = parentBefore.editDecision().decisionHash();
+    const ReframePlan parentPlan = parentBefore.editDecision().plan();
+    const QByteArray parentBytes = fileBytes(parentOutput);
+    QCOMPARE(parentBytes, QByteArray("rendered-bytes"));
+    QCOMPARE(ReframePlanAdjustment::widestKeyframeFieldOfViewDeg(parentPlan), 90.0);
+
+    // The ladder step the creator is offered, and the adjustment itself.
+    QCOMPARE(app.nextWiderLensFor(0), 120.0);
+    const RevisionResult widened = app.widenRenderedLens(0, 120.0);
+    QVERIFY2(widened.ok, qPrintable(widened.error));
+    QCOMPARE(widened.newRecordIndex, 1);
+    QCOMPARE(app.reframeOutputs().size(), 2);
+
+    // The EXISTING render seam rendered the adjusted plan (no second path).
+    QCOMPARE(renderCalls, 1);
+    QCOMPARE(renderedSource, mediaPath);
+    const ReframeCommandOutcome child = app.reframeOutputs().at(1);
+    const ReframePlan childPlan = child.editDecision().plan();
+    QCOMPARE(renderedPlan.toJsonObject(), childPlan.toJsonObject());
+    QCOMPARE(renderedOutput, child.outputPath);
+    QCOMPARE(ReframePlanAdjustment::widestKeyframeFieldOfViewDeg(childPlan), 120.0);
+
+    // Only the field of view changed, and only upward.
+    QString invariantError;
+    QVERIFY2(ReframePlanAdjustment::isLensWidening(parentPlan, childPlan,
+                                                   &invariantError),
+             qPrintable(invariantError));
+
+    // Attribution: the existing creator-revision vocabulary, hashed, with the
+    // parent hash pointing at the record that was adjusted.
+    QVERIFY(child.ok);
+    QVERIFY(child.hasEditDecision());
+    QVERIFY(child.editDecisionError().isEmpty());
+    QCOMPARE(child.editDecision().origin(), EditDecision::originCreatorRevision());
+    QCOMPARE(child.editDecision().parentDecisionHash(), QString::fromLatin1(parentHash));
+    QVERIFY(child.editDecision().decisionHash() != parentHash);
+    // The instruction recorded is the one the plan descends from, carried verbatim.
+    QCOMPARE(child.instruction, parentBefore.instruction);
+    QCOMPARE(child.sourceMediaId, parentBefore.sourceMediaId);
+    QCOMPARE(child.resolvedTargets.size(), parentBefore.resolvedTargets.size());
+    // The parameter of the change is explained in the record's notes (the FACT of
+    // the modification is the hashed origin/parent above).
+    QVERIFY(child.notes.join(QStringLiteral("\n"))
+                .contains(QStringLiteral("Lens widened from 90.0 to 120.0 degrees")));
+    QVERIFY(child.notes.join(QStringLiteral("\n"))
+                .contains(QStringLiteral("Rendered from the widened plan")));
+
+    // Provenance resolves the lineage it just recorded.
+    const DecisionProvenance view = app.decisionProvenance(1);
+    QVERIFY(view.available);
+    QCOMPARE(view.origin, EditDecision::originCreatorRevision());
+    QVERIFY(view.hasParent);
+    QVERIFY(view.parentResolved);
+    QCOMPARE(view.parentDecisionHash, QString::fromLatin1(parentHash));
+    QCOMPARE(app.revisionsOf(0), QList<int>{ 1 });
+
+    // Fresh destination under the existing no-overwrite policy, and the parent
+    // record and its file are untouched.
+    QCOMPARE(child.outputPath,
+             QFileInfo(directory.filePath(QStringLiteral("clip_reframe_rev1.mp4")))
+                 .absoluteFilePath());
+    QCOMPARE(fileBytes(child.outputPath), QByteArray("fake-reviewed-render"));
+    QCOMPARE(fileBytes(parentOutput), parentBytes);
+    QCOMPARE(app.reframeOutputs().at(0).toJsonObject(), parentJsonBefore);
+    QCOMPARE(app.reframeOutputs().at(0).editDecision().decisionHash(),
+             QString::fromLatin1(parentHash));
+
+    // The child is a normal record for everything else: it can be widened again,
+    // from ITS plan, and the ladder step is computed from the widened lens.
+    QCOMPARE(app.nextWiderLensFor(1), 140.0);
+    const RevisionResult second = app.widenRenderedLens(1, 140.0);
+    QVERIFY2(second.ok, qPrintable(second.error));
+    QCOMPARE(app.reframeOutputs().size(), 3);
+    QCOMPARE(ReframePlanAdjustment::widestKeyframeFieldOfViewDeg(
+                 app.reframeOutputs().at(2).editDecision().plan()),
+             140.0);
+    QCOMPARE(app.reframeOutputs().at(2).editDecision().parentDecisionHash(),
+             QString::fromLatin1(child.editDecision().decisionHash().constData()));
+    QVERIFY(app.nextWiderLensFor(2) == 0.0);
+}
+
+void ProjectTest::applicationWidenRenderedLensRefusesHonestly()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QString mediaPath;
+    QVERIFY(setupActiveMedia(app, directory, &mediaPath));
+    int executorCalls = 0;
+    app.setReframeCommandExecutor(revisionExecutor(&executorCalls, true));
+    int renderCalls = 0;
+    app.setReframeReplayRenderer(countingReplayRenderer(&renderCalls));
+
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("follow person 1"), 0, 4000,
+                                    directory.filePath(QStringLiteral("clip_reframe.mp4"))));
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    const QByteArray parentBytes =
+        fileBytes(directory.filePath(QStringLiteral("clip_reframe.mp4")));
+    const int filesBefore = QDir(directory.path()).entryList(QDir::Files).size();
+
+    // (a) An index with no record behind it.
+    const RevisionResult badIndex = app.widenRenderedLens(9, 120.0);
+    QVERIFY(!badIndex.ok);
+    QCOMPARE(badIndex.newRecordIndex, -1);
+    QVERIFY(badIndex.error.contains(QStringLiteral("no such reframe output to widen")));
+    QCOMPARE(app.nextWiderLensFor(9), 0.0);
+
+    // (b) A target above the supported maximum.
+    const RevisionResult tooWide = app.widenRenderedLens(0, 150.0);
+    QVERIFY(!tooWide.ok);
+    QVERIFY(tooWide.error.contains(QStringLiteral("outside the supported range")));
+
+    // (c) A narrowing request is refused by the same rule (nothing would widen).
+    const RevisionResult narrower = app.widenRenderedLens(0, 60.0);
+    QVERIFY(!narrower.ok);
+    QVERIFY(narrower.error.contains(QStringLiteral("would not widen any keyframe")));
+
+    // (d) A target equal to the current widest lens widens nothing.
+    const RevisionResult noChange = app.widenRenderedLens(0, 90.0);
+    QVERIFY(!noChange.ok);
+    QVERIFY(noChange.error.contains(QStringLiteral("would not widen any keyframe")));
+
+    // Nothing was rendered, appended or written by any of those refusals.
+    QCOMPARE(renderCalls, 0);
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    QCOMPARE(QDir(directory.path()).entryList(QDir::Files).size(), filesBefore);
+    QCOMPARE(fileBytes(directory.filePath(QStringLiteral("clip_reframe.mp4"))),
+             parentBytes);
+
+    // (e) A record that carries no usable decision.
+    QTemporaryDir planlessDirectory;
+    QVERIFY(planlessDirectory.isValid());
+    Application planless;
+    QVERIFY(setupActiveMedia(planless, planlessDirectory, nullptr));
+    planless.setReframeCommandExecutor(planlessExecutor());
+    QVERIFY(!planless.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                          planlessDirectory.filePath(QStringLiteral("noplan.mp4"))));
+    QCOMPARE(planless.reframeOutputs().size(), 1);
+    const RevisionResult noDecision = planless.widenRenderedLens(0, 120.0);
+    QVERIFY(!noDecision.ok);
+    QVERIFY(noDecision.error.contains(QStringLiteral("no edit decision")));
+    QCOMPARE(planless.nextWiderLensFor(0), 0.0);
+    QCOMPARE(planless.reframeOutputs().size(), 1);
+
+    // (f) A source that no longer matches the record.
+    {
+        QFile file(mediaPath);
+        QVERIFY(file.open(QIODevice::Append));
+        QVERIFY(file.write("changed-after-the-decision") > 0);
+    }
+    const RevisionResult drifted = app.widenRenderedLens(0, 120.0);
+    QVERIFY(!drifted.ok);
+    QVERIFY(drifted.error.contains(QStringLiteral("Cannot widen the lens")));
+    QVERIFY(drifted.error.contains(QStringLiteral("has changed")));
+    QCOMPARE(renderCalls, 0);
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    QVERIFY(!QFileInfo::exists(directory.filePath(QStringLiteral("clip_reframe_rev1.mp4"))));
+
+    // (g) Already at the widest supported lens: the ladder offers nothing.
+    QTemporaryDir widestDirectory;
+    QVERIFY(widestDirectory.isValid());
+    Application widest;
+    QVERIFY(setupActiveMedia(widest, widestDirectory, nullptr));
+    widest.setReframeCommandExecutor(revisionExecutor(nullptr, true));
+    int widestRenders = 0;
+    widest.setReframeReplayRenderer(countingReplayRenderer(&widestRenders));
+    QVERIFY(widest.runReframeCommandTo(QStringLiteral("follow person 1"), 0, 4000,
+                                       widestDirectory.filePath(QStringLiteral("clip_reframe.mp4"))));
+    QVERIFY(widest.widenRenderedLens(0, 140.0).ok);
+    QCOMPARE(widest.nextWiderLensFor(1), 0.0);
+    const RevisionResult again = widest.widenRenderedLens(1, 140.0);
+    QVERIFY(!again.ok);
+    QVERIFY(again.error.contains(QStringLiteral("would not widen any keyframe")));
+    QCOMPARE(widest.reframeOutputs().size(), 2);
+    QCOMPARE(widestRenders, 1);
+}
+
+void ProjectTest::applicationWidenRenderedLensReplayIsPerceptionFree()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandExecutor(revisionExecutor(nullptr, true));
+    int widenRenders = 0;
+    app.setReframeReplayRenderer(countingReplayRenderer(&widenRenders));
+
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("follow person 1"), 0, 4000,
+                                    directory.filePath(QStringLiteral("clip_reframe.mp4"))));
+    QVERIFY(app.widenRenderedLens(0, 120.0).ok);
+    QCOMPARE(app.reframeOutputs().size(), 2);
+    const QJsonObject widenedJson =
+        app.reframeOutputs().at(1).editDecision().plan().toJsonObject();
+
+    // From here on, ANY perception would be a test failure: the command executor
+    // refuses to be used, and the renderer records what it was handed.
+    int executorCalls = 0;
+    app.setReframeCommandExecutor(
+        [&executorCalls](const ReframeCommandRequest &, TargetDetector *,
+                         ReframeFrameProvider *) {
+            ++executorCalls;
+            ReframeCommandResult result;
+            result.ok = false;
+            result.error = QStringLiteral("perception must not run during replay");
+            return result;
+        });
+    int replayRenders = 0;
+    ReframePlan replayedPlan;
+    QString replayedSource;
+    QString replayedOutput;
+    app.setReframeReplayRenderer(
+        recordingRenderer(&replayRenders, &replayedPlan, &replayedSource, &replayedOutput));
+
+    const QString replayOutput = directory.filePath(QStringLiteral("replay.mp4"));
+    const ReplayResult replayed = app.replayEditDecision(1, replayOutput);
+    QVERIFY2(replayed.ok, qPrintable(replayed.error));
+    // Replay executed the STORED widened plan, its own source and a fresh path.
+    QCOMPARE(replayRenders, 1);
+    QCOMPARE(replayedPlan.toJsonObject(), widenedJson);
+    QCOMPARE(replayedOutput, QFileInfo(replayOutput).absoluteFilePath());
+    // No perception, no parsing, and no adjustment re-application.
+    QCOMPARE(executorCalls, 0);
+    QCOMPARE(app.reframeOutputs().size(), 3);
+    QCOMPARE(app.reframeOutputs().at(2).editDecision().decisionHash(),
+             app.reframeOutputs().at(1).editDecision().decisionHash());
+}
+
+void ProjectTest::applicationWidenRenderedLensIsDeterministic()
+{
+    // Two independent applications, each with its own fixture and directory, doing
+    // the same thing: the adjustment and the record it produces must agree.
+    // The media id is derived from the file's canonical path, so it necessarily
+    // differs between two independent fixture directories; everything else must be
+    // identical, and within one application the comparison is byte-for-byte.
+    QStringList normalizedPlans;
+    QStringList instructions;
+    QStringList notes;
+    for (int run = 0; run < 2; ++run) {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        Application app;
+        QVERIFY(setupActiveMedia(app, directory, nullptr));
+        app.setReframeCommandExecutor(revisionExecutor(nullptr, true));
+        int renderCalls = 0;
+        app.setReframeReplayRenderer(countingReplayRenderer(&renderCalls));
+
+        // Two records built from the SAME command and the same source, so the two
+        // widenings below are directly comparable byte-for-byte.
+        QVERIFY(app.runReframeCommandTo(QStringLiteral("follow person 1"), 0, 4000,
+                                        directory.filePath(QStringLiteral("one.mp4"))));
+        QVERIFY(app.runReframeCommandTo(QStringLiteral("follow person 1"), 0, 4000,
+                                        directory.filePath(QStringLiteral("two.mp4"))));
+        QCOMPARE(app.reframeOutputs().size(), 2);
+        QCOMPARE(app.reframeOutputs().at(0).editDecision().plan().toJsonObject(),
+                 app.reframeOutputs().at(1).editDecision().plan().toJsonObject());
+        QCOMPARE(app.nextWiderLensFor(0), 120.0);
+        QVERIFY2(app.widenRenderedLens(0, 120.0).ok, "first widening failed");
+        QVERIFY2(app.widenRenderedLens(1, 120.0).ok, "second widening failed");
+        QCOMPARE(app.reframeOutputs().size(), 4);
+        QCOMPARE(renderCalls, 2);
+
+        const ReframeCommandOutcome firstChild = app.reframeOutputs().at(2);
+        const ReframeCommandOutcome secondChild = app.reframeOutputs().at(3);
+        // Repeated execution is byte-identical within one application.
+        QCOMPARE(firstChild.editDecision().plan().toJsonObject(),
+                 secondChild.editDecision().plan().toJsonObject());
+        // Attribution is identical too, and points at each child's own parent.
+        QCOMPARE(firstChild.editDecision().origin(),
+                 EditDecision::originCreatorRevision());
+        QCOMPARE(firstChild.editDecision().parentDecisionHash(),
+                 QString::fromLatin1(app.reframeOutputs().at(0)
+                                         .editDecision().decisionHash().constData()));
+        QCOMPARE(secondChild.editDecision().parentDecisionHash(),
+                 QString::fromLatin1(app.reframeOutputs().at(1)
+                                         .editDecision().decisionHash().constData()));
+        QVERIFY(firstChild.outputPath.endsWith(QStringLiteral("clip_reframe_rev1.mp4")));
+        QVERIFY(secondChild.outputPath.endsWith(QStringLiteral("clip_reframe_rev2.mp4")));
+        QCOMPARE(firstChild.notes.join(QStringLiteral("|")),
+                 secondChild.notes.join(QStringLiteral("|")));
+
+        QJsonObject normalized = firstChild.editDecision().plan().toJsonObject();
+        normalized.remove(QStringLiteral("sourceMediaId"));
+        normalizedPlans.append(QString::fromUtf8(
+            QJsonDocument(normalized).toJson(QJsonDocument::Compact)));
+        instructions.append(firstChild.instruction);
+        notes.append(firstChild.notes.join(QStringLiteral("|")));
+    }
+    // Across independent runs: same adjusted plan (modulo the path-derived media
+    // id), same instruction provenance, same explanation.
+    QCOMPARE(normalizedPlans.at(0), normalizedPlans.at(1));
+    QCOMPARE(instructions.at(0), instructions.at(1));
+    QCOMPARE(notes.at(0), notes.at(1));
+}
+
+void ProjectTest::mainWindowWidenLensSurface()
+{
+    MainWindow window;
+    auto *widenButton =
+        window.findChild<QPushButton *>(QStringLiteral("widenLensButton"));
+    auto *outputsList =
+        window.findChild<QListWidget *>(QStringLiteral("reframeOutputsList"));
+    auto *statusLabel = window.findChild<QLabel *>(QStringLiteral("statusLabel"));
+    QVERIFY(widenButton);
+    QVERIFY(outputsList);
+    QVERIFY(statusLabel);
+
+    // The action says what it does: widen the lens of the selected RENDERED
+    // decision, not "ask again". There is no narrowing control at all.
+    QVERIFY(widenButton->text().contains(QStringLiteral("Widen Lens")));
+    QVERIFY(window.findChildren<QPushButton *>().size() > 0);
+    for (QPushButton *button : window.findChildren<QPushButton *>()) {
+        QVERIFY(!button->text().contains(QStringLiteral("Narrow")));
+        QVERIFY(!button->text().contains(QStringLiteral("Tighten")));
+    }
+
+    QSignalSpy widenSpy(&window, &MainWindow::widenRenderLensRequested);
+    QVERIFY(widenSpy.isValid());
+
+    // Inert without a selection.
+    widenButton->click();
+    QCOMPARE(widenSpy.count(), 0);
+    QVERIFY(statusLabel->text().contains(
+        QStringLiteral("No generated render selected to widen")));
+
+    // With a selection it asks for that record, and the application decides the
+    // ladder step and whether the request is possible at all.
+    ReframeCommandOutcome first;
+    first.ok = true;
+    first.instruction = QStringLiteral("follow person 1");
+    first.outputPath = QStringLiteral("/tmp/one.mp4");
+    ReframeCommandOutcome second;
+    second.ok = true;
+    second.instruction = QStringLiteral("zoom in");
+    second.outputPath = QStringLiteral("/tmp/two.mp4");
+    window.showReframeOutputs({ first, second });
+    outputsList->setCurrentRow(1);
+    widenButton->click();
+    QCOMPARE(widenSpy.count(), 1);
+    QCOMPARE(widenSpy.first().at(0).toInt(), 1);
 }
 
 QTEST_MAIN(ProjectTest)

@@ -36,6 +36,7 @@ SOURCES += \
     app/reframe/ReframeContract.cpp \
     app/reframe/ReframeIntent.cpp \
     app/reframe/ReframePlan.cpp \
+    app/reframe/ReframePlanAdjustment.cpp \
     app/reframe/ReframePlanBuilder.cpp \
     app/reframe/TemporalEditPlan.cpp \
     app/reframe/ReframePipeline.cpp \
@@ -99,6 +100,7 @@ HEADERS += \
     app/reframe/ReframeIntent.h \
     app/reframe/ReframeMath.h \
     app/reframe/ReframePlan.h \
+    app/reframe/ReframePlanAdjustment.h \
     app/reframe/ReframePlanBuilder.h \
     app/reframe/TemporalEditPlan.h \
     app/reframe/ReframePipeline.h \

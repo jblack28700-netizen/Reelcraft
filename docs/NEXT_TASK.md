@@ -58,11 +58,12 @@ file authorises starting one automatically.
 | **Group framing (2-10 subjects)** | done | `TargetTrackPlanner::{planTracks,enclosingFramingDeg}` (exact basis), `ReframeSubjectGroup`/`subjectCount`, runner group resolution | two or more resolved tracks | **fixture only** | `5592118`, this checkpoint (Obj 31) |
 | Persistent media analysis (artifact + runner) | partial | `app/analysis/{MediaAnalysis,MediaAnalysisRunner}.*` | detector / ffprobe | fixture; **no consumer** | `90f671c` |
 | **Creator review (inspect the plan, accept or reject)** | done | `app/application/ReframePlanReview.*`, `Application` review API + preparer seam, `MainWindow` review panel | — | **fixture only** | this checkpoint (Obj 34) |
+| **Creator lens widening** (constrained plan adjustment: monotone FOV increase only, no perception) | done | `app/reframe/ReframePlanAdjustment.*`, `Application::{widenRenderedLens,nextWiderLensFor}` | — | **fixture only** | this checkpoint (Obj 40) |
 | **Project round-trip preservation** (an unreadable render record or edit decision is kept verbatim, never destroyed by open+save) | done | `Application::{reframeOutputsJson,restoreReframeOutputsFromJson}`, `ReframeCommandOutcome::rawRecord` | — | **fixture only** | this checkpoint (Obj 38) |
 | **Non-destructive render destinations** (no render writes to a path a render record owns; derived names are fresh) | done | `Application::{defaultReframeOutputPath,recordHoldingOutputPath}` + `buildReframeCommandContext`/`acceptReframeReview` guards | — | **fixture only** | this checkpoint (Obj 37) |
 | **Creator revision v1 (revise a rendered edit) + provenance/supersession readout** | done | `Application::{revisionOutputPath,reviseReframeOutput,revisionsOf,recordHoldingOutputPath}` over the Objective 17 mechanism, `MainWindow` revision/provenance controls | — | **fixture only** | `6cf1d1e` (Obj 35), this checkpoint (Obj 36) |
 | Pre-render revision (revise a reviewed-but-unrendered plan) | blocked | `ReframePlanReview` + review API exist | a semantic decision: an unrendered plan has no persisted parent decision to point at (parentless `creator-revision` origin / plan-level parentage) | — | — |
-| Structured / operation-level plan editing | deferred | — | a decision authorising a plan-level (post-intent) editing path that bypasses the intent→plan contract checker | — | — |
+| Structured / operation-level plan editing | deferred | — | own decision(s): Decision 058 permits ONLY monotone lens widening on a persisted plan; narrowing, aim/timing/segment/output edits and pre-render adjustment would each need their own proof or a re-plan | — | — |
 | In-app audio playback | missing | — | audio-output subsystem decision (Decision 036) | — | — |
 | Explicit subject sets ("keep me and person 2 in frame", "frame the presenter and the guest") | done | `ReframeSubjectGroup::ExplicitSet` + `subjectReferences` + runner reference resolution | the existing selector vocabulary | **fixture only** | this checkpoint (Obj 32) |
 | Pair-path smoothing (containment-preserving) | missing | `TargetTrackPlanner::planTracks` | measured real-media jitter evidence | — | — |
@@ -82,6 +83,9 @@ file authorises starting one automatically.
   `realReframePlaybackIntegration`, `realTemporalEditIntegration`, `realCompoundCommandIntegration`,
   `realUserCommandIntegration`, `realApplicationCommandIntegration`), the 5 Objective 28-32 harness
   tests below, and the child-only `replayFreshProcessChild` slot.
+- **Objective 40 adds no validation debt either.** The lens adjustment is a pure transformation over a plan
+  plus application orchestration; it adds no perception, geometry or rendering behaviour, and its containment
+  guarantee is asserted with the existing renderer-equivalent predicate.
 - **Objective 38 adds no validation debt either.** Preservation is a persistence-path property verified by
   model-free project round-trip tests; it involves no perception or rendering behaviour.
 - **Objective 37 adds no validation debt either.** The destination rule and the creator-workflow

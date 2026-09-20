@@ -91,6 +91,10 @@ MainWindow::MainWindow(QWidget *parent)
         new QPushButton(QStringLiteral("Revise Selected Render"), central);
     m_provenanceButton =
         new QPushButton(QStringLiteral("Why This Decision?"), central);
+    // Deliberately named for what it does: widen the lens of the selected rendered
+    // decision, not "ask the AI again". There is no narrowing control.
+    m_widenLensButton = new QPushButton(
+        QStringLiteral("Widen Lens of Selected Render"), central);
     m_provenanceLabel = new QLabel(
         QStringLiteral("Select a generated render for its decision provenance."),
         central);
@@ -160,6 +164,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_revisionEdit->setObjectName("revisionInstructionEdit");
     m_reviseRenderButton->setObjectName("reviseRenderButton");
     m_provenanceButton->setObjectName("describeDecisionButton");
+    m_widenLensButton->setObjectName("widenLensButton");
     m_provenanceLabel->setObjectName("decisionProvenanceLabel");
     m_reframeOutputsList->setObjectName("reframeOutputsList");
     m_previewRenderButton->setObjectName("previewRenderButton");
@@ -218,6 +223,7 @@ MainWindow::MainWindow(QWidget *parent)
     layout->addWidget(m_revisionEdit);
     layout->addWidget(m_reviseRenderButton);
     layout->addWidget(m_provenanceButton);
+    layout->addWidget(m_widenLensButton);
     layout->addWidget(m_provenanceLabel);
     layout->addWidget(m_selectCreatorButton);
     layout->addWidget(m_clearCreatorButton);
@@ -379,6 +385,18 @@ MainWindow::MainWindow(QWidget *parent)
             return;
         }
         emit describeDecisionRequested(row);
+    });
+    // Objective 40. Inert without a selection; every other refusal (no decision,
+    // drifted source, already at the widest supported lens) belongs to the
+    // application, which reports the reason, so this action never guesses.
+    connect(m_widenLensButton, &QPushButton::clicked, this, [this]() {
+        const int row = m_reframeOutputsList->currentRow();
+        if (row < 0) {
+            m_statusLabel->setText(
+                QStringLiteral("No generated render selected to widen."));
+            return;
+        }
+        emit widenRenderLensRequested(row);
     });
     connect(m_pauseRenderButton, &QPushButton::clicked, this,
             &MainWindow::pauseReframeOutputPlaybackRequested);

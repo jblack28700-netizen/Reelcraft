@@ -1082,6 +1082,30 @@ TemporalParseResult parseTemporal(const QStringList &clauses)
 
 } // namespace
 
+QList<double> ReframeIntent::framingLadderFieldOfViews()
+{
+    // Derived from the parser's own table, so the ladder can never drift from the
+    // vocabulary a creator's words are matched against.
+    QList<double> values;
+    const int levelCount =
+        static_cast<int>(sizeof(kFramingLevels) / sizeof(kFramingLevels[0]));
+    for (int i = 0; i < levelCount; ++i) {
+        const double value = kFramingLevels[i].fieldOfViewDeg;
+        bool present = false;
+        for (double existing : values) {
+            if (qAbs(existing - value) < 1e-9) {
+                present = true;
+                break;
+            }
+        }
+        if (!present) {
+            values.append(value);
+        }
+    }
+    std::sort(values.begin(), values.end());
+    return values;
+}
+
 QList<double> ReframeIntent::requestedFieldOfViews() const
 {
     QList<double> values;

@@ -369,6 +369,31 @@ public slots:
     // nothing.
     RevisionResult reviseReframeOutput(int index, const QString &revisedInstruction);
 
+    // --- creator lens widening (Objective 40, Decision 058) -----------------
+    // The ONE constrained plan-level creator adjustment Reelcraft permits: raise
+    // every keyframe's field of view of a PERSISTED render's plan, with aim, roll,
+    // timing, retained segments, output specification and source untouched, and
+    // record the result as a NEW immutable creator-revision decision through the
+    // EXISTING lineage, fresh-destination and append-gate machinery. No perception,
+    // no parsing, no second rendering path, and the parent record and its output
+    // file are never modified. Narrowing, aim changes, timeline/keyframe editing,
+    // subject changes, output-geometry changes and pre-render adjustment are
+    // outside this operation (Decision 058).
+    //
+    // nextWiderLensFor(index) is the ladder step a creator is offered: the next
+    // wider lens above the record's widest keyframe, or 0.0 when there is none
+    // (unknown index, a record without a usable decision, or already at the widest
+    // supported lens).
+    double nextWiderLensFor(int index) const;
+
+    // Widens the indexed record's plan to targetFieldOfViewDeg and renders it.
+    // Refuses, rendering nothing and appending nothing: an unknown index, a record
+    // without a usable decision, a source that no longer matches the record, a
+    // target outside [20, 140], a target that would not widen any keyframe, a
+    // source media that is no longer in the project, and a transformation that
+    // fails its own validation.
+    RevisionResult widenRenderedLens(int index, double targetFieldOfViewDeg);
+
     // Supersession, DERIVED at read time (Decision 055): the records that name
     // this record's decision as their parent. Nothing is stored; a record is
     // superseded exactly when another held record points at it. Empty when the

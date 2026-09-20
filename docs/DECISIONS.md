@@ -2458,6 +2458,127 @@ that record was.
 
 ---
 
-*Decisions 001-056 are preserved verbatim; this decision adds to them and supersedes exactly one sentence of Decision 056, as stated above.*
+---
+
+# Decision 058 — Constrained Plan-Level Creator Adjustment: Monotone Lens Widening Only
+
+**Status:** Accepted (2026-09-20, 360 Reframing Objective 40; human-approved scope)
+
+## Context
+
+Creator control enters the pipeline in exactly three places today: the instruction text (the command
+path), accept/reject of a prepared plan (Objective 34), and a record-level revision expressed as a NEW
+instruction (Objective 35), which re-runs perception through the shared request builder. None of them can
+express *"keep this exact framing, just show me more of the scene"*: the revision path pays full
+perception cost (decode + detection per sample) and its result can settle on a different aim or a
+different subject set, because detection is not bit-identical between runs.
+
+The renderer's own geometry makes exactly one class of plan change provably safe. In
+`EquirectView::render`, a pixel's ray is `forward + right·lateral + up·vertical` with
+`lateral = tan(FOV/2)·(ndcX·aspect·cosRoll + ndcY·sinRoll)` and
+`vertical = tan(FOV/2)·(−ndcX·aspect·sinRoll + ndcY·cosRoll)`, over an **FOV-independent** orthonormal
+basis. Inverting that mapping gives the containment predicate
+
+```
+contained(direction, FOV)  ⟺  |a| ≤ tan(FOV/2)·aspect  ∧  |b| ≤ tan(FOV/2)
+```
+
+(where `a`, `b` are the direction's roll-rotated lateral/vertical components over its forward
+component) — the same tangent condition the planner uses to *choose* the lens
+(`TargetTrackPlanner::enclosingFramingDeg`) and the same predicate the tests assert
+(`subjectInsideFrame`). Because `tan` is strictly increasing on `(0°, 70°]` and the supported maximum
+is 140°, **increasing the field of view with everything else held fixed only ever weakens both
+inequalities**: the set of directions a frame covers is nested in `tan(FOV/2)`. Verified analytically
+against the implementation and numerically over 200,000 randomized cases (aims ±180° yaw / ±85° pitch,
+rolls including 90°, five aspect ratios, FOV ∈ [20,140]): of 9,381 directions contained at the original
+field of view, **0** fell outside at a wider one.
+
+The corresponding requirement for a *narrower* lens is computed by the planner from subject footprint
+corners and is **not stored anywhere**: `ReframePlan` holds only schema version, source media id, source
+range, retained segments, output specification and keyframes, and `CameraKeyframe` holds only time,
+yaw, pitch, roll, field of view and interpolation. Neither the review session (which keeps only resolved
+subject ids and directions) nor the decision artifact carries footprint sizes, and the doctrine forbids
+re-parsing the stored instruction. Narrowing therefore **cannot be validated from a plan**, and remains a
+re-planning operation.
+
+## Decision
+
+1. **Plan-level creator adjustment is permitted for exactly one operation: monotone lens widening** —
+   `FOV_new,i = max(FOV_old,i, T)` for every keyframe of an already-valid plan, with `T` an absolute
+   target in `(max FOV_old, 140]`.
+2. **The first implementation is post-render only**: it operates on the plan already stored in a
+   persisted render record's `EditDecision`. Pre-render adjustment of a reviewed-but-unrendered plan is
+   **explicitly deferred**: such a plan has no persisted parent decision to point at, so honest
+   attribution would need a new lineage semantic that this decision does not create.
+3. **The transformation is pure and deterministic**, over a plan value: no media, no perception, no
+   parser, no clock, no randomness, no locale.
+4. **Only keyframe `fieldOfViewDeg` may change.** Camera aim (yaw, pitch), roll, keyframe times, keyframe
+   count and order, interpolation, source range, retained segments, output specification, source media
+   identity, schema version and every other plan field remain byte-identical. The input plan is never
+   mutated.
+5. **Field of view may only increase.** A target that does not actually widen any keyframe is refused, as
+   is a target above the renderable maximum. **Narrowing is refused** and the refusal says why (the plan
+   does not store what it must contain).
+6. **The result must remain within the existing `[20, 140]` bounds** and must pass the existing
+   `ReframePlan::isValid()`. The bounds are refused, never clamped: clamping would render a different
+   lens than the stored plan claims.
+7. **The transformation must be verified, not trusted.** A pure adjustment validator re-derives its
+   invariants from the input and output plans and asserts, field by field, that the field of view is the
+   only thing that changed and only upward. Exact equality is used deliberately: the transformation must
+   *copy* fields, not recompute them.
+8. **This is not a second intent→plan construction path.** It cannot choose an aim, a time, a segment, a
+   subject or an output; it relaxes one scalar. `ReframeContract` IPC-1..4 remains a **build-time check
+   over the transient original `(intent, plan)` pair**, run only inside `ReframeCommandRunner::prepare`,
+   and is not re-applied — no intent exists to check against, exactly as for every replayed plan. IPC-1,
+   IPC-2 and IPC-3 remain true because the fields they constrain are untouched; **IPC-4 deliberately
+   ceases to describe the adjusted plan** (the plan no longer reaches the originally requested lens).
+9. **Attribution must be auditable, not merely explained.** The adjusted plan becomes part of a NEW
+   immutable `EditDecision` created with the existing `EditDecision::revisedFrom(parent, plan, media,
+   instruction)`, so `origin=creator-revision` and `parentDecisionHash` — both **inside the hashed
+   payload** — record the modification. The instruction carried is the parent's instruction verbatim
+   (the adjusted plan *descends from* it; it does not honour it), and the human-readable parameter of the
+   change is recorded in the record's existing `notes`. Attribution never rests on an unhashed note.
+10. **No new persisted artifact, no schema change, no new origin value.** The plan is stored inside the
+    decision, as every plan already is.
+11. **The existing append gate and the existing render seam are used unchanged**: the adjusted plan is
+    rendered through the same deterministic render entry point every render uses, and recorded through
+    `appendReframeOutput`. No second rendering path exists.
+12. **Decisions 055-057 apply unchanged**: the destination is a fresh sibling derived from the record
+    being adjusted (`<base>_reframe_rev<N>.mp4`, the smallest free name), no held record's render may be
+    overwritten, and the parent record and its file are never modified.
+13. **Replay is unchanged and perception-free**: it executes the persisted adjusted plan, re-runs neither
+    perception nor parsing, and never re-applies the adjustment.
+14. **This decision does not generalize.** Arbitrary plan mutation, aim changes, timeline or keyframe
+    editing, subject changes, output-geometry changes, narrowing and pre-render adjustment remain outside
+    it and each would need its own decision.
+
+## Consequences
+
+- A creator can hold a framing they have seen and simply see more of the scene, instantly, with
+  containment preserved by construction, full lineage, and a replayable record.
+- The integrity of "plan ⇄ instruction" is now *descent plus attribution* rather than a re-verified
+  fidelity claim. A reader comparing a stored instruction ("…, close-up") with a stored plan at 110° will
+  find that the record says `origin=creator-revision` and names its parent, and that the note explains
+  the parameter — the fact is hashed, the explanation is not.
+- Each adjustment adds a record carrying a full plan copy, which sharpens the documented absence of a
+  retention/compaction policy. That remains its own future decision.
+- The widening ladder offered to the creator is derived from the existing framing vocabulary (the
+  established default lens plus every wider value the vocabulary can request), so no new lens vocabulary
+  is invented.
+
+## Verification
+
+Recorded before implementation; verified by the Objective 40 tests: the pure transformation and its
+refusals (non-widening target, target above 140, non-finite target, invalid input plan), input-plan
+immutability, the field-by-field "only FOV changed and only upward" validator, idempotence, plan validity,
+containment preservation asserted with the existing tangent predicate at every keyframe **and at
+intermediate camera times**, attributed child records with the correct parent hash, parent record and
+parent file unchanged, fresh destinations that never overwrite a held render, replay of the widened
+decision with no perception consulted, deterministic repeated execution, and the UI request and refusal
+behaviour.
+
+---
+
+*Decisions 001-057 are preserved verbatim; this decision adds to them and supersedes none of them.*
 
 

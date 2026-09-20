@@ -3035,3 +3035,84 @@ record.
 ### Decisions
 
 - None required. Decisions 001-057 preserved.
+
+
+## 2026-09-20 — 360 Reframing Objective 40: Creator Lens Widening (Constrained Plan Adjustment)
+
+### Objective
+
+Implement the one constrained plan-level creator adjustment Decision 058 permits: raise every keyframe's
+field of view of a PERSISTED render's plan by a target, with everything else unchanged, and record the
+result as a new immutable creator-revision decision — preserving containment by construction, reusing the
+existing render seam, lineage, destination and append-gate machinery, with no perception and no parsing.
+
+### What inspection found
+
+- **The containment claim was verifiable in the renderer's own terms.** `EquirectView::render` builds a
+  pixel's ray as `forward + right·lateral + up·vertical` over an **FOV-independent** orthonormal basis,
+  with `lateral = tanHalf·(ndcX·aspect·cosRoll + ndcY·sinRoll)` and
+  `vertical = tanHalf·(−ndcX·aspect·sinRoll + ndcY·cosRoll)`, and `forward·direction ≡ 1`. Inverting it
+  gives exactly the predicate the planner chooses lenses with (`TargetTrackPlanner::enclosingFramingDeg`)
+  and the tests assert (`subjectInsideFrame`): `|a| ≤ tanHalf·aspect ∧ |b| ≤ tanHalf`. Raising `tanHalf`
+  only weakens both inequalities, and `CameraPath` interpolates FOV as a convex combination plus a
+  monotone clamp, so the property holds at every rendered time, not only at keyframes.
+- **Narrowing has no such proof available**: the requirement a tighter lens would have to satisfy is
+  computed from footprint corners at build time and is stored nowhere (the plan carries no footprint data,
+  and the review retains only directions), so it cannot be checked from a plan at all.
+- **The existing framing vocabulary already contains the ladder** (40/60/120/140 by phrase, with 90 as the
+  established default), so the widening steps are derived from it rather than invented.
+
+### What was built
+
+- **`ReframePlanAdjustment`** (`app/reframe/ReframePlanAdjustment.{h,cpp}`): the pure transformation
+  `FOV_new,i = max(FOV_old,i, T)` with every other field copied verbatim; refusals for a non-finite target,
+  a target outside `[20,140]`, a target that widens no keyframe (which is every narrowing request, and an
+  already-widest plan), and an invalid input plan; `widestKeyframeFieldOfViewDeg`,
+  `wideningLadderDegrees` and `nextWiderLensDeg` for the ladder; and **`isLensWidening(original, adjusted)`**,
+  which re-derives the invariants from the two plans and asserts field-by-field (with EXACT comparison,
+  because the transformation must copy rather than recompute) that the field of view is the only thing that
+  changed and only upward. `widenLens` runs that validator on its own output before returning.
+- **`ReframeIntent::framingLadderFieldOfViews()`** (additive): the distinct lens values the parser's own
+  table can request, so the ladder cannot drift from the vocabulary a creator's words match.
+- **`Application::widenRenderedLens(index, targetFovDeg)`**: validates the record (exists, has a decision,
+  source still matches the record), applies the transformation, resolves the record's own media by id,
+  derives the existing fresh destination, refuses any destination a held record owns, renders through the
+  SAME `m_replayRenderer` seam every render uses, and records the result through the existing
+  `appendReframeOutput` gate as a NEW decision built with `EditDecision::revisedFrom`, so
+  `origin=creator-revision` and `parentDecisionHash` (both hashed) attest the modification. The parent
+  record and its file are never touched. `Application::nextWiderLensFor(index)` exposes the ladder step.
+- **One UI action** ("Widen Lens of Selected Render") acting on the selected render, inert without a
+  selection, with every other refusal reported by the application in its own words. No narrowing control
+  exists anywhere.
+- **No schema, artifact, origin value, renderer, decision artifact or replay change.** The instruction
+  recorded on the new decision is the parent's verbatim (the plan *descends from* it and was not re-derived
+  from it); the parameter of the change is recorded in the record's existing notes, while the FACT of the
+  modification is the hashed origin/parent pair.
+
+### Verification
+
+- 7 new model-free tests covering all 22 required behaviours: the pure transformation and its refusals
+  (including narrowing and out-of-bounds, and the distinction that a mixed-lens plan IS widened by a target
+  that only affects some keyframes), input immutability, the field-by-field validator including eleven
+  perturbations that each invalidate it, idempotence, plan validity, the ladder being derived from the
+  vocabulary, **containment preservation asserted with the existing tangent predicate at every keyframe and
+  at 17 sampled intermediate camera times** (over moving subjects, so the aim genuinely interpolates, with a
+  non-vacuity check), attributed child records with the correct parent hash, parent record and file
+  unchanged, fresh destinations, replay of the widened decision with perception provably never consulted,
+  deterministic repeated execution both within one application and across independent runs, and the UI
+  request/refusal behaviour.
+- Targeted regression and the official full suite: recorded in `CURRENT_STATE.md`.
+
+### Boundary notes / not implemented
+
+- Deliberately NOT built (Decision 058): narrowing, aim/roll/timing/segment/output-geometry edits, keyframe
+  or timeline editing, subject substitution, pre-render adjustment of a reviewed plan, arbitrary plan
+  mutation, and any new artifact or origin value.
+- IPC-4 is not re-applied (no intent exists to check against); IPC-1..3 remain true because the fields they
+  constrain are untouched. This is stated in Decision 058 and the record carries hashed attribution.
+- No perception, no parsing, no second rendering path, no new dependency; no real-media claim (the
+  objective adds no perception or rendering behaviour, so it adds no validation debt).
+
+### Decisions
+
+- Decision 058 recorded (the 16 approved boundaries). Decisions 001-057 otherwise preserved.

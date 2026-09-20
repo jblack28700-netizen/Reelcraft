@@ -119,6 +119,10 @@ signals:
     // a recorded decision was made. Requests only; the application acts.
     void reviseReframeOutputRequested(int index, const QString &instruction);
     void describeDecisionRequested(int index);
+    // Objective 40: widen the lens of the SELECTED rendered decision. The
+    // application chooses the ladder step and refuses honestly; the button only
+    // asks for "the next wider lens" of that record.
+    void widenRenderLensRequested(int index);
     void selectCreatorTargetRequested();
     void clearCreatorTargetRequested();
     void previewReframeOutputRequested(int index);
@@ -183,6 +187,8 @@ private:
     QPushButton *m_reviseRenderButton = nullptr;
     QPushButton *m_provenanceButton = nullptr;
     QLabel *m_provenanceLabel = nullptr;
+    // Objective 40: the lens-widening action (no narrowing control exists).
+    QPushButton *m_widenLensButton = nullptr;
     QListWidget *m_reframeOutputsList = nullptr;
 
     // Objective 12: creator selection, render preview, provider status.

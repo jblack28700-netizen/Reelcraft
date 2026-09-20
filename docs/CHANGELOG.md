@@ -954,6 +954,18 @@ Date: 2026-09-20
 - If the result you had selected is still in the list, it stays selected. If it is gone, the list is left with nothing selected rather than silently jumping to a different result, so you are never acting on the wrong one.
 - 2 new tests. Full model-free suite 521 passed / 0 failed / 14 skipped.
 
+## v0.2.76 — You can widen the lens of a result without redoing the edit
+
+Date: 2026-09-20
+
+- A rendered result can now be **widened**: pick it and use "Widen Lens of Selected Render" to see more of the scene. Reelcraft keeps the exact same camera aim, timing, kept sections, subjects and output, and changes only how wide the lens is — no re-analysis, no re-interpretation of your instruction, and it happens immediately instead of re-detecting everything.
+- Widening can never push anyone out of frame. Because a wider lens with the same aim always sees everything the tighter one saw, the framing guarantee is preserved by construction; the change is verified against the very same camera mathematics that produces the picture, at every keyframe and between them.
+- The new result is recorded like any other edit you make: a new saved decision that says it was produced by you revising that specific result, pointing back at the decision it came from, written to a fresh name beside it, and never replacing the result you started from. It can be replayed later exactly as rendered.
+- "Widening" steps through the lenses Reelcraft's wording already uses (…, wide, very wide) and stops at the widest supported lens, telling you when there is nothing wider to offer.
+- Making a shot **tighter**, moving the camera, changing timing or trimming is deliberately not part of this: those need a fresh instruction so the subjects are re-checked, and Reelcraft says so rather than silently cropping.
+- 7 new tests, including containment checks at intermediate camera times; full model-free suite 528 passed / 0 failed / 14 skipped. Decision 058 records the rule.
+
+
 
 
 
