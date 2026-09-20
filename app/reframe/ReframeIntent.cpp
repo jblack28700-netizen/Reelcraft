@@ -3,6 +3,7 @@
 #include <QHash>
 #include <QPair>
 #include <QRegularExpression>
+#include <QSet>
 #include <QStringList>
 
 #include <algorithm>
@@ -366,6 +367,143 @@ QString withoutSpan(const QString &text, int start, int end)
     return result;
 }
 
+// Objective 29/30/31: a framing verb (or an explicit "in frame") is what makes a
+// clause a framing instruction rather than a passing mention.
+bool hasFramingVerb(const QString &clause)
+{
+    static const QRegularExpression framingVerb(QStringLiteral(
+        "\\b(keep|keeping|follow|following|frame|frames|framing|hold|holding|"
+        "stay|staying|show|showing|include|including|cent(?:er|re)(?:ed|d)?|"
+        "in frame|in shot|in view)\\b"));
+    return framingVerb.match(clause).hasMatch();
+}
+
+// Objective 32: an EXPLICIT subject set ("keep me and person 2 in frame").
+//
+// Only a clause that already reads as a framing instruction may be split, and
+// only on the conjunctions that can join subject references. What this returns is
+// a list of REFERENCE STRINGS: identity is decided at command time by the
+// existing resolver, so this never guesses who someone is, and a reference that
+// cannot be resolved fails the command rather than becoming someone else.
+bool explicitSubjectSetFromClause(const QString &clause,
+                                  QStringList *outReferences)
+{
+    if (!hasFramingVerb(clause)) {
+        return false;
+    }
+
+    QString text = clause;
+    // Consume the lens phrase first (Objective 29): "zoom in" is a lens, not a
+    // subject, and must not become a reference.
+    double ignoredFieldOfView = 0.0;
+    int fieldOfViewStart = -1;
+    int fieldOfViewEnd = -1;
+    if (fieldOfViewFromClause(text, &ignoredFieldOfView, &fieldOfViewStart,
+                              &fieldOfViewEnd)) {
+        text = withoutSpan(text, fieldOfViewStart, fieldOfViewEnd);
+    }
+    // "in frame" / "in shot" / "in view" is what the clause asks FOR, not a
+    // subject.
+    static const QRegularExpression trailingFraming(
+        QStringLiteral("\\b(?:in|of|within)\\s+(?:the\\s+)?(?:frame|shot|"
+                       "view|picture)\\b"));
+    text.remove(trailingFraming);
+    // The framing verbs are instructions about framing, not references.
+    static const QRegularExpression framingVerbs(QStringLiteral(
+        "\\b(?:keep|keeping|follow|following|frame|frames|framing|hold|holding|"
+        "stay|staying|show|showing|include|including)\\b"));
+    text.remove(framingVerbs);
+    // Trailing framing words inside a fragment ("me centered" -> "me").
+    static const QRegularExpression framingTail(
+        QStringLiteral("\\b(?:center(?:ed|red)|centred|in the middle|"
+                       "in the centre|in the center)\\b"));
+    text.remove(framingTail);
+
+    // Only NOW may the conjunctions be read as joining subjects.
+    static const QRegularExpression separator(
+        QStringLiteral("\\s*(?:,|;|\\band\\b|&)\\s*"));
+    const QStringList fragments = text.split(separator, Qt::SkipEmptyParts);
+
+    // A fragment made only of instruction/filler words is not a subject: the
+    // residue of a temporal phrase ("From 0:35 to 1:10, keep the person I
+    // selected centered" leaves "From") and other connective words must never
+    // become references, or a legitimate single-subject command would be
+    // reinterpreted as a set.
+    static const QSet<QString> fillerWords = {
+        QStringLiteral("from"),     QStringLiteral("to"),
+        QStringLiteral("until"),    QStringLiteral("through"),
+        QStringLiteral("till"),     QStringLiteral("at"),
+        QStringLiteral("on"),       QStringLiteral("of"),
+        QStringLiteral("in"),       QStringLiteral("into"),
+        QStringLiteral("for"),      QStringLiteral("and"),
+        QStringLiteral("then"),     QStringLiteral("the"),
+        QStringLiteral("a"),        QStringLiteral("an"),
+        QStringLiteral("this"),     QStringLiteral("that"),
+        QStringLiteral("these"),    QStringLiteral("those"),
+        QStringLiteral("it"),       QStringLiteral("is"),
+        QStringLiteral("be"),       QStringLiteral("use"),
+        QStringLiteral("using"),    QStringLiteral("take"),
+        QStringLiteral("taking"),   QStringLiteral("start"),
+        QStringLiteral("starting"), QStringLiteral("keep"),
+        QStringLiteral("keeping"),  QStringLiteral("follow"),
+        QStringLiteral("following"), QStringLiteral("frame"),
+        QStringLiteral("framing"),  QStringLiteral("hold"),
+        QStringLiteral("holding"),  QStringLiteral("stay"),
+        QStringLiteral("staying"),  QStringLiteral("show"),
+        QStringLiteral("showing"),  QStringLiteral("include"),
+        QStringLiteral("including"), QStringLiteral("section"),
+        QStringLiteral("part"),     QStringLiteral("portion"),
+        QStringLiteral("segment"),  QStringLiteral("chunk"),
+        QStringLiteral("bit"),      QStringLiteral("clip"),
+        QStringLiteral("version"),  QStringLiteral("cut"),
+        QStringLiteral("video"),    QStringLiteral("second"),
+        QStringLiteral("seconds"),  QStringLiteral("minute"),
+        QStringLiteral("minutes"),  QStringLiteral("whole"),
+        QStringLiteral("entire")
+    };
+    const auto isFillerFragment = [&fillerWords](const QString &fragment) {
+        const QStringList words = fragment.split(
+            QRegularExpression(QStringLiteral("[^a-z0-9]+")), Qt::SkipEmptyParts);
+        if (words.isEmpty()) {
+            return true;
+        }
+        for (const QString &word : words) {
+            if (!fillerWords.contains(word)) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    QStringList references;
+    for (const QString &fragment : fragments) {
+        const QString reference = cleanSubject(fragment);
+        if (reference.isEmpty() || isFillerFragment(reference)) {
+            continue;
+        }
+        double fragmentFieldOfView = 0.0;
+        if (fieldOfViewFromClause(reference, &fragmentFieldOfView)) {
+            continue; // a lens clause, not a subject
+        }
+        // Kept as WRITTEN, duplicates included: collapsing them here would turn
+        // "person 1 and person 1" into a single reference, the clause would stop
+        // being a set, and the command would silently fall back to a centered
+        // camera. Duplicates are resolved and de-duplicated at command time,
+        // where a set of one distinct subject is refused honestly.
+        references.append(reference);
+    }
+
+    // A set needs at least two references; one reference is the ordinary
+    // single-subject path, which owns its own behavior.
+    if (references.size() < 2) {
+        return false;
+    }
+    if (outReferences) {
+        *outReferences = references;
+    }
+    return true;
+}
+
 // Objective 30/31: group framing. The phrase names a GROUP and, when it says so,
 // its SIZE — never which tracks: those are decided at command time against the
 // current tracks and identity state, exactly as a single reference is. A framing
@@ -431,11 +569,7 @@ int numberWordToInt(const QString &word)
 bool pluralGroupFromClause(const QString &clause, ReframeSubjectGroup *outGroup,
                            int *outCount)
 {
-    static const QRegularExpression framingVerb(QStringLiteral(
-        "\\b(keep|keeping|follow|following|frame|frames|framing|hold|holding|"
-        "stay|staying|show|showing|include|including|cent(?:er|re)(?:ed|d)?|"
-        "in frame|in shot|in view)\\b"));
-    if (!framingVerb.match(clause).hasMatch()) {
+    if (!hasFramingVerb(clause)) {
         return false;
     }
 
@@ -1066,7 +1200,15 @@ ReframeIntent ReframeIntentParser::parse(const QString &text)
         int subjectCount = 0;
         const bool plural =
             pluralGroupFromClause(cameraText, &subjectGroup, &subjectCount);
-        if (!clauseHasCameraKeyword(cameraText) && !hasFieldOfView && !plural) {
+        // Objective 32: an EXPLICIT subject set ("keep me and person 2 in frame")
+        // is detected after group phrases (which own their own vocabulary) and
+        // BEFORE the singular capture, which would otherwise take the first
+        // reference and ignore the rest.
+        QStringList explicitReferences;
+        const bool explicitSet = !plural
+            && explicitSubjectSetFromClause(cameraText, &explicitReferences);
+        if (!clauseHasCameraKeyword(cameraText) && !hasFieldOfView && !plural
+            && !explicitSet) {
             continue;
         }
         if (hasFieldOfView
@@ -1099,6 +1241,14 @@ ReframeIntent ReframeIntentParser::parse(const QString &text)
             move.subjectGroup = subjectGroup;
             move.subjectCount = subjectCount;
             move.followSubject = true;
+        } else if (explicitSet) {
+            // The same class of request as a group phrase: continuous framing of
+            // several subjects, executed as one camera path. The references are
+            // resolved at command time; a direction in the same clause is still
+            // parsed so the command can refuse that combination honestly.
+            move.subjectGroup = ReframeSubjectGroup::ExplicitSet;
+            move.subjectReferences = explicitReferences;
+            move.followSubject = true;
         }
 
         double yaw = 0.0;
@@ -1107,7 +1257,7 @@ ReframeIntent ReframeIntentParser::parse(const QString &text)
             move.hasDirection = true;
             move.yawDeg = yaw;
             move.pitchDeg = pitch;
-        } else if (!plural) {
+        } else if (!plural && !explicitSet) {
             bool follow = false;
             QString subject = subjectFromClause(cameraText, &follow);
             if (temporal) {
@@ -1158,8 +1308,16 @@ ReframeIntent ReframeIntentParser::parse(const QString &text)
             "No camera instruction: a centered forward view is used."));
     }
 
-    // Objective 30/31: one deterministic note naming the group asked for.
+    // Objective 30/31/32: one deterministic note naming the group asked for.
     for (const ReframeCameraMove &move : intent.moves) {
+        if (move.subjectGroup == ReframeSubjectGroup::ExplicitSet) {
+            intent.notes.append(
+                QStringLiteral("Multi-subject framing: %1 explicitly named "
+                               "subject(s): %2.")
+                    .arg(move.subjectReferences.size())
+                    .arg(move.subjectReferences.join(QStringLiteral(", "))));
+            break;
+        }
         if (move.subjectGroup == ReframeSubjectGroup::None) {
             continue;
         }

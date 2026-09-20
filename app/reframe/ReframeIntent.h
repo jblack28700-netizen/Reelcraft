@@ -4,6 +4,8 @@
 #include <QString>
 #include <QStringList>
 
+// (ReframeCameraMove::subjectReferences needs QStringList, included above.)
+
 #include "reframe/TemporalEditPlan.h"
 
 // ReframeTarget is a RESOLVED view direction for a named subject. Resolution
@@ -38,6 +40,13 @@ enum class ReframeSubjectGroup
     CreatorAndOthers,
     // "people"/"them": visible people only, in canonical order.
     VisiblePeople,
+    // Objective 32: an EXPLICIT set of subject references ("keep me and person 2
+    // in frame"). The references travel in
+    // ReframeCameraMove::subjectReferences, in the order they were written;
+    // WHICH tracks they resolve to is decided at command time, and the resolved
+    // set is ordered canonically. An unresolved or ambiguous reference fails the
+    // command: a name is never reinterpreted as a different subject.
+    ExplicitSet,
 };
 
 // One ordered camera instruction parsed from a natural-language request.
@@ -78,6 +87,10 @@ struct ReframeCameraMove
     // ("all of us", "everyone"). A named count is a requirement: it is refused
     // when the resolvable people cannot satisfy it exactly.
     int subjectCount = 0;
+    // Objective 32: the explicit references of an ExplicitSet group, in textual
+    // order ("me", "person 2"). Every one must resolve at command time; two
+    // references to the same subject are one subject, never a duplicated track.
+    QStringList subjectReferences;
 };
 
 // Structured interpretation of a natural-language reframing request. This is

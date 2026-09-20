@@ -2375,3 +2375,75 @@ defect below.
 - Decision 052 recorded (N-way group framing, plus the enclosure rule computed exactly in the
   renderer's basis and the corrected containment assertions). Decisions 001-051 preserved.
 
+
+
+## 2026-09-18 — 360 Reframing Objective 32: Explicit Multi-Subject References
+
+### Objective
+
+Let a command name its subjects instead of relying on group phrases ("keep me and person 2 in frame",
+"frame the presenter and the guest"), reusing Objective 31's generic N-way resolution and framing path
+rather than adding a second multi-subject implementation.
+
+### What inspection found
+
+- The path was already N-general downstream, but the *parser* could carry at most one reference: the
+  singular capture takes the first subject in a clause and ignores the rest, so an explicit set had no
+  representation at all.
+- Three different things are joined by "and" in this grammar (a temporal clause, a lens clause, a
+  group phrase), and Objective 31's gate had fixed the detection order. Two concrete traps were found
+  by reading rather than by testing:
+  - **"follow me and zoom in"** — splitting on "and" without first consuming the lens phrase would
+    turn "zoom in" into a subject and break a working command.
+  - **"From 0:35 to 1:10, keep the person I selected centered."** — the temporal clause leaves the
+    residue "From" behind, which a naive splitter reads as a second reference and reinterprets a
+    legitimate single-subject command as a set. This one was caught by the regression suite and fixed
+    with a deterministic filler-fragment rule.
+- A third trap surfaced in the focused tests: collapsing duplicate references in the *parser*
+  ("person 1 and person 1") left one reference, so the clause stopped being a set and the command
+  silently fell back to a centered camera — a silent reinterpretation of a multi-subject request.
+
+### What was built
+
+- **`ReframeSubjectGroup::ExplicitSet`** plus `ReframeCameraMove::subjectReferences` (textual
+  order, in-memory only). No schema, no persisted artifact, no new identity system.
+- **A guarded detector** (`explicitSubjectSetFromClause`) that runs after group detection and before
+  the singular capture: it requires a framing verb, consumes the lens phrase and the trailing framing
+  words, removes the framing verbs, then splits on "and"/"&"/","/"; a fragment made solely of
+  instruction or filler words is not a reference, and fewer than two references means the clause is
+  not a set and the existing single-subject path handles it unchanged.
+- **Runner resolution for the set**: every reference resolved through `TargetSelector` (creator
+  aliases, ordinals, left/right, track ids, unique labels), each failure reported by name with no
+  substitution, duplicates de-duplicated by track id, a set of fewer than two distinct subjects
+  refused, and the resolved set ordered canonically with the creator leading. The resolved set feeds
+  the *same* `planTracks` path, so the exact tangent-containment geometry of Decision 052 applies
+  unchanged; the enclosure mathematics was not touched.
+- **Parser note** naming the explicit set and its size, and **regression assertions** pinning the
+  filler-residue and target-duration guards.
+
+### Verification
+
+- 4 new model-free tests (parser semantics and seven guard cases; canonical resolution with order and
+  container independence, three explicit references, label resolution, ±180 wraparound and
+  per-keyframe containment of every real footprint; seven honest refusals plus group/mixed-direction
+  non-regression; deterministic execution, decision round-trip, replay and source immutability).
+- Targeted regression: **105 passed / 0 failed / 0 skipped** (42.9 s).
+- Full model-free suite at the checkpoint (baseline 483/0/9).
+
+### Boundary notes / not implemented
+
+- No new group vocabulary, no smoothing, no framing offsets, no dynamic membership, no subject
+  preference, no UI, no provider, no dependency, no schema or persisted-artifact change; single-target
+  and Objective 30/31 group behaviour are unchanged.
+- Recorded limits: the reference vocabulary is the resolver's existing one; a name matching several
+  tracks is ambiguous and refused; references longer than a phrase are not treated as a set; a lens
+  change inside one explicit set is refused (two lenses are two camera instructions).
+- The multi-subject framing family (Objectives 30-32) is now closed; `PROJECT_HISTORY.md` gets one
+  milestone entry for it rather than a per-objective entry, per the Objective P1 convention.
+
+### Decisions
+
+- Decision 053 recorded (explicit sets are references resolved at command time, split only inside a
+  framing construction; duplicates resolved then de-duplicated; canonical order decides the set).
+  Decisions 001-052 preserved.
+

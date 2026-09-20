@@ -2010,3 +2010,96 @@ Objective 30 had shipped:
 
 *Decisions 001-051 are preserved verbatim; this decision adds to them and supersedes none of them.*
 
+
+---
+
+# Decision 053 — Explicit Subject Sets Are References Resolved at Command Time, Split Only Inside a Framing Construction
+
+**Status:** Accepted (2026-09-18, 360 Reframing Objective 32)
+
+## Context
+
+Objective 30 framed "both of us"; Objective 31 generalised that to group phrases with sizes ("the
+three of us", "everyone"). Neither could name *which* subjects: "keep me and person 2 in frame" had no
+representation, because the intent carried at most one subject reference and the singular capture took
+the first reference while ignoring the rest. Identity already existed — the selector resolves the
+creator alias, ordinals ("person 2", "the second person"), left/right, exact track ids and unique
+labels — so nothing new was needed except a way to ask for several of them at once.
+
+The hazard is the word "and". The parser already handles three things joined by "and": a temporal
+clause ("keep 0:00 to 0:30 and follow me"), a lens clause ("follow me and zoom in"), and a group
+phrase ("keep both of us in frame"). Objective 31's gate fixed the detection order — framing phrase →
+group detection → direction → singular capture → filler stripping — and any new splitting had to fit
+inside it without disturbing those cases.
+
+## Decision
+
+- **An explicit set is a third kind of group** (`ReframeSubjectGroup::ExplicitSet`) carrying
+  `ReframeCameraMove::subjectReferences` in the order they were written. The parser records
+  references only; **which tracks they are is decided at command time** by the existing selector, so
+  no identity system is invented and nothing is persisted.
+- **"and" is split only inside a construction that is already a framing instruction.** The detector
+  requires a framing verb (or an explicit "in frame"), consumes the lens phrase and the trailing
+  framing words first, removes the framing verbs, and only then splits on "and"/"&"/","/: each
+  fragment must survive as a reference. A fragment made only of instruction or filler words ("From",
+  the residue of a temporal phrase) is not a reference. Fewer than two references means the clause is
+  not a set at all and falls through to the existing single-subject path — which is what keeps
+  "follow me and zoom in", "keep me centered and zoom in", "keep 0:00 to 0:30 and follow me" and
+  "Make a 30-second version and keep me centered." parsing exactly as before.
+- **Every reference must resolve.** An unresolvable or ambiguous reference fails the command with the
+  reference named; a name is never reinterpreted as a different subject, and a group is never
+  completed by substitution.
+- **Duplicates are resolved, not collapsed early.** References are kept as written, resolved
+  individually, and de-duplicated by track id at command time; two references to one subject are ONE
+  subject, and a set with fewer than two *distinct* subjects is refused. Collapsing duplicates in the
+  parser was rejected explicitly: it turned "person 1 and person 1" into a single reference, the
+  clause stopped being a set, and the command silently fell back to a centered camera — a silent
+  reinterpretation of a multi-subject request.
+- **Canonical order decides the set**, with the creator leading when it is part of it (the same rule
+  as "…of us"). Neither the written order nor the detector/container order may change the resolved
+  set or the plan.
+- **The framing path is reused, not reimplemented.** An explicit set populates the same resolved
+  track set that group phrases produce, so `TargetTrackPlanner::planTracks` and the exact
+  tangent-containment enclosure of Decision 052 apply unchanged. The enclosure mathematics is not
+  touched by this objective.
+- **Group phrases keep precedence in the same clause**, and a direction mixed with an explicit set is
+  refused by the existing rule.
+
+## Consequences
+
+- "keep me and person 2 in frame", "keep person 1 and person 3 in frame", "keep me and person 2 and
+  person 4 in frame" and "frame the presenter and the guest" (unique labels) now work, with a named
+  lens ("…, close-up", "…, wide") composing through Objective 29.
+- Refusals are specific: an unresolvable name, an ambiguous name, an unselected creator, a set of one
+  distinct subject, a set that cannot fit inside 140°, or a named lens narrower than the requirement.
+- Recorded limits: the reference vocabulary is the selector's existing one (creator aliases, ordinals,
+  left/right, track ids, unique labels) — a name that matches several tracks at once is ambiguous and
+  refused; a reference fragment longer than a phrase (for example a whole clause) is not treated as a
+  set and falls back to the single-subject path; group sizes above ten from Objective 31 are
+  unchanged; membership is still fixed for the instruction.
+- No schema, persisted artifact, dependency, plan type or rendering change; single-subject and group
+  behaviour are unchanged; replay remains perception-free.
+
+## Verification
+
+- 4 new model-free tests: `reframeIntentParsesExplicitSubjectSets` (the four reference forms, three
+  or more references, a lens clause inside a set, and the guards that keep "follow me and zoom in",
+  "keep me centered and zoom in", the temporal-residue clause, the target-duration clause, "pan right
+  and zoom in" and the Objective 31 group vocabulary unchanged);
+  `reframeCommandRunnerResolvesExplicitSubjects` (creator + numbered subject, three explicit
+  references, order independence in text and in the input container, deterministic repeats, unique
+  labels resolving through the existing label identity, and a pair straddling ±180 with containment
+  asserted for every subject's real footprint at every keyframe);
+  `reframeCommandRunnerExplicitSubjectsRefuseHonestly` (unresolvable reference, duplicate-only set,
+  duplicate plus a genuine second subject, unselected creator, ambiguous name, a set beyond the
+  renderable maximum, a named lens too narrow and the same geometry accepted when wide, plus group and
+  mixed-direction non-regression); `reframeExplicitSubjectsRenderAndReplay` (deterministic execution,
+  decision round-trip, perception-free replay to identical frames, source untouched).
+- Targeted regression across parser, builder, contract, runner, planner, camera path, selector,
+  resolver, pipeline, audio, replay and application tests: **105 passed / 0 failed / 0 skipped**.
+- Full model-free suite run at the checkpoint.
+
+---
+
+*Decisions 001-052 are preserved verbatim; this decision adds to them and supersedes none of them.*
+

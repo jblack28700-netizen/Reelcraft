@@ -1097,6 +1097,11 @@ private slots:
     void reframeGroupFramingRefusesHonestly();
     void reframeGroupFramingGeometrySweep();
     void reframeGroupFramingRendersAndReplays();
+    // Objective 32: explicit multi-subject references.
+    void reframeIntentParsesExplicitSubjectSets();
+    void reframeCommandRunnerResolvesExplicitSubjects();
+    void reframeCommandRunnerExplicitSubjectsRefuseHonestly();
+    void reframeExplicitSubjectsRenderAndReplay();
     void mediaAnalysisJsonRoundTripAndIdentity();
     void mediaAnalysisSchemaVersionAndDigestHandling();
     void mediaAnalysisSourceStatusDistinguishesMissingFromChanged();
@@ -12835,6 +12840,519 @@ void ProjectTest::reframeGroupFramingRendersAndReplays()
     QVERIFY2(loaded, qPrintable(error));
     QCOMPARE(restored.plan().toJsonObject(), result.plan.toJsonObject());
     const QString replayOutput = directory.filePath(QStringLiteral("group_replay.mp4"));
+    const ReframePipeline::Result replayed =
+        ReframePipeline::renderPlan(restored.plan(), source, replayOutput, nullptr);
+    QVERIFY2(replayed.ok, qPrintable(replayed.error));
+    QCOMPARE(sha256Of(decodeAllFramesRaw(replayOutput)), sha256Of(firstFrames));
+
+    // Source media untouched throughout.
+    QCOMPARE(QFileInfo(source).size(), sourceBefore.size());
+    QCOMPARE(QFileInfo(source).lastModified(), sourceBefore.lastModified());
+    QCOMPARE(sha256Of(readFileBytes(source)), sourceDigestBefore);
+}
+
+// ============ Explicit multi-subject references (Objective 32) ==============
+//
+// "keep me and person 2 in frame", "frame the presenter and the guest": an
+// EXPLICIT set of references, captured after group phrases and before the
+// singular subject pattern, resolved at command time through the existing
+// selector, and framed by the Objective 31 N-way path (same enclosure
+// mathematics, never a second implementation).
+
+void ProjectTest::reframeIntentParsesExplicitSubjectSets()
+{
+    const ReframeIntent two =
+        ReframeIntentParser::parse(QStringLiteral("keep me and person 2 in frame"));
+    QVERIFY(two.recognized);
+    QCOMPARE(two.moves.size(), 1);
+    QCOMPARE(two.moves.at(0).subjectGroup, ReframeSubjectGroup::ExplicitSet);
+    QCOMPARE(two.moves.at(0).subjectReferences,
+             QStringList({ QStringLiteral("me"), QStringLiteral("person 2") }));
+    QVERIFY(two.moves.at(0).followSubject);
+    QVERIFY(two.moves.at(0).targetRef.isEmpty());
+    QVERIFY(!two.moves.at(0).hasDirection);
+    QVERIFY2(two.notes.join(QStringLiteral("\n"))
+                 .contains(QStringLiteral("explicitly named")),
+             qPrintable(two.notes.join(QStringLiteral(" | "))));
+
+    const ReframeIntent names = ReframeIntentParser::parse(
+        QStringLiteral("frame the presenter and the guest"));
+    QCOMPARE(names.moves.size(), 1);
+    QCOMPARE(names.moves.at(0).subjectGroup, ReframeSubjectGroup::ExplicitSet);
+    QCOMPARE(names.moves.at(0).subjectReferences,
+             QStringList({ QStringLiteral("the presenter"),
+                           QStringLiteral("the guest") }));
+
+    const ReframeIntent ordinals = ReframeIntentParser::parse(
+        QStringLiteral("keep person 1 and person 3 in frame"));
+    QCOMPARE(ordinals.moves.at(0).subjectGroup, ReframeSubjectGroup::ExplicitSet);
+    QCOMPARE(ordinals.moves.at(0).subjectReferences,
+             QStringList({ QStringLiteral("person 1"),
+                           QStringLiteral("person 3") }));
+
+    // Three or more explicit references.
+    const ReframeIntent three = ReframeIntentParser::parse(
+        QStringLiteral("keep me and person 2 and person 4 in frame"));
+    QCOMPARE(three.moves.at(0).subjectReferences.size(), 3);
+    QCOMPARE(three.moves.at(0).subjectReferences.last(),
+             QStringLiteral("person 4"));
+
+    // A lens clause is a lens, not a subject, and the rest of the set survives.
+    const ReframeIntent lens = ReframeIntentParser::parse(
+        QStringLiteral("keep person 1 and person 2 in frame, close-up"));
+    QCOMPARE(lens.moves.at(0).subjectGroup, ReframeSubjectGroup::ExplicitSet);
+    QCOMPARE(lens.moves.at(0).subjectReferences.size(), 2);
+    QVERIFY(lens.moves.at(0).hasFieldOfView);
+    QVERIFY(qAbs(lens.moves.at(0).fieldOfViewDeg - 60.0) < 1e-9);
+
+    // "and" must NOT be split outside a framing construction: these keep their
+    // established single-subject behavior.
+    const ReframeIntent followZoom =
+        ReframeIntentParser::parse(QStringLiteral("follow me and zoom in"));
+    QCOMPARE(followZoom.moves.size(), 1);
+    QCOMPARE(followZoom.moves.at(0).subjectGroup, ReframeSubjectGroup::None);
+    QCOMPARE(followZoom.moves.at(0).targetRef, QStringLiteral("me"));
+    QVERIFY(qAbs(followZoom.moves.at(0).fieldOfViewDeg - 60.0) < 1e-9);
+
+    const ReframeIntent keepZoom = ReframeIntentParser::parse(
+        QStringLiteral("keep me centered and zoom in"));
+    QCOMPARE(keepZoom.moves.at(0).subjectGroup, ReframeSubjectGroup::None);
+    QCOMPARE(keepZoom.moves.at(0).targetRef, QStringLiteral("me"));
+    QVERIFY(keepZoom.moves.at(0).followSubject);
+
+    const ReframeIntent direction =
+        ReframeIntentParser::parse(QStringLiteral("pan right and zoom in"));
+    QCOMPARE(direction.moves.size(), 1);
+    QCOMPARE(direction.moves.at(0).subjectGroup, ReframeSubjectGroup::None);
+    QVERIFY(direction.moves.at(0).hasDirection);
+
+    // The compound temporal form is untouched, including the case whose temporal
+    // residue ("From ...") must never be read as a reference.
+    const ReframeIntent compound = ReframeIntentParser::parse(
+        QStringLiteral("keep 0:00 to 0:30 and follow me"));
+    QVERIFY(compound.hasTemporalRequest);
+    QCOMPARE(compound.moves.size(), 1);
+    QCOMPARE(compound.moves.at(0).subjectGroup, ReframeSubjectGroup::None);
+    QCOMPARE(compound.moves.at(0).targetRef, QStringLiteral("me"));
+
+    const ReframeIntent fromRange = ReframeIntentParser::parse(
+        QStringLiteral("From 0:35 to 1:10, keep the person I selected centered."));
+    QVERIFY(fromRange.hasTemporalRequest);
+    QCOMPARE(fromRange.moves.size(), 1);
+    QCOMPARE(fromRange.moves.at(0).subjectGroup, ReframeSubjectGroup::None);
+    QCOMPARE(fromRange.moves.at(0).targetRef, QStringLiteral("person i selected"));
+
+    const ReframeIntent targetDuration = ReframeIntentParser::parse(
+        QStringLiteral("Make a 30-second version and keep me centered."));
+    QCOMPARE(targetDuration.moves.size(), 1);
+    QCOMPARE(targetDuration.moves.at(0).subjectGroup, ReframeSubjectGroup::None);
+    QCOMPARE(targetDuration.moves.at(0).targetRef, QStringLiteral("me"));
+
+    // A passing mention is still not an instruction.
+    const ReframeIntent mention =
+        ReframeIntentParser::parse(QStringLiteral("make a version with all of us"));
+    QVERIFY(mention.moves.isEmpty());
+
+    // Objective 31 group vocabulary is unchanged by this objective.
+    const ReframeIntent group =
+        ReframeIntentParser::parse(QStringLiteral("keep the three of us in frame"));
+    QCOMPARE(group.moves.at(0).subjectGroup, ReframeSubjectGroup::CreatorAndOthers);
+    QCOMPARE(group.moves.at(0).subjectCount, 3);
+    QVERIFY(group.moves.at(0).subjectReferences.isEmpty());
+    const ReframeIntent pair =
+        ReframeIntentParser::parse(QStringLiteral("keep both people in frame"));
+    QCOMPARE(pair.moves.at(0).subjectGroup, ReframeSubjectGroup::VisiblePeople);
+    QCOMPARE(pair.moves.at(0).subjectCount, 2);
+}
+
+void ProjectTest::reframeCommandRunnerResolvesExplicitSubjects()
+{
+    const QList<qint64> times{ 0, 1000, 2000, 3000, 4000 };
+    const auto request = [](const QString &instruction) {
+        ReframeCommandRequest request;
+        request.instruction = instruction;
+        request.defaultRange = ReframePlan::TimeRange{ 0, 4000 };
+        request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+        return request;
+    };
+    const auto idsOfResult = [](const ReframeCommandResult &result) {
+        QStringList ids;
+        for (const ReframeTarget &target : result.resolvedTargets) {
+            ids.append(target.id);
+        }
+        return ids;
+    };
+    const auto creatorSeed = [](ReframeCommandRequest *request, double yawDeg) {
+        request->hasCreatorSelection = true;
+        request->creatorSelection.identity = QStringLiteral("me");
+        request->creatorSelection.timeMs = 0;
+        request->creatorSelection.yawDeg = yawDeg;
+        request->creatorSelection.pitchDeg = 0.0;
+        request->creatorSelection.label = QStringLiteral("person");
+    };
+
+    const QList<TargetTrack> four{
+        groupMember(QStringLiteral("t1"), -45.0, 0.0, 4.0, 4.0, times),
+        groupMember(QStringLiteral("t2"), -15.0, 0.0, 4.0, 4.0, times),
+        groupMember(QStringLiteral("t3"), 15.0, 0.0, 4.0, 4.0, times),
+        groupMember(QStringLiteral("t4"), 45.0, 0.0, 4.0, 4.0, times)
+    };
+
+    // Creator plus a numbered subject: the creator leads, canonical order holds.
+    ReframeCommandRequest withCreator =
+        request(QStringLiteral("keep me and person 2 in frame"));
+    withCreator.resolvedTracks = four;
+    creatorSeed(&withCreator, -45.0);
+    const ReframeCommandResult creatorResult =
+        ReframeCommandRunner::prepare(withCreator, nullptr, nullptr);
+    QVERIFY2(creatorResult.ok, qPrintable(creatorResult.error));
+    QCOMPARE(idsOfResult(creatorResult),
+             QStringList({ QStringLiteral("t1"), QStringLiteral("t2") }));
+    {
+        int pairs = 0;
+        QVERIFY2(planContainsTracks(creatorResult.plan, four,
+                                    QStringList({ QStringLiteral("t1"),
+                                                  QStringLiteral("t2") }),
+                                    &pairs),
+                 "an explicitly named subject is outside the frame");
+        QCOMPARE(pairs, 2 * creatorResult.plan.keyframes().size());
+    }
+
+    // Three explicit references, and the written order never decides the set.
+    ReframeCommandRequest three =
+        request(QStringLiteral("keep me and person 2 and person 4 in frame"));
+    three.resolvedTracks = four;
+    creatorSeed(&three, -45.0);
+    const ReframeCommandResult threeResult =
+        ReframeCommandRunner::prepare(three, nullptr, nullptr);
+    QVERIFY2(threeResult.ok, qPrintable(threeResult.error));
+    QCOMPARE(idsOfResult(threeResult),
+             QStringList({ QStringLiteral("t1"), QStringLiteral("t2"),
+                           QStringLiteral("t4") }));
+    int threePairs = 0;
+    QVERIFY2(planContainsTracks(threeResult.plan, four,
+                                QStringList({ QStringLiteral("t1"),
+                                              QStringLiteral("t2"),
+                                              QStringLiteral("t4") }),
+                                &threePairs),
+             "an explicitly named subject is outside the frame");
+    QVERIFY(threePairs > 0);
+
+    ReframeCommandRequest reversedText =
+        request(QStringLiteral("keep person 3 and person 1 in frame"));
+    reversedText.resolvedTracks = four;
+    const ReframeCommandResult reversedTextResult =
+        ReframeCommandRunner::prepare(reversedText, nullptr, nullptr);
+    QVERIFY2(reversedTextResult.ok, qPrintable(reversedTextResult.error));
+    ReframeCommandRequest forwardsText =
+        request(QStringLiteral("keep person 1 and person 3 in frame"));
+    forwardsText.resolvedTracks = four;
+    const ReframeCommandResult forwardsTextResult =
+        ReframeCommandRunner::prepare(forwardsText, nullptr, nullptr);
+    QVERIFY2(forwardsTextResult.ok, qPrintable(forwardsTextResult.error));
+    QCOMPARE(idsOfResult(reversedTextResult), idsOfResult(forwardsTextResult));
+    QCOMPARE(reversedTextResult.plan.toJsonObject(),
+             forwardsTextResult.plan.toJsonObject());
+
+    // Detector/container order never decides identity either.
+    ReframeCommandRequest shuffled = forwardsText;
+    std::reverse(shuffled.resolvedTracks.begin(), shuffled.resolvedTracks.end());
+    const ReframeCommandResult shuffledResult =
+        ReframeCommandRunner::prepare(shuffled, nullptr, nullptr);
+    QVERIFY2(shuffledResult.ok, qPrintable(shuffledResult.error));
+    QCOMPARE(idsOfResult(shuffledResult), idsOfResult(forwardsTextResult));
+    QCOMPARE(shuffledResult.plan.toJsonObject(),
+             forwardsTextResult.plan.toJsonObject());
+
+    // Repeated planning is deterministic.
+    const ReframeCommandResult repeat =
+        ReframeCommandRunner::prepare(forwardsText, nullptr, nullptr);
+    QVERIFY2(repeat.ok, qPrintable(repeat.error));
+    QCOMPARE(repeat.plan.toJsonObject(), forwardsTextResult.plan.toJsonObject());
+
+    // Named subjects resolve through the existing label identity when it is
+    // unique — no new identity system.
+    const QList<TargetTrack> roles{
+        TargetTrack(QStringLiteral("t1"), QStringLiteral("presenter")),
+        TargetTrack(QStringLiteral("t2"), QStringLiteral("guest"))
+    };
+    QList<TargetTrack> labelled;
+    for (const TargetTrack &track : roles) {
+        TargetTrack copy = track;
+        for (qint64 timeMs : { 0, 1000, 2000 }) {
+            TargetObservation observation =
+                subjectObservation(timeMs, track.id() == QStringLiteral("t1")
+                                               ? -20.0
+                                               : 20.0,
+                                   0.0, 5.0, 5.0);
+            observation.label = track.label();
+            copy.append(observation);
+        }
+        labelled.append(copy);
+    }
+    ReframeCommandRequest byName =
+        request(QStringLiteral("frame the presenter and the guest"));
+    byName.defaultRange = ReframePlan::TimeRange{ 0, 2000 };
+    byName.resolvedTracks = labelled;
+    const ReframeCommandResult byNameResult =
+        ReframeCommandRunner::prepare(byName, nullptr, nullptr);
+    QVERIFY2(byNameResult.ok, qPrintable(byNameResult.error));
+    QCOMPARE(byNameResult.resolvedTargets.size(), 2);
+    QVERIFY(byNameResult.notes.join(QStringLiteral("\n"))
+                .contains(QStringLiteral("(label)")));
+
+    // Yaw wraparound: a pair straddling +/-180 is framed the short way round, and
+    // both explicit subjects stay inside every keyframe.
+    const QList<TargetTrack> wrapped{
+        groupMember(QStringLiteral("t1"), 175.0, 0.0, 3.0, 3.0, times),
+        groupMember(QStringLiteral("t2"), -175.0, 0.0, 3.0, 3.0, times)
+    };
+    ReframeCommandRequest across =
+        request(QStringLiteral("keep person 1 and person 2 in frame"));
+    across.resolvedTracks = wrapped;
+    const ReframeCommandResult acrossResult =
+        ReframeCommandRunner::prepare(across, nullptr, nullptr);
+    QVERIFY2(acrossResult.ok, qPrintable(acrossResult.error));
+    QVERIFY(!acrossResult.plan.keyframes().isEmpty());
+    QVERIFY(qAbs(qAbs(acrossResult.plan.keyframes().first().yawDeg) - 180.0) < 1e-6);
+    int wrappedPairs = 0;
+    QVERIFY2(planContainsTracks(acrossResult.plan, wrapped,
+                                QStringList({ QStringLiteral("t1"),
+                                              QStringLiteral("t2") }),
+                                &wrappedPairs),
+             "a subject straddling +/-180 is outside the frame");
+    QVERIFY(wrappedPairs > 0);
+}
+
+void ProjectTest::reframeCommandRunnerExplicitSubjectsRefuseHonestly()
+{
+    const QList<qint64> times{ 0, 1000, 2000 };
+    const auto request = [](const QString &instruction) {
+        ReframeCommandRequest request;
+        request.instruction = instruction;
+        request.defaultRange = ReframePlan::TimeRange{ 0, 2000 };
+        request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+        return request;
+    };
+    const auto seed = [](ReframeCommandRequest *request, double yawDeg) {
+        request->hasCreatorSelection = true;
+        request->creatorSelection.identity = QStringLiteral("me");
+        request->creatorSelection.timeMs = 0;
+        request->creatorSelection.yawDeg = yawDeg;
+        request->creatorSelection.pitchDeg = 0.0;
+        request->creatorSelection.label = QStringLiteral("person");
+    };
+    const QList<TargetTrack> three{
+        groupMember(QStringLiteral("t1"), -20.0, 0.0, 4.0, 4.0, times),
+        groupMember(QStringLiteral("t2"), 0.0, 0.0, 4.0, 4.0, times),
+        groupMember(QStringLiteral("t3"), 20.0, 0.0, 4.0, 4.0, times)
+    };
+
+    // An unresolvable reference is reported, never replaced by another subject.
+    ReframeCommandRequest missing =
+        request(QStringLiteral("keep me and person 9 in frame"));
+    missing.resolvedTracks = three;
+    seed(&missing, -20.0);
+    const ReframeCommandResult missingResult =
+        ReframeCommandRunner::prepare(missing, nullptr, nullptr);
+    QVERIFY(!missingResult.ok);
+    QVERIFY2(missingResult.error.contains(QStringLiteral("could not resolve 'person 9'")),
+             qPrintable(missingResult.error));
+    QVERIFY(missingResult.plan.keyframes().isEmpty());
+
+    // Duplicate references are ONE subject; a set of one is refused rather than
+    // framed as a duplicate.
+    ReframeCommandRequest duplicate =
+        request(QStringLiteral("keep person 1 and person 1 in frame"));
+    duplicate.resolvedTracks = three;
+    const ReframeCommandResult duplicateResult =
+        ReframeCommandRunner::prepare(duplicate, nullptr, nullptr);
+    QVERIFY(!duplicateResult.ok);
+    QVERIFY2(duplicateResult.error.contains(
+                 QStringLiteral("at least two distinct subjects")),
+             qPrintable(duplicateResult.error));
+    QVERIFY(duplicateResult.plan.keyframes().isEmpty());
+
+    // A duplicate plus a genuine second subject is framed as two, once.
+    ReframeCommandRequest deduped = request(
+        QStringLiteral("keep person 1 and person 1 and person 2 in frame"));
+    deduped.resolvedTracks = three;
+    const ReframeCommandResult dedupedResult =
+        ReframeCommandRunner::prepare(deduped, nullptr, nullptr);
+    QVERIFY2(dedupedResult.ok, qPrintable(dedupedResult.error));
+    QCOMPARE(dedupedResult.resolvedTargets.size(), 2);
+
+    // An unselected creator is refused rather than approximated.
+    ReframeCommandRequest noCreator =
+        request(QStringLiteral("keep me and person 2 in frame"));
+    noCreator.resolvedTracks = three;
+    const ReframeCommandResult noCreatorResult =
+        ReframeCommandRunner::prepare(noCreator, nullptr, nullptr);
+    QVERIFY(!noCreatorResult.ok);
+    QVERIFY2(noCreatorResult.error.contains(QStringLiteral("could not resolve 'me'")),
+             qPrintable(noCreatorResult.error));
+
+    // An ambiguous name is reported, not decided.
+    QList<TargetTrack> ambiguousLabels;
+    for (const QString &id : { QStringLiteral("t1"), QStringLiteral("t2") }) {
+        TargetTrack track(id, QStringLiteral("presenter"));
+        for (qint64 timeMs : times) {
+            TargetObservation observation =
+                subjectObservation(timeMs, -10.0, 0.0, 4.0, 4.0);
+            observation.label = QStringLiteral("presenter");
+            track.append(observation);
+        }
+        ambiguousLabels.append(track);
+    }
+    ReframeCommandRequest ambiguous =
+        request(QStringLiteral("frame the presenter and the guest"));
+    ambiguous.resolvedTracks = ambiguousLabels;
+    const ReframeCommandResult ambiguousResult =
+        ReframeCommandRunner::prepare(ambiguous, nullptr, nullptr);
+    QVERIFY(!ambiguousResult.ok);
+    QVERIFY2(ambiguousResult.error.contains(QStringLiteral("could not resolve 'the presenter'")),
+             qPrintable(ambiguousResult.error));
+
+    // A set that cannot fit inside the renderable field of view refuses with the
+    // measured requirement; a lens narrower than the requirement refuses too.
+    const QList<TargetTrack> spread{
+        groupMember(QStringLiteral("t1"), -80.0, 0.0, 4.0, 4.0, times),
+        groupMember(QStringLiteral("t2"), 0.0, 0.0, 4.0, 4.0, times),
+        groupMember(QStringLiteral("t3"), 80.0, 0.0, 4.0, 4.0, times)
+    };
+    ReframeCommandRequest tooWide = request(
+        QStringLiteral("keep person 1 and person 2 and person 3 in frame"));
+    tooWide.resolvedTracks = spread;
+    const ReframeCommandResult tooWideResult =
+        ReframeCommandRunner::prepare(tooWide, nullptr, nullptr);
+    QVERIFY(!tooWideResult.ok);
+    QVERIFY2(tooWideResult.error.contains(QStringLiteral("maximum")),
+             qPrintable(tooWideResult.error));
+    QVERIFY(tooWideResult.plan.keyframes().isEmpty());
+
+    const QList<TargetTrack> wide{
+        groupMember(QStringLiteral("t1"), -50.0, 0.0, 4.0, 4.0, times),
+        groupMember(QStringLiteral("t2"), 0.0, 0.0, 4.0, 4.0, times),
+        groupMember(QStringLiteral("t3"), 50.0, 0.0, 4.0, 4.0, times)
+    };
+    ReframeCommandRequest tight = request(
+        QStringLiteral("keep person 1 and person 2 and person 3 in frame, close-up"));
+    tight.resolvedTracks = wide;
+    const ReframeCommandResult tightResult =
+        ReframeCommandRunner::prepare(tight, nullptr, nullptr);
+    QVERIFY(!tightResult.ok);
+    QVERIFY2(tightResult.error.contains(QStringLiteral("too narrow")),
+             qPrintable(tightResult.error));
+
+    ReframeCommandRequest wideLens = request(
+        QStringLiteral("keep person 1 and person 2 and person 3 in frame, wide"));
+    wideLens.resolvedTracks = wide;
+    const ReframeCommandResult wideLensResult =
+        ReframeCommandRunner::prepare(wideLens, nullptr, nullptr);
+    QVERIFY2(wideLensResult.ok, qPrintable(wideLensResult.error));
+    for (const CameraKeyframe &keyframe : wideLensResult.plan.keyframes()) {
+        QCOMPARE(keyframe.fieldOfViewDeg, 120.0);
+    }
+
+    // Objective 30/31 behavior is unchanged: group phrases still work, and a
+    // direction mixed with an explicit set is still refused.
+    ReframeCommandRequest group =
+        request(QStringLiteral("keep the three people in frame"));
+    group.resolvedTracks = three;
+    const ReframeCommandResult groupResult =
+        ReframeCommandRunner::prepare(group, nullptr, nullptr);
+    QVERIFY2(groupResult.ok, qPrintable(groupResult.error));
+    QCOMPARE(groupResult.resolvedTargets.size(), 3);
+
+    ReframeCommandRequest mixed = request(
+        QStringLiteral("pan right and keep person 1 and person 2 in frame"));
+    mixed.resolvedTracks = three;
+    const ReframeCommandResult mixedResult =
+        ReframeCommandRunner::prepare(mixed, nullptr, nullptr);
+    QVERIFY(!mixedResult.ok);
+    QVERIFY2(mixedResult.error.contains(QStringLiteral("explicit camera direction")),
+             qPrintable(mixedResult.error));
+}
+
+void ProjectTest::reframeExplicitSubjectsRenderAndReplay()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable in this environment");
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString source;
+    QVERIFY(createEquirectReviewVideo(directory.path(),
+                                      FrameExtractor::defaultExecutablePath(), 8,
+                                      &source));
+    const QFileInfo sourceBefore(source);
+    const QString sourceDigestBefore = sha256Of(readFileBytes(source));
+
+    const QList<qint64> times{ 0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000 };
+    ReframeCommandRequest request;
+    request.sourcePath = source;
+    request.sourceMediaId = QStringLiteral("explicit-set-media");
+    request.instruction = QStringLiteral("keep person 1 and person 3 in frame");
+    request.defaultRange = ReframePlan::TimeRange{ 0, 4000 };
+    request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+    request.resolvedTracks = {
+        groupMember(QStringLiteral("t1"), -30.0, 0.0, 4.0, 4.0, times),
+        groupMember(QStringLiteral("t2"), 0.0, 0.0, 4.0, 4.0, times),
+        groupMember(QStringLiteral("t3"), 30.0, 0.0, 4.0, 4.0, times)
+    };
+
+    const QString firstOutput = directory.filePath(QStringLiteral("explicit.mp4"));
+    request.outputPath = firstOutput;
+    const ReframeCommandResult result =
+        ReframeCommandRunner::run(request, nullptr, nullptr);
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QVERIFY(QFileInfo::exists(firstOutput));
+    QCOMPARE(result.resolvedTargets.size(), 2);
+    const QList<CameraKeyframe> keyframes = result.plan.keyframes();
+    QVERIFY(keyframes.size() >= 5);
+    const double lens = keyframes.first().fieldOfViewDeg;
+    for (int i = 0; i < keyframes.size(); ++i) {
+        QCOMPARE(keyframes.at(i).fieldOfViewDeg, lens);
+        if (i > 0) {
+            QVERIFY(keyframes.at(i).timeMs > keyframes.at(i - 1).timeMs);
+        }
+    }
+    int pairs = 0;
+    QVERIFY2(planContainsTracks(result.plan, request.resolvedTracks,
+                                QStringList({ QStringLiteral("t1"),
+                                              QStringLiteral("t3") }),
+                                &pairs),
+             "an explicitly named subject is outside the frame");
+    QVERIFY(pairs > 0);
+
+    // Deterministic execution.
+    ReframeCommandRequest repeat = request;
+    const QString repeatOutput =
+        directory.filePath(QStringLiteral("explicit_again.mp4"));
+    repeat.outputPath = repeatOutput;
+    const ReframeCommandResult repeatResult =
+        ReframeCommandRunner::run(repeat, nullptr, nullptr);
+    QVERIFY2(repeatResult.ok, qPrintable(repeatResult.error));
+    QCOMPARE(repeatResult.plan.toJsonObject(), result.plan.toJsonObject());
+    const QByteArray firstFrames = decodeAllFramesRaw(firstOutput);
+    QVERIFY(!firstFrames.isEmpty());
+    QCOMPARE(sha256Of(decodeAllFramesRaw(repeatOutput)), sha256Of(firstFrames));
+
+    // Replay stays perception-free: the stored plan reproduces the render.
+    const MediaItem media = MediaItem::createFromFilePath(source, nullptr);
+    QVERIFY(media.isValid());
+    const EditDecision decision = EditDecision::fromPlan(
+        result.plan, media, request.instruction,
+        QDateTime::fromMSecsSinceEpoch(0, Qt::UTC));
+    const QString decisionPath = directory.filePath(QStringLiteral("explicit.json"));
+    QString error;
+    QVERIFY2(decision.save(decisionPath, &error), qPrintable(error));
+    bool loaded = false;
+    const EditDecision restored = EditDecision::load(decisionPath, &loaded, &error);
+    QVERIFY2(loaded, qPrintable(error));
+    QCOMPARE(restored.plan().toJsonObject(), result.plan.toJsonObject());
+    const QString replayOutput =
+        directory.filePath(QStringLiteral("explicit_replay.mp4"));
     const ReframePipeline::Result replayed =
         ReframePipeline::renderPlan(restored.plan(), source, replayOutput, nullptr);
     QVERIFY2(replayed.ok, qPrintable(replayed.error));

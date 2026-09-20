@@ -23,11 +23,12 @@ structured edit/reframe plan -> virtual-camera decisions -> deterministic execut
 **Process Objective P1 — Development-management consolidation** (this checkpoint; documentation and
 policy only, no product change).
 
-**Objective 31 — N-way group framing** is complete at this checkpoint (Decision 052).
+**The approved batch is complete**: Objective 31 (N-way group framing, Decision 052) and
+Objective 32 (explicit subject sets, Decision 053) are both delivered, each with its own commit, and
+the multi-subject framing family is closed for now.
 
-**Objective 32 — explicit multi-subject references** is the next objective of the currently approved
-batch. It starts only after the batch gate (`AGENT_WORKFLOW.md` §12) confirms its prerequisites; if
-the gate fails, work stops and the batch is re-authorised by the human.
+**No next objective is selected.** The next capability is chosen by the human from §5 after the
+post-objective gate; nothing in this file authorises starting one automatically.
 
 ---
 
@@ -61,7 +62,7 @@ the gate fails, work stops and the batch is re-authorised by the human.
 | Persistent media analysis (artifact + runner) | partial | `app/analysis/{MediaAnalysis,MediaAnalysisRunner}.*` | detector / ffprobe | fixture; **no consumer** | `90f671c` |
 | Creator review / revision UI | missing | Application APIs exist (`decisionProvenance`, `reviseEditDecision`) | — | — | — |
 | In-app audio playback | missing | — | audio-output subsystem decision (Decision 036) | — | — |
-| Explicit multi-subject references ("keep me and person 2 in frame") | missing | parser subject-set capture + the Objective 31 N-way resolution | Objective 31 (done) | — | — |
+| Explicit subject sets ("keep me and person 2 in frame", "frame the presenter and the guest") | done | `ReframeSubjectGroup::ExplicitSet` + `subjectReferences` + runner reference resolution | the existing selector vocabulary | **fixture only** | this checkpoint (Obj 32) |
 | Pair-path smoothing (containment-preserving) | missing | `TargetTrackPlanner::planTracks` | measured real-media jitter evidence | — | — |
 | Framing offsets / composition (lead room, thirds) | deferred | — | decision redefining "centered" (Decision 046) | — | — |
 | Automatic speaker / dialogue attribution | blocked | `SpeakerEvidenceProvider` seam ready | permissively licensed AV/diarization provider | — | — |
@@ -72,7 +73,7 @@ the gate fails, work stops and the batch is re-authorised by the human.
 
 ## 4. Validation debt (deliberately visible)
 
-- **Objectives 28, 29, 30 and 31 are fixture-validated only.** Their env-gated real-media counterparts have
+- **Objectives 28, 29, 30, 31 and 32 are fixture-validated only.** Their env-gated real-media counterparts have
   never run, because no real 360 clip / detector / speaker helper is configured in this environment.
   The suite reports **9 skips**: 8 environment-gated integrations
   (`realDetectorIntegration`, `realSpeakerCommandIntegration`, `realSourcePlaybackIntegration`,
@@ -92,7 +93,8 @@ the gate fails, work stops and the batch is re-authorised by the human.
 | Candidate | Readiness | Prerequisite | Why it is a candidate |
 |---|---|---|---|
 | **Real-media validation sweep for Objectives 28-30** | ready (blocked on media) | a real 360 clip + optional detector/speaker helpers | closes the only validation debt in the current capability set |
-| **Explicit multi-subject references (Objective 32)** | ready (approved) | Objective 31's N-way resolution — done | names the subjects precisely instead of by group phrase |
+| **Real-media validation sweep** (see §4) | ready once media exists | a real 360 clip + optional helpers | closes the only validation debt in the framing capability |
+| **Containment-preserving group-path smoothing** | candidate | measured jitter evidence from the sweep above | quality refinement; evidence-poor today |
 | **Creator review / revision UI** | ready | — | makes persisted decisions and revisions usable without new pipeline work |
 | **Containment-preserving pair smoothing** | candidate | measured jitter evidence from the validation sweep | quality refinement; weak evidence today (see §6) |
 | **Analysis -> Reasoning seam** | blocked | app-level analysis action, reasoning semantics, evidence granularity | the documented successor stage (Decision 039) |
@@ -110,6 +112,9 @@ the gate fails, work stops and the batch is re-authorised by the human.
 - **Group sizes above ten, and dynamic group membership** — the vocabulary stops at ten named
   subjects and a group's membership is fixed for the instruction; "whoever is in frame at the time"
   would need its own semantics and perception evidence.
+- **Explicit references beyond a phrase** — an explicit set resolves through the selector's existing
+  vocabulary (creator aliases, ordinals, left/right, track ids, unique labels); a name matching several
+  tracks is ambiguous and refused, and a reference longer than a phrase is not treated as a set.
 - **Pair/group-path smoothing** — needs evidence. The pair aim is an average of two detections and the
   lens is constant, so the jitter profile is milder than the case that motivated Objective 26, and
   the pair path has never run on real footage. Measured 40°->4° step reduction justified Objective

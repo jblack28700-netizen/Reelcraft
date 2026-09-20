@@ -528,7 +528,11 @@ ReframeCommandResult ReframeCommandRunner::prepare(
                                  : ids.join(QStringLiteral(", "));
         };
         const int groupCount = result.intent.moves.first().subjectCount;
-        const auto describe = [&pluralGroup, groupCount]() {
+        const auto describe = [&pluralGroup, &result, groupCount]() {
+            if (pluralGroup == ReframeSubjectGroup::ExplicitSet) {
+                return QStringLiteral("the %1 explicitly named subject(s)")
+                    .arg(result.intent.moves.first().subjectReferences.size());
+            }
             return pluralGroup == ReframeSubjectGroup::CreatorAndOthers
                 ? QStringLiteral("the creator and %1 other visible people")
                       .arg(qMax(0, groupCount - 1))
@@ -581,6 +585,88 @@ ReframeCommandResult ReframeCommandRunner::prepare(
                     .arg(me.targetId, me.method));
             // The creator leads the group; the others keep canonical order.
             group = creatorTrack + group;
+        } else if (pluralGroup == ReframeSubjectGroup::ExplicitSet) {
+            // Objective 32: an explicitly named set ("keep me and person 2 in
+            // frame"). Every reference must resolve to a track the command can
+            // see; one that does not is reported and the command fails, because
+            // substituting or dropping a named subject would answer a different
+            // question than the one that was asked.
+            const QStringList references =
+                result.intent.moves.first().subjectReferences;
+            const TargetSelectionResult me =
+                TargetSelector::select(QStringLiteral("me"), tracks, registry);
+            QStringList meIds;
+            if (me.resolved) {
+                meIds.append(me.targetId);
+            }
+            QList<TargetTrack> named;
+            for (const QString &reference : references) {
+                const TargetSelectionResult selection =
+                    TargetSelector::select(reference, tracks, registry);
+                if (!selection.resolved) {
+                    result.error = QStringLiteral(
+                        "Multi-subject framing could not resolve '%1': %2")
+                                       .arg(reference, selection.error);
+                    return result;
+                }
+                const TargetTrack *track = nullptr;
+                for (const TargetTrack &candidate : active) {
+                    if (candidate.id() == selection.targetId) {
+                        track = &candidate;
+                        break;
+                    }
+                }
+                if (!track) {
+                    result.error = QStringLiteral(
+                        "Multi-subject framing resolved '%1' to an inactive "
+                        "target (%2).")
+                                       .arg(reference, selection.targetId);
+                    return result;
+                }
+                named.append(*track);
+                result.notes.append(QStringLiteral("Resolved '%1' to %2 (%3).")
+                                        .arg(reference, selection.targetId,
+                                             selection.method));
+            }
+
+            // Two references to the same subject are ONE subject: a duplicated
+            // name must never become a duplicated track.
+            QStringList distinctIds;
+            for (const TargetTrack &track : named) {
+                if (!distinctIds.contains(track.id())) {
+                    distinctIds.append(track.id());
+                }
+            }
+            if (distinctIds.size() < 2) {
+                result.error = QStringLiteral(
+                    "Multi-subject framing needs at least two distinct "
+                    "subjects; the explicit references resolved to %1 (%2).")
+                                   .arg(distinctIds.size())
+                                   .arg(distinctIds.isEmpty()
+                                            ? QStringLiteral("none")
+                                            : distinctIds.join(QStringLiteral(", ")));
+                return result;
+            }
+
+            // Canonical order decides the set, never the written order; the
+            // creator leads when it is part of the set, as in "…of us".
+            QList<TargetTrack> creatorTrack;
+            for (const TargetTrack &track : ordered) {
+                if (!distinctIds.contains(track.id())) {
+                    continue;
+                }
+                if (meIds.contains(track.id())) {
+                    creatorTrack.append(track);
+                } else {
+                    group.append(track);
+                }
+            }
+            group = creatorTrack + group;
+            if (!creatorTrack.isEmpty()) {
+                result.notes.append(
+                    QStringLiteral("Creator identity resolved to %1 (%2).")
+                        .arg(creatorTrack.first().id(), me.method));
+            }
         } else {
             // "both people" / "the three people" / "everyone": visible people
             // only, in canonical order. A named count must be satisfied EXACTLY;

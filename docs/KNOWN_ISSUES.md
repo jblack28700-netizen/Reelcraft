@@ -741,3 +741,43 @@ containment-preserving smoothing for group paths.
 rule was a span-based approximation that could under-frame a footprint occupying yaw and pitch at
 once. The rule is now computed exactly in the renderer's basis and refuses what it cannot contain.*
 
+
+# Issue — Explicit subject references are bounded by the existing reference vocabulary (2026-09-18)
+
+### Status
+
+Open — intentional boundary, not a defect (Decision 053).
+
+### Description
+
+Objective 32 lets a command name its subjects. Three limits are deliberate:
+
+- **The vocabulary is the resolver's existing one**: creator aliases ("me", "the person I selected"),
+  ordinals ("person 2", "the second person"), left/right, exact track ids, and labels that are unique
+  in the shot. A name is never inferred from context, and a name shared by several tracks is ambiguous
+  and refused with its candidates.
+- **Only a framing construction is split on "and".** A fragment made only of instruction or filler
+  words (for example the "From" left by a temporal phrase) is not a subject, and a clause that does not
+  yield two references falls back to the existing single-subject path rather than being reinterpreted.
+- **Duplicates are one subject.** Two references to the same person produce one framed subject, and a
+  set that reduces to a single distinct subject is refused instead of being rendered as a duplicate or
+  silently degrading to a centered camera.
+
+### Impact
+
+A creator can name a group precisely and is told exactly which reference failed. They cannot use an
+open-vocabulary name (nothing matches an unknown person label), cannot name the same person twice to
+mean two people, and cannot write a long descriptive clause as a reference. Groups larger than ten
+(from Objective 31) and dynamic membership remain out of scope. Real-footage behaviour is still
+unvalidated (see the validation debt in `NEXT_TASK.md` §4).
+
+### Planned Resolution
+
+None required for correctness. A richer reference vocabulary would need a deliberate identity decision
+(roles, names, or open-vocabulary matching), not a parser extension.
+
+---
+
+*Related, resolved by Objective 32: a multi-subject command could only be expressed with group
+phrases, so "me and person 2" was not understood at all.*
+

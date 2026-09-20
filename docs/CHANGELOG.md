@@ -880,3 +880,16 @@ Date: 2026-09-18
 - Single-person and two-person instructions behave exactly as they did, and saved edits still replay to precisely the same frames.
 - 5 new tests (plus strengthened containment checks in the existing two-subject tests); targeted regression 101 passed / 0 failed / 0 skipped and the full model-free suite 483 passed / 0 failed / 9 skipped. Decision 052 records the design.
 
+
+## v0.2.69 — You can name who should be in frame
+
+Date: 2026-09-18
+
+- Reframing commands can now name their subjects instead of only using group phrases: "keep me and person 2 in frame", "keep person 1 and person 3 in frame" and "frame the presenter and the guest" all work, alongside the existing "keep the three of us in frame" and "keep everyone in frame".
+- Every name must be one the system can actually identify — yourself, a numbered person, someone on the left or right, or a person whose role is unique in the shot. A name it cannot resolve is reported back by name; it is never quietly swapped for somebody else.
+- Naming the same person twice is treated as one person, not as two, and a request that ends up naming only one person is refused rather than rendered as something else.
+- Which people end up framed never depends on the order the command was written in or the order a detector reported them, and repeating a command gives the identical result.
+- Framing a group this way uses exactly the same camera mathematics as the existing group phrases, so a group that cannot fit the shot is refused with the reason rather than clipped or trimmed.
+- Single-person instructions, group phrases and saved edits behave exactly as before, and replays still produce precisely the same frames.
+- 4 new tests; targeted regression 105 passed / 0 failed / 0 skipped and the full model-free suite 487 passed / 0 failed / 9 skipped. Decision 053 records the design.
+
