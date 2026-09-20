@@ -58,7 +58,7 @@ file authorises starting one automatically.
 | **Group framing (2-10 subjects)** | done | `TargetTrackPlanner::{planTracks,enclosingFramingDeg}` (exact basis), `ReframeSubjectGroup`/`subjectCount`, runner group resolution | two or more resolved tracks | **fixture only** | `5592118`, this checkpoint (Obj 31) |
 | Persistent media analysis (artifact + runner) | partial | `app/analysis/{MediaAnalysis,MediaAnalysisRunner}.*` | detector / ffprobe | fixture; **no consumer** | `90f671c` |
 | **Creator review (inspect the plan, accept or reject)** | done | `app/application/ReframePlanReview.*`, `Application` review API + preparer seam, `MainWindow` review panel | — | **fixture only** | this checkpoint (Obj 34) |
-| **Creator revision v1 (revise a rendered edit) + provenance readout** | done | `Application::{revisionOutputPath,reviseReframeOutput,revisionsOf}` over the Objective 17 mechanism, `MainWindow` revision/provenance controls | — | **fixture only** | this checkpoint (Obj 35) |
+| **Creator revision v1 (revise a rendered edit) + provenance/supersession readout** | done | `Application::{revisionOutputPath,reviseReframeOutput,revisionsOf,recordHoldingOutputPath}` over the Objective 17 mechanism, `MainWindow` revision/provenance controls | — | **fixture only** | `6cf1d1e` (Obj 35), this checkpoint (Obj 36) |
 | Pre-render revision (revise a reviewed-but-unrendered plan) | blocked | `ReframePlanReview` + review API exist | a semantic decision: an unrendered plan has no persisted parent decision to point at (parentless `creator-revision` origin / plan-level parentage) | — | — |
 | Structured / operation-level plan editing | deferred | — | a decision authorising a plan-level (post-intent) editing path that bypasses the intent→plan contract checker | — | — |
 | In-app audio playback | missing | — | audio-output subsystem decision (Decision 036) | — | — |
@@ -80,6 +80,10 @@ file authorises starting one automatically.
   `realReframePlaybackIntegration`, `realTemporalEditIntegration`, `realCompoundCommandIntegration`,
   `realUserCommandIntegration`, `realApplicationCommandIntegration`), the 5 Objective 28-32 harness
   tests below, and the child-only `replayFreshProcessChild` slot.
+- **Objective 36 adds no validation debt either.** It tightens the revision surface's refusals (a
+  revision never targets the output path of a render record the application holds) and presents derived
+  supersession; both are covered by model-free tests over injected executors, and neither adds perception
+  or rendering behaviour.
 - **Objective 35 adds no validation debt either.** Creator revision composes the already-validated
   Objective 17 mechanism (immutable decisions, lineage, replay) with the existing command pipeline, and
   the provenance readout only presents persisted facts; its validation level is fixture by design and it

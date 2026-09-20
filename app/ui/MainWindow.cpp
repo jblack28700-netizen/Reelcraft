@@ -574,7 +574,8 @@ void MainWindow::showReframeReview(const ReframePlanReview &review)
                  review.summaryLines().join(QStringLiteral("\n"))));
 }
 
-void MainWindow::showDecisionProvenance(const DecisionProvenance &view, int index)
+void MainWindow::showDecisionProvenance(const DecisionProvenance &view, int index,
+                                       const QList<int> &revisionsOf)
 {
     if (!m_provenanceLabel) {
         return;
@@ -606,6 +607,19 @@ void MainWindow::showDecisionProvenance(const DecisionProvenance &view, int inde
                           view.sourceDetail.isEmpty()
                               ? QString()
                               : QStringLiteral(" — %1").arg(view.sourceDetail)));
+    if (revisionsOf.isEmpty()) {
+        lines.append(QStringLiteral("  superseded: no later revision"));
+    } else if (revisionsOf.size() == 1) {
+        lines.append(QStringLiteral("  superseded: revised by record %1")
+                         .arg(revisionsOf.first()));
+    } else {
+        QStringList revisionList;
+        for (int revisionIndex : revisionsOf) {
+            revisionList.append(QString::number(revisionIndex));
+        }
+        lines.append(QStringLiteral("  superseded: revised by records %1")
+                         .arg(revisionList.join(QStringLiteral(", "))));
+    }
     lines.append(QStringLiteral("  plan: %1 keyframe(s), %2 retained segment(s), "
                                 "%3..%4 ms, %5x%6 at %7 fps, %8 frame(s)")
                      .arg(view.keyframeCount)

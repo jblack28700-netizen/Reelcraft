@@ -1327,6 +1327,10 @@ private slots:
     void applicationRevisionRefusesDriftedOrMissingSource();
     void applicationRevisionLineageSurvivesReopen();
     void mainWindowRevisionAndProvenanceSurface();
+    // Objective 36: revision safety (never target a held render) and visible supersession.
+    void applicationRevisionRefusesAnotherRecordsOutputPath();
+    void applicationRevisionStillAllowsAFreshExplicitPath();
+    void mainWindowProvenanceShowsDerivedSupersession();
 };
 
 void ProjectTest::initTestCase()
@@ -22475,20 +22479,143 @@ void ProjectTest::mainWindowRevisionAndProvenanceSurface()
     // nothing to explain.
     const DecisionProvenance available = app.decisionProvenance(0);
     QVERIFY(available.available);
-    window.showDecisionProvenance(available, 0);
+    window.showDecisionProvenance(available, 0, app.revisionsOf(0));
     QVERIFY(provenanceLabel->text().contains(QStringLiteral("Render 0")));
     QVERIFY(provenanceLabel->text().contains(QStringLiteral("origin: command")));
     QVERIFY(provenanceLabel->text().contains(QStringLiteral("follow person 1")));
     QVERIFY(provenanceLabel->text().contains(QStringLiteral("revises: nothing")));
     QVERIFY(provenanceLabel->text().contains(QStringLiteral("plan: 1 keyframe(s)")));
+    QVERIFY(provenanceLabel->text().contains(QStringLiteral("superseded: no later revision")));
     QVERIFY(provenanceLabel->text().contains(QStringLiteral("320x180")));
 
     DecisionProvenance unavailable;
     unavailable.error = QStringLiteral("This render record has no edit decision.");
-    window.showDecisionProvenance(unavailable, 3);
+    window.showDecisionProvenance(unavailable, 3, QList<int>());
     QVERIFY(provenanceLabel->text().contains(QStringLiteral("Render 3")));
     QVERIFY(provenanceLabel->text().contains(QStringLiteral("no decision to explain")));
     QVERIFY(provenanceLabel->text().contains(QStringLiteral("no edit decision")));
+}
+
+void ProjectTest::applicationRevisionRefusesAnotherRecordsOutputPath()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    // The content of each render is its own instruction, so "did this file get
+    // overwritten?" is answerable by reading it.
+    app.setReframeCommandExecutor(
+        [](const ReframeCommandRequest &request, TargetDetector *,
+           ReframeFrameProvider *) {
+            ReframeCommandResult result;
+            result.ok = true;
+            result.frameCount = 2;
+            result.plan.setSourceMediaId(request.sourceMediaId);
+            result.plan.setSourceRange(request.defaultRange);
+            result.plan.setOutput(ReframePlan::OutputSpec{ 320, 180, 2.0 });
+            CameraKeyframe keyframe;
+            keyframe.timeMs = request.defaultRange.startMs;
+            keyframe.yawDeg = 5.0;
+            keyframe.fieldOfViewDeg = 90.0;
+            result.plan.setKeyframes({ keyframe });
+            result.outputPath = request.outputPath;
+            QFile file(request.outputPath);
+            if (file.open(QIODevice::WriteOnly)) {
+                file.write(request.instruction.toUtf8());
+                file.close();
+            }
+            return result;
+        });
+
+    const QString firstOutput = directory.filePath(QStringLiteral("first.mp4"));
+    const QString secondOutput = directory.filePath(QStringLiteral("second.mp4"));
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("follow person 1"), 0, 4000,
+                                    firstOutput));
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 4000, secondOutput));
+    QCOMPARE(app.reframeOutputs().size(), 2);
+    QCOMPARE(fileBytes(firstOutput), QByteArray("follow person 1"));
+    QCOMPARE(fileBytes(secondOutput), QByteArray("pan right"));
+
+    // A revision of record 0 must not be able to claim record 1's render: the
+    // file belongs to a decision the creator already made and can replay.
+    const RevisionResult clash =
+        app.reviseEditDecision(0, QStringLiteral("zoom in"), secondOutput);
+    QVERIFY2(!clash.ok, "a revision targeted another held record's output path");
+    QVERIFY(clash.error.contains(QStringLiteral("record 1")));
+    QCOMPARE(clash.newRecordIndex, -1);
+
+    // Nothing was rendered over it and nothing was appended.
+    QCOMPARE(fileBytes(secondOutput), QByteArray("pan right"));
+    QCOMPARE(fileBytes(firstOutput), QByteArray("follow person 1"));
+    QCOMPARE(app.reframeOutputs().size(), 2);
+    QCOMPARE(app.reframeOutputs().at(1).outputPath,
+             QFileInfo(secondOutput).absoluteFilePath());
+}
+
+void ProjectTest::applicationRevisionStillAllowsAFreshExplicitPath()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandExecutor(revisionExecutor(nullptr, /*writeOutput=*/true));
+
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("follow person 1"), 0, 4000,
+                                    directory.filePath(QStringLiteral("clip_reframe.mp4"))));
+
+    // The explicit-path form keeps working for a genuinely fresh destination: the
+    // tightening is about HELD records' renders, not about the API's shape.
+    const QString explicitPath = directory.filePath(QStringLiteral("chosen_by_creator.mp4"));
+    const RevisionResult revision =
+        app.reviseEditDecision(0, QStringLiteral("zoom in"), explicitPath);
+    QVERIFY2(revision.ok, qPrintable(revision.error));
+    QCOMPARE(app.reframeOutputs().size(), 2);
+    QCOMPARE(app.reframeOutputs().at(1).outputPath,
+             QFileInfo(explicitPath).absoluteFilePath());
+    QCOMPARE(app.reframeOutputs().at(1).editDecision().origin(),
+             EditDecision::originCreatorRevision());
+    QCOMPARE(fileBytes(explicitPath), QByteArray("rendered-bytes"));
+
+    // And the refusal for the record it revises keeps its own, more specific
+    // message rather than being folded into the new one.
+    const RevisionResult overwriteParent = app.reviseEditDecision(
+        0, QStringLiteral("zoom in"), app.reframeOutputs().at(0).outputPath);
+    QVERIFY(!overwriteParent.ok);
+    QVERIFY(overwriteParent.error.contains(QStringLiteral("must not overwrite the record it revises")));
+}
+
+void ProjectTest::mainWindowProvenanceShowsDerivedSupersession()
+{
+    MainWindow window;
+    auto *provenanceLabel =
+        window.findChild<QLabel *>(QStringLiteral("decisionProvenanceLabel"));
+    QVERIFY(provenanceLabel);
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandExecutor(revisionExecutor());
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("follow person 1"), 0, 4000,
+                                    directory.filePath(QStringLiteral("clip_reframe.mp4"))));
+    QVERIFY(app.reviseReframeOutput(0, QStringLiteral("zoom in")).ok);
+
+    // Supersession is derived at read time (Decision 055) and is now VISIBLE: the
+    // creator can see that a render has been revised, and by which record.
+    const DecisionProvenance rootView = app.decisionProvenance(0);
+    window.showDecisionProvenance(rootView, 0, app.revisionsOf(0));
+    QVERIFY(provenanceLabel->text().contains(QStringLiteral("superseded: revised by record 1")));
+
+    const DecisionProvenance childView = app.decisionProvenance(1);
+    window.showDecisionProvenance(childView, 1, app.revisionsOf(1));
+    QVERIFY(provenanceLabel->text().contains(QStringLiteral("superseded: no later revision")));
+    QVERIFY(provenanceLabel->text().contains(QStringLiteral("revises: ")));
+
+    // A record with several revisions names all of them.
+    QVERIFY(app.reviseReframeOutput(0, QStringLiteral("zoom out")).ok);
+    window.showDecisionProvenance(app.decisionProvenance(0), 0, app.revisionsOf(0));
+    QVERIFY(provenanceLabel->text().contains(
+        QStringLiteral("superseded: revised by records 1, 2")));
 }
 
 QTEST_MAIN(ProjectTest)

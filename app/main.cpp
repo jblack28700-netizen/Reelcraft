@@ -82,7 +82,8 @@ int main(int argc, char *argv[])
     QObject::connect(&window, &MainWindow::describeDecisionRequested, &application,
                      [&application, &window](int index) {
                          window.showDecisionProvenance(
-                             application.decisionProvenance(index), index);
+                             application.decisionProvenance(index), index,
+                             application.revisionsOf(index));
                      });
     QObject::connect(&window, &MainWindow::selectCreatorTargetRequested,
                      &application, &Application::selectCreatorTargetFromViewport);

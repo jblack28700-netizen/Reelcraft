@@ -917,5 +917,16 @@ Date: 2026-09-20
 - Nothing else changed: the "Run 360 Command" and "Review Plan" workflows behave exactly as before, replays still reproduce exactly the same frames, and saved projects are unchanged.
 - 8 new tests; targeted regression 67 passed / 0 failed / 0 skipped and the full model-free suite 508 passed / 0 failed / 14 skipped. Decision 055 records the revision semantics.
 
+## v0.2.72 — A revision can no longer overwrite another rendered result
+
+Date: 2026-09-20
+
+- Revising an edit is now guaranteed to **only ever add**: the new render is written to a name no earlier result uses, and a revision that would have written over a previously rendered result is refused with a message saying which result it would have replaced.
+- This closes a real path to losing work. Previously the protection covered only the render being revised, so a revision aimed at another result's output could replace that file while the project still recorded it as a different edit — the earlier result would no longer have matched what it claimed to be.
+- The provenance readout now also shows **supersession**: whether a result has been revised, and by which results. This is worked out from the recorded decisions themselves, so nothing extra is stored and old projects are unaffected.
+- Everything else behaves exactly as before: the general "Run 360 Command" action, the review-and-accept workflow, replays, and saved projects.
+- 3 new tests (including the reproduction of the overwrite); targeted regression 59 passed / 0 failed / 0 skipped and the full model-free suite 511 passed / 0 failed / 14 skipped. Decision 056 records the tightened rule.
+
+
 
 

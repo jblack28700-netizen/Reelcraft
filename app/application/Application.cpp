@@ -1421,6 +1421,20 @@ RevisionResult Application::reviseEditDecision(int index,
                            .arg(parent.outputPath);
         return result;
     }
+    // Decision 056: no revision may claim the destination of ANY render record the
+    // application holds. Refusing only the parent's path let a revision overwrite
+    // another recorded render, leaving two records claiming one file -- one of
+    // which no longer contained what its own decision says it contains.
+    const int holder =
+        recordHoldingOutputPath(QFileInfo(outputPath.trimmed()).absoluteFilePath());
+    if (holder >= 0 && holder != index) {
+        result.error = QStringLiteral(
+                           "The revised render must not overwrite another recorded "
+                           "render: record %1 already writes to %2")
+                           .arg(holder)
+                           .arg(m_reframeOutputs.at(holder).outputPath);
+        return result;
+    }
 
     // A revision is built on the source the parent was made against; if that
     // source has drifted, the revision is refused rather than silently made
@@ -1518,6 +1532,22 @@ DecisionProvenance Application::decisionProvenance(int index) const
 // no longer matches are all reported by `reviseEditDecision()` with no render
 // attempted and no record appended.
 
+int Application::recordHoldingOutputPath(const QString &path) const
+{
+    const QString absolute = QFileInfo(path).absoluteFilePath();
+    if (absolute.isEmpty()) {
+        return -1;
+    }
+    for (int i = 0; i < m_reframeOutputs.size(); ++i) {
+        const QString claimed = m_reframeOutputs.at(i).outputPath;
+        if (!claimed.isEmpty()
+            && QFileInfo(claimed).absoluteFilePath() == absolute) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 QString Application::revisionOutputPath(int index) const
 {
     if (index < 0 || index >= m_reframeOutputs.size()) {
@@ -1557,20 +1587,11 @@ QString Application::revisionOutputPath(int index) const
     // back the very record being revised -- which the revision path correctly
     // refuses, stalling every later revision of that record. See the
     // implementation note appended to Decision 055.
-    const auto claimedByHeldRecord = [this](const QString &path) {
-        const QString absolute = QFileInfo(path).absoluteFilePath();
-        for (const ReframeCommandOutcome &record : m_reframeOutputs) {
-            if (!record.outputPath.isEmpty()
-                && QFileInfo(record.outputPath).absoluteFilePath() == absolute) {
-                return true;
-            }
-        }
-        return false;
-    };
     for (int n = 1; n <= 100000; ++n) {
         const QString candidate = directory.filePath(
             QStringLiteral("%1_reframe_rev%2.mp4").arg(base).arg(n));
-        if (!QFileInfo::exists(candidate) && !claimedByHeldRecord(candidate)) {
+        if (!QFileInfo::exists(candidate)
+            && recordHoldingOutputPath(candidate) < 0) {
             return candidate;
         }
     }

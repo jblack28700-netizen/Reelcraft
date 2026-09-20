@@ -587,6 +587,13 @@ private:
     // there was one. Never renders and never touches media.
     void clearPendingReview();
 
+    // Objective 36: the index of the record that already writes to the given
+    // output path, or -1 when no held record claims it. This is the single
+    // definition of "a path a render record owns", used both to derive a fresh
+    // revision destination and to refuse a revision that would overwrite another
+    // record's render (Decision 056).
+    int recordHoldingOutputPath(const QString &path) const;
+
     QJsonArray mediaJson() const;
     void restoreMediaFromJson(const QJsonArray &media);
     // Restores the active id from a persisted value after the media list has

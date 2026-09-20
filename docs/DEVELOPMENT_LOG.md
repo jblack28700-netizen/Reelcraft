@@ -2780,3 +2780,61 @@ original semantics text was left as recorded, and the case that required the ref
 
 - Decision 055 recorded (four revision semantics) with an implementation note recording the refinement
   the focused tests forced. Decisions 001-054 preserved.
+
+
+## 2026-09-20 — 360 Reframing Objective 36: Revision Safety and Visible Supersession
+
+### Objective
+
+Two narrow, evidence-driven changes to the Objective 35 surface: close a reachable data-loss path in the
+revision API, and make the derived supersession that Decision 055 defined actually visible to the
+creator.
+
+### The defect, reproduced before it was fixed
+
+`Application::reviseEditDecision` refused only **the parent record's** output path. Revising record 0
+while naming **record 1's** output path was therefore accepted: the revision rendered over record 1's
+file and the project ended up holding two records claiming the same path, one of which no longer
+contained what its own decision said it contains — a render the creator could previously replay,
+silently destroyed.
+
+Reproduced first, with distinguishable file contents (each injected render writes its own instruction):
+`applicationRevisionRefusesAnotherRecordsOutputPath` failed with *"a revision targeted another held
+record's output path"*, and the second record's file content had changed after the revision. Only then
+was the fix written; the reproduction is kept as the regression.
+
+### What was built
+
+- **One definition of "a path a render record owns"**: the private helper
+  `Application::recordHoldingOutputPath(path)` (index of the held record claiming that path, or -1).
+- **The revision path refuses any path a held record claims** (Decision 056), with its own message naming
+  the owning record, distinct from the parent-specific refusal whose wording is unchanged. The check is
+  on **records, not the filesystem**: a path a record claims is never a valid revision target even if
+  that record's file is currently missing, because the record is a historical fact and replay must be
+  able to reproduce it.
+- **`revisionOutputPath` now shares that helper** instead of carrying its own inline claim check, so the
+  derivation and the refusal cannot drift apart.
+- **Derived supersession is visible**: the provenance readout states whether a record has been revised and
+  by which held records ("superseded: revised by record 1" / "…records 1, 2" / "no later revision"),
+  using `revisionsOf()`. This is presentation of Decision 055 point (3) — nothing is stored.
+
+### Boundary notes
+
+- Deliberately unchanged: the general command path still accepts any output path (a separate question
+  Decision 056 explicitly does not answer), the derived revision destination, `creator-revision`
+  attribution, replay, hashing, the strict loader, the Objective 34 review path, and every persisted
+  artifact. No schema, dependency, provider or plan type changed; no real-media claim.
+- Decision 056 supersedes exactly one clause of Decision 055 (that the explicit-path form's behaviour is
+  unchanged) and preserves the rest verbatim.
+
+### Verification
+
+- 3 new tests (the reproduction/regression, the API-shape test proving a fresh explicit path still works
+  and the parent-specific refusal keeps its own message, and the readout's supersession states).
+- Targeted regression across revision, decisions, replay, records, the command path, the review path and
+  the touched UI; official `scripts/build_and_test.sh`. Numbers are recorded in `CURRENT_STATE.md`.
+
+### Decisions
+
+- Decision 056 recorded (and one clause of Decision 055 superseded, as stated there). Decisions 001-055
+  otherwise preserved.

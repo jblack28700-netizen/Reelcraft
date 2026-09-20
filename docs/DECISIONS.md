@@ -2316,6 +2316,74 @@ and records.
 
 ---
 
-*Decisions 001-054 are preserved verbatim; this decision adds to them and supersedes none of them.*
+---
+
+# Decision 056 — A Revision Never Targets the Output Path of a Render Record the Application Holds
+
+**Status:** Accepted (2026-09-20, 360 Reframing Objective 36)
+
+## Context
+
+Decision 055 point (2) fixed the destination semantics of the *derived* revision path and explicitly
+left the explicit-path form alone: "the explicit-path form `reviseEditDecision(index, instruction,
+path)` keeps its existing behaviour". Objective 36 tested what that behaviour actually permits, and
+found a reachable data-loss path: `reviseEditDecision` refused only **the parent record's** output path
+(`Application.cpp`, the "must not overwrite the record it revises" check), so a caller could revise
+record 0 and name **record 1's** output path. The revision then rendered over record 1's file, and the
+project ended up holding **two records claiming the same output path**, one of which no longer contained
+what its own decision says it contains — silently destroying a render the creator could previously
+replay.
+
+This was reproduced before any change was made: a focused test rendered two distinguishable records and
+then revised the first onto the second's path. The revision succeeded, the second record's file content
+changed, and a third record was appended claiming that same path.
+
+## Decision
+
+- **A revision refuses any output path that is already claimed by a render record the application
+  holds**, not only the path of the record being revised. The refusal is a distinct message naming the
+  record that owns the path ("must not overwrite another recorded render: record N already writes to
+  …"), so it remains distinguishable from the parent-specific refusal, which keeps its existing wording.
+- **This supersedes Decision 055's statement that the explicit-path revision form's behaviour is
+  unchanged — in this one respect only.** Everything else about 055 stands: the derived path, the
+  never-overwrite rule for the surface, derived supersession, and `creator-revision` attribution with
+  the existing parent hash are unchanged.
+- **The check is on RECORDS, not on the filesystem.** A path holding an unrelated file that no record
+  claims is still the caller's business (the general command policy, deliberately unchanged); a path
+  that a *record* claims is never a valid revision target even if that record's file is currently
+  missing, because the record is a historical fact about a render and replay must be able to reproduce
+  it.
+- **The general command path is deliberately unchanged.** `runReframeCommandTo` still accepts any path,
+  including one a record claims. This decision tightens the *revision* surface, whose stated purpose is
+  to add to the history rather than replace it; widening it to every command is a separate question that
+  this decision does not answer.
+- **Derived supersession becomes visible, not just computed.** The provenance readout now states whether
+  a record has been revised and by which held records. This is presentation of Decision 055 point (3):
+  nothing is stored, and no artifact gains a status field.
+
+## Consequences
+
+- A revision can no longer destroy another render, whether the caller uses the derived destination or
+  names one explicitly.
+- The refusal set of the explicit-path form grows by one case. Callers that name a genuinely fresh path
+  are unaffected, which is verified by an existing Objective 17 test and by a new one.
+- The revision surface's guarantee is now stated positively: **a revision only ever adds a record and
+  writes a file no record claims.**
+- No schema, artifact, hash, loader, replay, renderer or command-path behaviour changes; no new
+  dependency; the Objective 34 review path and Objective 35's derived path are untouched.
+
+## Verification
+
+- The reproduction is kept as a regression: `applicationRevisionRefusesAnotherRecordsOutputPath`
+  asserts the refusal, that it names the owning record, that the other record's file bytes are
+  unchanged, and that no record was appended.
+- `applicationRevisionStillAllowsAFreshExplicitPath` pins the API's shape (a fresh explicit path still
+  works, and the parent-specific refusal keeps its own message).
+- `mainWindowProvenanceShowsDerivedSupersession` pins the readout: a revised record names the records
+  that revise it, a leaf record says it has no later revision, and a doubly-revised record lists both.
+
+---
+
+*Decisions 001-055 are preserved verbatim; this decision adds to them and supersedes exactly one clause of Decision 055, as stated above.*
 
 

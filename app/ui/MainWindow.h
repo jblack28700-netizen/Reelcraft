@@ -83,7 +83,11 @@ public slots:
     // Presents the read-only "why" of the decision behind a render record
     // (Objective 35): how it was formed, what it revises, whether that parent is
     // present, the source status and the plan summary. Display only.
-    void showDecisionProvenance(const DecisionProvenance &view, int index);
+    //
+    // revisionsOf carries the DERIVED supersession (Objective 36): the indices of
+    // the held records that revise this one. Nothing is stored to produce it.
+    void showDecisionProvenance(const DecisionProvenance &view, int index,
+                                const QList<int> &revisionsOf);
 
     // Updates the rendered-result playback state readout (Objective 13).
     void showReframePlaybackState(bool playing);
