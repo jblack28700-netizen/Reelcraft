@@ -984,6 +984,16 @@ Date: 2026-09-20
 - Uploaded footage would not become project media merely because the bytes arrived. It must be staged and accepted first, and the original file is never modified — the same rule that already applies to every other way footage enters Reelcraft.
 - No feature, behaviour, project file or saved result changed, and no code was changed at all — so the test baseline is carried forward unchanged from the previous release (530 passed / 0 failed / 14 skipped) rather than re-measured. Decision 059 records the architecture, and it deliberately leaves the open questions (how Reelcraft is reached, sign-in, where uploaded footage is stored) for a later decision.
 
+## v0.2.79 — Reelcraft can be driven from a browser (Slice 1)
+
+Date: 2026-09-20
+
+- There is now a **browser page** for the core editing flow, served by a new headless program, `reelcraft_server`. Start it with a clip — `./reelcraft_server --media <your-clip.mp4>` — and open the address it prints. Type an instruction such as "pan right", read the plan Reelcraft understood, and either accept it or reject it. Accepting renders exactly the plan you reviewed, and the finished MP4 is offered for download and plays in the page.
+- **Nothing about editing changed.** The page is a window onto the same engine the desktop application uses: the same planner, the same deterministic renderer, the same plan review, the same render records and the same no-overwrite destination rules. Accepting renders precisely what the review showed, exactly as it does in the desktop application.
+- **Long operations never hold the page open.** Preparing a plan and rendering both run on a dedicated background worker; the page starts a job and then watches its state, so it stays responsive and a slow render cannot freeze it.
+- **This is deliberately a first slice, and it is not ready to expose.** It is local-only (it listens on `127.0.0.1` unless you explicitly ask for something else), has **no sign-in and no encryption**, serves one clip that you name on the command line (there is no upload yet), has no look-around 360 preview, and reports no progress while rendering. Do not put it on a public network.
+- The desktop application is unchanged and still builds and runs as before. 85 focused application tests pass (1 skipped, the real-footage one). Decision 059's addendum records the execution model.
+
 
 
 

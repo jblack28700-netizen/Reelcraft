@@ -149,12 +149,20 @@ renderer is byte-identical to the reviewed plan.
 - **A persisted render record this build cannot read is preserved but never repaired**: it is re-emitted
   verbatim and refused by every execution path, so a project can carry an entry that is visible but
   unusable (labelled as such in the render list).
-- **No browser or network surface exists.** A browser presentation/control layer is authorised as a
-  boundary (Decision 059), but nothing is implemented: there is no HTTP server or client, no upload path, no
-  media serving, no browser asset, and `QtNetwork` is not linked. The Qt desktop shell remains the only
-  presentation consumer. Decision 059 also records thirteen deliberately unresolved questions (exposure
-  boundary, authentication, project/session identity, media storage lifecycle and others) that gate any
-  implementation.
+- **A browser presentation/control layer exists at Slice 1 only, and is not safe for public exposure.**
+  `reelcraft_server` (headless `QGuiApplication`, `server/`) serves a static page and a JSON control API:
+  instruction → plan review → accept → rendered MP4 → download. It has **no authentication and no TLS**,
+  binds to `127.0.0.1` by default (overridable with an explicit `--host` for deliberate testing, which is an
+  operator decision and not a supported posture), is **single-user**, has **no media upload** (the server
+  pre-seeds one file from `--media`), has **no interactive 360 preview**, has no progress reporting or
+  cancellation, and keeps all job state in memory only. `DECISIONS.md` Decision 059 and its addendum record
+  the boundary and the execution model; a real network-exposure posture remains a separate future decision.
+- *(Historical — corrected 2026-09-20 by Slice 1; the text below described the state before it.)* *"A browser
+  presentation/control layer is authorised as a boundary (Decision 059), but nothing is implemented: there is
+  no HTTP server or client, no upload path, no media serving, no browser asset, and `QtNetwork` is not
+  linked. The Qt desktop shell remains the only presentation consumer. Decision 059 also records thirteen
+  deliberately unresolved questions (exposure boundary, authentication, project/session identity, media
+  storage lifecycle and others) that gate any implementation."*
 - Technology choices that remain open: final UI framework, final AI provider/model selection, local/cloud
   split, GPU acceleration, packaging/deployment (see `ARCHITECTURE.md` §20).
 

@@ -75,7 +75,8 @@ file authorises starting one automatically.
 | Automatic speaker / dialogue attribution | blocked | `SpeakerEvidenceProvider` seam ready | permissively licensed AV/diarization provider | — | — |
 | Analysis -> Reasoning seam | blocked | Decision 039 defines the shape | app-level analysis action + defined reasoning semantics + evidence granularity | — | — |
 | Phase 3 Obj 5 player lifecycle orchestration | deferred | `Player`/`FramePump` exist | 360 priority; own scoped objective | partial (fixture) | — |
-| **Browser presentation/control layer** (headless backend process + thin HTTP control boundary) | missing | Decision 059 authorises the boundary; nothing exists — no server, socket, upload, serving, event or browser-asset code, and `QtNetwork` is not linked | the Decision 059 open questions that gate its shape (exposure boundary, authentication, project/session identity, media storage lifecycle, dependency authorisation) | — | — |
+| **Browser presentation/control layer** (headless backend process + thin HTTP control boundary) | partial — Slice 1 done, remaining slices missing | Decision 059 + addendum; `server/`, `reelcraft_server.pro` | the Decision 059 open questions that gate the remaining slices (exposure boundary, authentication, project/session identity, media storage lifecycle) | fixture | this checkpoint |
+| **Browser presentation/control layer — Slice 1** (instruction → plan → accept → render → download) | done | `server/`, `reelcraft_server.pro` | Decision 059 + addendum | fixture | this checkpoint |
 | **Render-output publication atomicity + identity-based destination comparison** | missing | `ReframeRenderer::encodeVideo`/`encodeVideoWithAudio` write to the final output path; `Application::recordHoldingOutputPath` compares `absoluteFilePath()` against canonical media paths | a decision (the first changes observable render behaviour; the second tightens Decisions 056/057) | — | — |
 
 ---

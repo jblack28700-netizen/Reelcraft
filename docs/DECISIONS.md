@@ -2854,5 +2854,114 @@ Documentation-level, as this decision authorises no code. Verified during inspec
 
 *Decisions 001-058 are preserved verbatim; this decision adds to them and supersedes none of them.*
 
+---
+
+# Decision 059 (Addendum) — The Execution Model: A Worker Thread, a Serial Queue, and a Job Registry
+
+**Status:** Accepted (2026-09-20, Slice 1). This addendum **extends** Decision 059; it does not rewrite it.
+Decision 059 left the worker implementation, progress granularity, cancellation and event transport
+explicitly open. Slice 1 closes the part that had to be closed before any code could exist — how a
+blocking engine is invoked from an HTTP boundary — and still leaves progress reporting, cancellation and
+event transport open.
+
+## Context
+
+Decision 059 recorded two facts that together decide the execution model. Planning and rendering are
+**synchronous and blocking**: `Application::runReframeCommandInternal` returns only when the work is
+finished and continues into `ReframePipeline::renderPlan` and an FFmpeg subprocess. And `Application`
+holds **no synchronisation primitive at all**, so its "one caller at a time" property is a consequence of
+having one thread, not a mechanism. Section 7 of the decision therefore forbade holding an HTTP request
+open, and section 5 required a separate owner — but it did not say how the two threads meet.
+
+Slice 1 also confirmed that **preparation is long-running too**, not only rendering: with no detector
+configured, `prepareReframeCommand` is fast, but with one it runs a detector subprocess per covering view
+per resolved timestamp. Both must be off the HTTP thread.
+
+## Decision
+
+1. **A dedicated worker thread owns the single `Application` instance.** `Application` is constructed,
+   used and destroyed on that thread and on no other. This is the whole point of the addendum: the HTTP
+   layer runs on the main thread and **never touches `Application` directly** — not to call it, not to
+   query it, not to configure it.
+2. **The worker processes a serial command queue.** Work is submitted as signals and delivered by Qt's
+   queued connections, so the worker consumes one operation at a time in arrival order. Serialisation is
+   inherent in "one thread, one event queue" rather than enforced by a lock — which is the only form
+   available, because `Application` has nothing to lock with.
+3. **Cross-thread calls are `QMetaObject::invokeMethod` with `Qt::QueuedConnection`** (in Slice 1, through
+   signal/slot connections, which Qt queues automatically for cross-thread receivers), and **`Application`
+   signals are received on the main thread through queued connections**. The value types that cross the
+   boundary (`ReframeCommandOutcome`, `ReframePlanReview`, `QList<MediaItem>`) are `Q_DECLARE_METATYPE`d
+   and registered at startup, so delivery cannot fail at runtime.
+4. **A mutex-guarded job registry is the only shared state.** Every other fact lives on exactly one side of
+   the boundary. The registry is bookkeeping — id, state, instruction, review, result, error, output path —
+   and it never plans, resolves, renders, reviews or decides. Its contents are produced by `Application`
+   and handed to it.
+5. **Job states are exactly:** `queued`, `preparing`, `awaiting_review`, `rendering`, `done`, `failed`,
+   `rejected`. Transitions are made from the **return values** of the `Application` calls, not from the
+   signals they emit, so a signal can never be mistaken for a terminal state (`clearPendingReview()`
+   deliberately emits an invalid review at the start of a preparation, and that must not read as failure).
+6. **Job identity is an opaque, server-generated string** (a UUID), never derived from anything the browser
+   sent. **Output identity is the SHA-256 of the record's `outputPath`**, which Decision 057 makes unique:
+   no render writes to a path a held record owns, and derived destinations are fresh siblings.
+7. **A URL never becomes a path.** `GET /api/outputs/{id}` resolves `{id}` through the registry to the
+   output path `Application` recorded; the URL is never used as, or concatenated into, a filesystem path.
+8. **`libqt6websockets6` is accepted as a transitive dependency of `libqt6httpserver6`.** It is not used by
+   any Reelcraft code. Building against `libQt6HttpServer` additionally required `qt6-websockets-dev`,
+   because `qabstracthttpserver.h` includes `<QtWebSockets/qwebsocket.h>` while `qt6-httpserver-dev`
+   declares no such dependency — an Ubuntu packaging gap, recorded here because it is not obvious and it
+   blocked the build until it was found.
+9. **QHttpServer 6.4.2's Tech-Preview status is accepted.** API usage is deliberately limited to
+   **route, listen, request and response**. No WebSocket upgrade API is used, no router internals, no
+   `afterRequest` chaining, and nothing that depends on a later Qt point release.
+10. **Forbidden reach-past surfaces**, because using any of them from a request would cross the line
+    Decision 059 drew:
+    - **Blocking `Application` members must never be called from an HTTP handler thread**:
+      `runReframeCommand`, `runReframeCommandTo`, `prepareReframeCommand`, `acceptReframeReview`,
+      `replayEditDecision`, `reviseReframeOutput`, `widenRenderedLens`, `previewReframeOutput`,
+      `previewActiveMediaFrame`, `previewActiveMediaFrameAt`. All are invoked on the worker thread only.
+    - **No `Application` setter is ever called in response to a browser request.** `setTargetDetector`,
+      `setSpeakerEvidenceProvider`, `setCommandFrameProvider`, `setSpeakerBindings`, `setPlaybackClock`,
+      `setPlaybackPacing`, `setReframeCommandExecutor` and every other setter are **server-startup
+      configuration** only.
+    - **`viewportState()` is never accessed by the server.** It is GUI-session camera state.
+    - **No record output path is served except through a registry-resolved id.**
+    - The server never plans, resolves, decides, renders or edits. It validates a request, records
+      bookkeeping, and asks the worker to run an existing `Application` operation.
+11. **Slice 1's security posture is accepted and is deliberately minimal**: no authentication, no TLS,
+    single user, bound to `127.0.0.1` by default. The bind address is overridable with an explicit
+    `--host` argument for deliberate testing (for example a RunPod port-forward); that is an explicit
+    operator action, not a default. **A real network-exposure posture — exposure boundary, authentication,
+    authorization, TLS — remains a separate future decision**, as Decision 059 section 21 requires.
+12. **Slice 1 validation is real-media-lite**: an FFmpeg-generated fixture clip, rendered end to end.
+    A real-media sweep of the browser layer is future work, and no real-footage claim is made.
+13. **Server construction is additive.** `reelcraft_server.pro` shares the application source list
+    `reelcraft.pro` builds, minus `app/ui/`, and links `httpserver core gui concurrent` with **no
+    QtWidgets**. `reelcraft.pro`, `tests/tests.pro` and every existing source file are unmodified.
+
+## Consequences
+
+- The blocking engine is now reachable from a network boundary without either side pretending the other is
+  asynchronous. The cost is one thread and one queue, not a second execution model.
+- The HTTP layer cannot accidentally become a second editing engine even by inattention: it has no handle
+  on `Application`.
+- `QGuiApplication` (not `QApplication`) with `QT_QPA_PLATFORM=offscreen` is sufficient for the backend,
+  which settles the open question Decision 059 raised about whether QtWidgets would be needed headlessly.
+- Progress reporting, cancellation, event transport (polling vs streaming), media upload, session identity
+  and persistent job state remain **open**, exactly as Decision 059 left them.
+
+## Verification (Slice 1)
+
+Built and exercised on 2026-09-20 in the restored container (Qt 6.4.2, `qt6-httpserver-dev` 6.4.2-4build2):
+`reelcraft_server` builds cleanly with the documented qmake invocation; a direction-only instruction
+("pan right") reached `awaiting_review` with a full review, accept rendered through the existing
+deterministic seam, and the resulting MP4 was served with `Content-Type: video/mp4`, a correct
+`Content-Length`, `206` for a valid byte range, `416` for an unsatisfiable one and `404` for an unknown
+output id. The GUI binary and the test binary were unchanged and still build; the focused
+`application*` subset passed 85/0/1.
+
+---
+
+*Decisions 001-059 are preserved verbatim; this addendum adds to them and supersedes none of them.*
+
 
 

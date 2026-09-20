@@ -12,6 +12,10 @@ reelcraft_tests
 # Generated Qt test moc
 *.moc
 
+# Headless browser-layer backend, built out-of-source so the root Makefile
+# (the GUI application) is left alone. See reelcraft_server.pro.
+build_server/
+
 # Python helper caches (tools/detector_helper)
 __pycache__/
 *.pyc

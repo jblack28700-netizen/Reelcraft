@@ -1,0 +1,6 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/web">
+        <file alias="index.html">web/index.html</file>
+    </qresource>
+</RCC>

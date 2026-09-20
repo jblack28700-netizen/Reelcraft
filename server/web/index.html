@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reelcraft</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 24px; font: 15px/1.5 system-ui, -apple-system, Segoe UI, sans-serif;
+         background: #14161a; color: #e8eaf0; }
+  h1 { font-size: 20px; margin: 0 0 4px; font-weight: 600; }
+  .sub { color: #9aa3b2; margin: 0 0 24px; font-size: 13px; }
+  section { max-width: 760px; margin: 0 auto 20px; padding: 18px 20px; border-radius: 10px;
+            background: #1c1f26; border: 1px solid #2a2f3a; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: #9aa3b2;
+       margin: 0 0 12px; font-weight: 600; }
+  ul { margin: 0; padding: 0; list-style: none; }
+  li.media { padding: 8px 10px; border-radius: 6px; cursor: pointer; }
+  li.media.selected { background: #2a3550; outline: 1px solid #3d5c99; }
+  input[type=text] { width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: 6px;
+                     border: 1px solid #333a48; background: #12141a; color: #e8eaf0; font: inherit; }
+  button { margin-top: 10px; margin-right: 8px; padding: 9px 16px; border-radius: 6px; border: 0;
+           background: #3d6fd6; color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+  button.secondary { background: #2c3342; }
+  button:disabled { opacity: .45; cursor: default; }
+  pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 13px/1.6 ui-monospace,
+        SFMono-Regular, Menlo, monospace; color: #cfd6e4; }
+  .state { font-weight: 600; }
+  .state.preparing, .state.rendering, .state.queued { color: #e0b64a; }
+  .state.done { color: #57c98a; }
+  .state.failed { color: #e06b6b; }
+  .state.awaiting_review { color: #6fa8f5; }
+  .state.rejected { color: #9aa3b2; }
+  .err { color: #e06b6b; }
+  a.download { display: inline-block; margin-top: 12px; padding: 10px 18px; border-radius: 6px;
+               background: #2f7d52; color: #fff; text-decoration: none; font-weight: 600; }
+  .meta { margin-top: 10px; color: #9aa3b2; font-size: 13px; }
+  video { width: 100%; margin-top: 12px; border-radius: 6px; background: #000; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<h1>Reelcraft</h1>
+<p class="sub">Instruction &rarr; plan review &rarr; accept &rarr; rendered MP4. Slice 1: local, unauthenticated.</p>
+
+<section>
+  <h2>Media</h2>
+  <ul id="media"></ul>
+  <p id="no-media" class="err hidden">No media was pre-seeded on the server. Start it with <code>--media &lt;path&gt;</code>.</p>
+</section>
+
+<section>
+  <h2>Instruction</h2>
+  <input id="instruction" type="text" placeholder="e.g. pan right" autocomplete="off">
+  <button id="submit">Prepare plan</button>
+  <p id="submit-error" class="err hidden"></p>
+</section>
+
+<section id="job-section" class="hidden">
+  <h2>Job</h2>
+  <p>State: <span id="state" class="state"></span></p>
+  <p id="job-error" class="err hidden"></p>
+  <div id="review-block" class="hidden">
+    <h2>Review</h2>
+    <pre id="review"></pre>
+    <button id="accept">Accept and render</button>
+    <button id="reject" class="secondary">Reject</button>
+  </div>
+  <div id="result-block" class="hidden">
+    <a id="download" class="download" href="#">Download MP4</a>
+    <p id="meta" class="meta"></p>
+    <video id="player" controls></video>
+  </div>
+  <div id="reset-block" class="hidden">
+    <button id="reset" class="secondary">Reset</button>
+  </div>
+</section>
+
+<script>
+(function () {
+  "use strict";
+
+  var selectedMediaId = null;
+  var currentJobId = null;
+  var pollTimer = null;
+
+  function $(id) { return document.getElementById(id); }
+
+  function show(el, visible) { el.classList.toggle("hidden", !visible); }
+
+  function api(path, options) {
+    return fetch(path, options).then(function (response) {
+      return response.json().catch(function () { return {}; }).then(function (body) {
+        if (!response.ok) {
+          throw new Error(body && body.error ? body.error : ("HTTP " + response.status));
+        }
+        return body;
+      });
+    });
+  }
+
+  function loadMedia() {
+    api("/api/media").then(function (body) {
+      var list = $("media");
+      list.innerHTML = "";
+      var items = (body && body.items) || [];
+      if (items.length === 0) { show($("no-media"), true); return; }
+      show($("no-media"), false);
+      items.forEach(function (item, index) {
+        var li = document.createElement("li");
+        li.className = "media" + (index === 0 ? " selected" : "");
+        li.textContent = item.name + "  (" + item.id.slice(0, 12) + "\u2026)";
+        li.addEventListener("click", function () {
+          selectedMediaId = item.id;
+          Array.prototype.forEach.call(list.children, function (child) {
+            child.classList.remove("selected");
+          });
+          li.classList.add("selected");
+        });
+        list.appendChild(li);
+        if (index === 0) { selectedMediaId = item.id; }
+      });
+    }).catch(function (error) {
+      show($("no-media"), true);
+      $("no-media").textContent = "Could not load media: " + error.message;
+    });
+  }
+
+  function setState(state) {
+    var el = $("state");
+    el.textContent = state;
+    el.className = "state " + state;
+  }
+
+  function stopPolling() {
+    if (pollTimer !== null) { clearTimeout(pollTimer); pollTimer = null; }
+  }
+
+  function poll() {
+    if (!currentJobId) { return; }
+    api("/api/jobs/" + encodeURIComponent(currentJobId)).then(function (job) {
+      render(job);
+      if (job.state === "done" || job.state === "failed" || job.state === "rejected") {
+        stopPolling();
+        return;
+      }
+      pollTimer = setTimeout(poll, 500);
+    }).catch(function (error) {
+      stopPolling();
+      show($("job-error"), true);
+      $("job-error").textContent = "Lost contact with the server: " + error.message;
+    });
+  }
+
+  function render(job) {
+    show($("job-section"), true);
+    setState(job.state);
+
+    var jobError = $("job-error");
+    if (job.error) { show(jobError, true); jobError.textContent = job.error; }
+    else { show(jobError, false); jobError.textContent = ""; }
+
+    var reviewing = job.state === "awaiting_review";
+    show($("review-block"), reviewing);
+    if (reviewing && job.review) {
+      $("review").textContent =
+        (job.review.summaryLines || []).join("\n") +
+        "\n\nplan digest: " + job.review.planDigest;
+    }
+
+    var done = job.state === "done";
+    show($("result-block"), done);
+    if (done && job.result) {
+      var url = job.result.downloadUrl;
+      $("download").setAttribute("href", url);
+      $("player").setAttribute("src", url);
+      $("meta").textContent =
+        job.result.outputWidth + "x" + job.result.outputHeight +
+        " @ " + job.result.outputFps + " fps, " +
+        job.result.frameCount + " frames, " +
+        (job.result.durationMs / 1000).toFixed(2) + " s";
+    }
+
+    show($("reset-block"), job.state === "rejected");
+  }
+
+  $("submit").addEventListener("click", function () {
+    var instruction = $("instruction").value.trim();
+    var errorEl = $("submit-error");
+    if (!selectedMediaId) {
+      show(errorEl, true);
+      errorEl.textContent = "Select a media item first.";
+      return;
+    }
+    if (!instruction) {
+      show(errorEl, true);
+      errorEl.textContent = "Enter an instruction.";
+      return;
+    }
+    show(errorEl, false);
+    $("submit").disabled = true;
+
+    api("/api/reframe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mediaId: selectedMediaId, instruction: instruction })
+    }).then(function (body) {
+      currentJobId = body.jobId;
+      show($("job-section"), true);
+      setState("queued");
+      stopPolling();
+      poll();
+    }).catch(function (error) {
+      show(errorEl, true);
+      errorEl.textContent = error.message;
+    }).then(function () {
+      $("submit").disabled = false;
+    });
+  });
+
+  $("accept").addEventListener("click", function () {
+    if (!currentJobId) { return; }
+    $("accept").disabled = true;
+    api("/api/jobs/" + encodeURIComponent(currentJobId) + "/accept", { method: "POST" })
+      .catch(function (error) {
+        show($("job-error"), true);
+        $("job-error").textContent = error.message;
+      })
+      .then(function () {
+        $("accept").disabled = false;
+        stopPolling();
+        poll();
+      });
+  });
+
+  $("reject").addEventListener("click", function () {
+    if (!currentJobId) { return; }
+    api("/api/jobs/" + encodeURIComponent(currentJobId) + "/reject", { method: "POST" })
+      .catch(function (error) {
+        show($("job-error"), true);
+        $("job-error").textContent = error.message;
+      })
+      .then(function () { stopPolling(); poll(); });
+  });
+
+  $("reset").addEventListener("click", function () {
+    stopPolling();
+    currentJobId = null;
+    show($("job-section"), false);
+    show($("result-block"), false);
+    show($("review-block"), false);
+    show($("reset-block"), false);
+  });
+
+  loadMedia();
+})();
+</script>
+</body>
+</html>
