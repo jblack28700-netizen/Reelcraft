@@ -1077,6 +1077,13 @@ private slots:
     void reframeRenderUnusableAudioFactsDegradesHonestly();
     void reframeRenderLeavesSourceMediaUntouched();
     void replayReproducesRenderedAudio();
+    // Objective 29: natural-language framing / lens control.
+    void reframeIntentParsesFraming();
+    void reframeBuilderAppliesRequestedFraming();
+    void reframeContractFieldOfViewFidelity();
+    void reframeCommandRunnerFollowsAtRequestedFraming();
+    void reframeCommandRunnerSpeakerFramingIsHonest();
+    void reframePipelineRendersRequestedFraming();
     void mediaAnalysisJsonRoundTripAndIdentity();
     void mediaAnalysisSchemaVersionAndDigestHandling();
     void mediaAnalysisSourceStatusDistinguishesMissingFromChanged();
@@ -18327,6 +18334,440 @@ void ProjectTest::followResolvesWithDefaultMergeDistance()
     QVERIFY(result.plan.isValid());
 }
 
+
+// ============ 360 natural-language framing / lens control (Objective 29) =====
+//
+// Framing is a LENS request ("zoom in", "go wide", "close-up", "field of view
+// 60"), not a camera direction. It is deterministic, model-free, and expressed
+// entirely through the existing validated ReframePlan: CameraKeyframe already
+// carries fieldOfViewDeg, CameraPath already interpolates it, and the renderer
+// already renders it.
+
+void ProjectTest::reframeIntentParsesFraming()
+{
+    const ReframeIntent zoomIn = ReframeIntentParser::parse(QStringLiteral("zoom in"));
+    QVERIFY(zoomIn.recognized);
+    QCOMPARE(zoomIn.moves.size(), 1);
+    QVERIFY(zoomIn.moves.at(0).hasFieldOfView);
+    QVERIFY(qAbs(zoomIn.moves.at(0).fieldOfViewDeg - 60.0) < 1e-9);
+    QVERIFY(!zoomIn.moves.at(0).hasDirection);
+    QVERIFY(zoomIn.moves.at(0).targetRef.isEmpty());
+    QVERIFY2(zoomIn.notes.join(QStringLiteral("\n"))
+                 .contains(QStringLiteral("Framing: field of view 60 degrees")),
+             qPrintable(zoomIn.notes.join(QStringLiteral(" | "))));
+
+    // A framing clause that names what it frames is an AIM at that subject, and
+    // the subject must not swallow the framing words.
+    const ReframeIntent onSubject =
+        ReframeIntentParser::parse(QStringLiteral("Zoom in on the presenter."));
+    QCOMPARE(onSubject.moves.size(), 1);
+    QCOMPARE(onSubject.moves.at(0).targetRef, QStringLiteral("presenter"));
+    QVERIFY(!onSubject.moves.at(0).followSubject);
+    QVERIFY(qAbs(onSubject.moves.at(0).fieldOfViewDeg - 60.0) < 1e-9);
+
+    // "and" is not a clause separator, so a follow plus a lens has to survive as
+    // ONE move that both follows and frames.
+    const ReframeIntent followZoom =
+        ReframeIntentParser::parse(QStringLiteral("follow me and zoom in"));
+    QCOMPARE(followZoom.moves.size(), 1);
+    QCOMPARE(followZoom.moves.at(0).targetRef, QStringLiteral("me"));
+    QVERIFY(followZoom.moves.at(0).followSubject);
+    QVERIFY(qAbs(followZoom.moves.at(0).fieldOfViewDeg - 60.0) < 1e-9);
+
+    // A bare comma does not separate clauses either, so the same rule applies.
+    const ReframeIntent commaZoom =
+        ReframeIntentParser::parse(QStringLiteral("follow me, zoom in"));
+    QCOMPARE(commaZoom.moves.size(), 1);
+    QCOMPARE(commaZoom.moves.at(0).targetRef, QStringLiteral("me"));
+    QVERIFY(commaZoom.moves.at(0).followSubject);
+    QVERIFY(qAbs(commaZoom.moves.at(0).fieldOfViewDeg - 60.0) < 1e-9);
+
+    const ReframeIntent keepZoom = ReframeIntentParser::parse(
+        QStringLiteral("Keep me centered and zoom in."));
+    QCOMPARE(keepZoom.moves.size(), 1);
+    QCOMPARE(keepZoom.moves.at(0).targetRef, QStringLiteral("me"));
+    QVERIFY(keepZoom.moves.at(0).followSubject);
+    QVERIFY(qAbs(keepZoom.moves.at(0).fieldOfViewDeg - 60.0) < 1e-9);
+
+    // A direction and a lens in the same clause are one move carrying both.
+    const ReframeIntent panZoom =
+        ReframeIntentParser::parse(QStringLiteral("pan right and zoom in"));
+    QCOMPARE(panZoom.moves.size(), 1);
+    QVERIFY(panZoom.moves.at(0).hasDirection);
+    QVERIFY(qAbs(panZoom.moves.at(0).yawDeg - 90.0) < 1e-9);
+    QVERIFY(qAbs(panZoom.moves.at(0).fieldOfViewDeg - 60.0) < 1e-9);
+
+    // The named ladder, most specific first.
+    const auto framingOf = [](const QString &text) {
+        const ReframeIntent intent = ReframeIntentParser::parse(text);
+        return intent.requestedFieldOfViews();
+    };
+    QCOMPARE(framingOf(QStringLiteral("go wide")), QList<double>{ 120.0 });
+    QCOMPARE(framingOf(QStringLiteral("use a close-up")), QList<double>{ 60.0 });
+    QCOMPARE(framingOf(QStringLiteral("zoom in a lot")), QList<double>{ 40.0 });
+    QCOMPARE(framingOf(QStringLiteral("zoom all the way out")), QList<double>{ 140.0 });
+    QCOMPARE(framingOf(QStringLiteral("slightly closer")), QList<double>{ 75.0 });
+    QCOMPARE(framingOf(QStringLiteral("slightly wider")), QList<double>{ 105.0 });
+
+    // Explicit numbers win over names, and an explicit number is never softened.
+    QCOMPARE(framingOf(QStringLiteral("field of view 45")), QList<double>{ 45.0 });
+    QCOMPARE(framingOf(QStringLiteral("60 degree field of view")), QList<double>{ 60.0 });
+    QCOMPARE(framingOf(QStringLiteral("use a field of view of 75")),
+             QList<double>{ 75.0 });
+    QCOMPARE(framingOf(QStringLiteral("zoom in to a field of view of 45")),
+             QList<double>{ 45.0 });
+
+    // A widening phrase that CONTAINS a direction word is framing, not a turn:
+    // "pull back" must not become a 180 degree yaw.
+    const ReframeIntent pullBack = ReframeIntentParser::parse(QStringLiteral("pull back"));
+    QCOMPARE(pullBack.moves.size(), 1);
+    QVERIFY(!pullBack.moves.at(0).hasDirection);
+    QVERIFY(qAbs(pullBack.moves.at(0).fieldOfViewDeg - 120.0) < 1e-9);
+
+    // Whole-word matching: "widescreen" is an OUTPUT aspect, never a lens.
+    const ReframeIntent widescreen =
+        ReframeIntentParser::parse(QStringLiteral("Make it widescreen"));
+    QVERIFY(widescreen.hasOutput);
+    QCOMPARE(widescreen.outputWidth, 1920);
+    QVERIFY(widescreen.requestedFieldOfViews().isEmpty());
+
+    // An unsatisfiable lens is reported and left intact for the validator to
+    // refuse; it is never silently clamped.
+    const ReframeIntent impossible =
+        ReframeIntentParser::parse(QStringLiteral("field of view 200"));
+    QCOMPARE(impossible.requestedFieldOfViews(), QList<double>{ 200.0 });
+    QVERIFY2(impossible.notes.join(QStringLiteral("\n"))
+                 .contains(QStringLiteral("outside the supported range")),
+             qPrintable(impossible.notes.join(QStringLiteral(" | "))));
+
+    // Compound composition (Objective 15): a temporal half and a framing half
+    // survive together, because the temporal range is stripped before camera
+    // extraction.
+    const ReframeIntent compound = ReframeIntentParser::parse(
+        QStringLiteral("keep 0:00 to 0:30 and zoom in"));
+    QVERIFY(compound.hasTemporalRequest);
+    QCOMPARE(compound.moves.size(), 1);
+    QCOMPARE(compound.requestedFieldOfViews(), QList<double>{ 60.0 });
+
+    // A lens CHANGE is an ordered pair of framing states.
+    const ReframeIntent pushIn =
+        ReframeIntentParser::parse(QStringLiteral("start wide, then push in on me"));
+    QCOMPARE(pushIn.moves.size(), 2);
+    QVERIFY(qAbs(pushIn.moves.at(0).fieldOfViewDeg - 120.0) < 1e-9);
+    QVERIFY(pushIn.moves.at(0).targetRef.isEmpty());
+    QCOMPARE(pushIn.moves.at(1).targetRef, QStringLiteral("me"));
+    QVERIFY(qAbs(pushIn.moves.at(1).fieldOfViewDeg - 60.0) < 1e-9);
+    QCOMPARE(pushIn.requestedFieldOfViews(), QList<double>({ 120.0, 60.0 }));
+}
+
+void ProjectTest::reframeBuilderAppliesRequestedFraming()
+{
+    const ReframePlan::TimeRange range{ 0, 4000 };
+    const ReframePlan::OutputSpec output{ 160, 90, 2.0 };
+
+    // No framing clause: the default lens, exactly as before this objective.
+    const ReframeBuildResult plain = ReframePlanBuilder::build(
+        ReframeIntentParser::parse(QStringLiteral("pan right")), {}, range, output);
+    QVERIFY2(plain.ok, qPrintable(plain.error));
+    QCOMPARE(plain.plan.keyframes().size(), 1);
+    QVERIFY(qAbs(plain.plan.keyframes().first().fieldOfViewDeg - 90.0) < 1e-9);
+
+    // A framing-only instruction changes the lens of the centered forward camera.
+    const ReframeBuildResult zoom = ReframePlanBuilder::build(
+        ReframeIntentParser::parse(QStringLiteral("zoom in")), {}, range, output);
+    QVERIFY2(zoom.ok, qPrintable(zoom.error));
+    QCOMPARE(zoom.plan.keyframes().size(), 1);
+    QVERIFY(qAbs(zoom.plan.keyframes().first().yawDeg) < 1e-9);
+    QVERIFY(qAbs(zoom.plan.keyframes().first().fieldOfViewDeg - 60.0) < 1e-9);
+
+    // Direction plus lens in one instruction.
+    const ReframeBuildResult panZoom = ReframePlanBuilder::build(
+        ReframeIntentParser::parse(QStringLiteral("pan right and zoom in")), {},
+        range, output);
+    QVERIFY2(panZoom.ok, qPrintable(panZoom.error));
+    QCOMPARE(panZoom.plan.keyframes().size(), 1);
+    QVERIFY(qAbs(panZoom.plan.keyframes().first().yawDeg - 90.0) < 1e-9);
+    QVERIFY(qAbs(panZoom.plan.keyframes().first().fieldOfViewDeg - 60.0) < 1e-9);
+
+    // A lens CHANGE: wide forward, then a tight lens held on the subject. The
+    // framing-only clause carries the direction forward, so the camera does not
+    // move while the lens changes.
+    ReframeTarget me;
+    me.id = QStringLiteral("me");
+    me.yawDeg = 30.0;
+    me.pitchDeg = 0.0;
+    const ReframeBuildResult pushIn = ReframePlanBuilder::build(
+        ReframeIntentParser::parse(QStringLiteral("start wide, then push in on me")),
+        { me }, range, output);
+    QVERIFY2(pushIn.ok, qPrintable(pushIn.error));
+    const QList<CameraKeyframe> pushFrames = pushIn.plan.keyframes();
+    QCOMPARE(pushFrames.size(), 2);
+    QCOMPARE(pushFrames.at(0).timeMs, 0);
+    QCOMPARE(pushFrames.at(1).timeMs, 4000);
+    QVERIFY(qAbs(pushFrames.at(0).yawDeg) < 1e-9);
+    QVERIFY(qAbs(pushFrames.at(0).fieldOfViewDeg - 120.0) < 1e-9);
+    QVERIFY(qAbs(pushFrames.at(1).yawDeg - 30.0) < 1e-9);
+    QVERIFY(qAbs(pushFrames.at(1).fieldOfViewDeg - 60.0) < 1e-9);
+    // The lens really is interpolated between the two keyframes.
+    QVERIFY(qAbs(CameraPath::stateAt(pushIn.plan, 2000).fieldOfViewDeg - 90.0) < 1e-6);
+
+    // The lens persists until it is changed again: a later instruction with no
+    // framing clause keeps the lens the camera already has.
+    const ReframeBuildResult persist = ReframePlanBuilder::build(
+        ReframeIntentParser::parse(QStringLiteral("pan right, then zoom in")), {},
+        range, output);
+    QVERIFY2(persist.ok, qPrintable(persist.error));
+    const QList<CameraKeyframe> persistFrames = persist.plan.keyframes();
+    QCOMPARE(persistFrames.size(), 2);
+    QVERIFY(qAbs(persistFrames.at(0).fieldOfViewDeg - 90.0) < 1e-9);
+    QVERIFY(qAbs(persistFrames.at(1).fieldOfViewDeg - 60.0) < 1e-9);
+
+    // An unsatisfiable lens is refused by the existing plan validator rather
+    // than clamped or silently ignored.
+    const ReframeBuildResult impossible = ReframePlanBuilder::build(
+        ReframeIntentParser::parse(QStringLiteral("field of view 200")), {},
+        range, output);
+    QVERIFY(!impossible.ok);
+    QVERIFY2(impossible.error.contains(QStringLiteral("field of view")),
+             qPrintable(impossible.error));
+}
+
+void ProjectTest::reframeContractFieldOfViewFidelity()
+{
+    const ReframePlan::TimeRange range{ 0, 4000 };
+    const ReframePlan::OutputSpec output{ 160, 90, 2.0 };
+
+    // NotApplicable: the instruction asked for no framing, so the default lens is
+    // used intentionally and is not a violation.
+    const ReframeIntent plain = ReframeIntentParser::parse(QStringLiteral("pan right"));
+    const ReframeBuildResult plainPlan =
+        ReframePlanBuilder::build(plain, {}, range, output);
+    QVERIFY2(plainPlan.ok, qPrintable(plainPlan.error));
+    QVERIFY(ReframeContract::check(plain, plainPlan.plan).isConsistent());
+
+    // Consistent when the requested lens actually reaches the plan.
+    const ReframeIntent zoom = ReframeIntentParser::parse(QStringLiteral("zoom in"));
+    const ReframeBuildResult zoomPlan =
+        ReframePlanBuilder::build(zoom, {}, range, output);
+    QVERIFY2(zoomPlan.ok, qPrintable(zoomPlan.error));
+    QVERIFY(ReframeContract::check(zoom, zoomPlan.plan).isConsistent());
+
+    // FATAL when the plan never renders at the requested lens: the framing half
+    // of the instruction was dropped.
+    ReframePlan wrongLens = zoomPlan.plan;
+    QList<CameraKeyframe> wrongFrames = wrongLens.keyframes();
+    wrongFrames[0].fieldOfViewDeg = 90.0;
+    wrongLens.setKeyframes(wrongFrames);
+    const ContractReport report = ReframeContract::check(zoom, wrongLens);
+    QVERIFY(!report.isConsistent());
+    QCOMPARE(report.violations.size(), 1);
+    QCOMPARE(report.violations.first().ruleId, QStringLiteral("IPC-4"));
+    QCOMPARE(ReframeContract::fieldOfViewRuleId(), QStringLiteral("IPC-4"));
+    QVERIFY2(report.violations.first().detail.contains(QStringLiteral("60")),
+             qPrintable(report.violations.first().detail));
+    QVERIFY(report.summary().contains(QStringLiteral("IPC-4")));
+
+    // A lens CHANGE is containment of the REQUESTED values, not equality over
+    // every keyframe: the path legitimately starts from the previous lens.
+    ReframeTarget me;
+    me.id = QStringLiteral("me");
+    me.yawDeg = 30.0;
+    const ReframeIntent pushIn =
+        ReframeIntentParser::parse(QStringLiteral("start wide, then push in on me"));
+    const ReframeBuildResult pushPlan =
+        ReframePlanBuilder::build(pushIn, { me }, range, output);
+    QVERIFY2(pushPlan.ok, qPrintable(pushPlan.error));
+    QVERIFY(ReframeContract::check(pushIn, pushPlan.plan).isConsistent());
+
+    ReframePlan flatLens = pushPlan.plan;
+    QList<CameraKeyframe> flatFrames = flatLens.keyframes();
+    for (int i = 0; i < flatFrames.size(); ++i) {
+        flatFrames[i].fieldOfViewDeg = 120.0;
+    }
+    flatLens.setKeyframes(flatFrames);
+    const ContractReport missing = ReframeContract::check(pushIn, flatLens);
+    QVERIFY(!missing.isConsistent());
+    QCOMPARE(missing.violations.first().ruleId, QStringLiteral("IPC-4"));
+    QVERIFY(missing.violations.first().detail.contains(QStringLiteral("60")));
+}
+
+void ProjectTest::reframeCommandRunnerFollowsAtRequestedFraming()
+{
+    // The subject walks from -40 to +40 degrees across the range.
+    MovingTargetEquirectProvider provider(360, 180, -40.0, 40.0, 4000);
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+
+    ReframeCommandRequest base;
+    base.defaultRange = ReframePlan::TimeRange{ 0, 4000 };
+    base.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+    base.resolveConfig = smallResolverConfig();
+
+    // Baseline: a follow with no framing clause keeps the default lens.
+    ReframeCommandRequest plain = base;
+    plain.instruction = QStringLiteral("follow the person");
+    const ReframeCommandResult plainResult =
+        ReframeCommandRunner::prepare(plain, &detector, &provider);
+    QVERIFY2(plainResult.ok, qPrintable(plainResult.error));
+    QVERIFY(plainResult.plan.keyframes().size() >= 3);
+    for (const CameraKeyframe &frame : plainResult.plan.keyframes()) {
+        QVERIFY(qAbs(frame.fieldOfViewDeg - 90.0) < 1e-9);
+    }
+
+    // "follow the person and zoom in": the SAME trajectory at the requested
+    // lens, because the follow path builds its own keyframes.
+    ReframeCommandRequest zoomed = base;
+    zoomed.instruction = QStringLiteral("follow the person and zoom in");
+    const ReframeCommandResult zoomedResult =
+        ReframeCommandRunner::prepare(zoomed, &detector, &provider);
+    QVERIFY2(zoomedResult.ok, qPrintable(zoomedResult.error));
+    const QList<CameraKeyframe> plainFrames = plainResult.plan.keyframes();
+    const QList<CameraKeyframe> zoomFrames = zoomedResult.plan.keyframes();
+    QCOMPARE(zoomFrames.size(), plainFrames.size());
+    for (int i = 0; i < zoomFrames.size(); ++i) {
+        QCOMPARE(zoomFrames.at(i).timeMs, plainFrames.at(i).timeMs);
+        QVERIFY(qAbs(zoomFrames.at(i).yawDeg - plainFrames.at(i).yawDeg) < 1e-9);
+        QVERIFY(qAbs(zoomFrames.at(i).fieldOfViewDeg - 60.0) < 1e-9);
+    }
+
+    // A direction-only framing command needs no detector at all.
+    ReframeCommandRequest direction;
+    direction.instruction = QStringLiteral("pan right and zoom in");
+    direction.defaultRange = ReframePlan::TimeRange{ 0, 2000 };
+    direction.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+    const ReframeCommandResult directionResult =
+        ReframeCommandRunner::prepare(direction, nullptr, nullptr);
+    QVERIFY2(directionResult.ok, qPrintable(directionResult.error));
+    QCOMPARE(directionResult.plan.keyframes().size(), 1);
+    QVERIFY(qAbs(directionResult.plan.keyframes().first().yawDeg - 90.0) < 1e-9);
+    QVERIFY(qAbs(directionResult.plan.keyframes().first().fieldOfViewDeg - 60.0)
+            < 1e-9);
+}
+
+void ProjectTest::reframeCommandRunnerSpeakerFramingIsHonest()
+{
+    const QImage frame = buildTargetEquirect(
+        360, 180, { EquirectDisk{ 30.0, 0.0, 10.0, QColor(255, 0, 0) } });
+    StaticEquirectProvider provider(frame);
+    SyntheticColorDetector detector;
+    detector.addSpec(QColor(255, 0, 0), QStringLiteral("person"));
+    SpeakerScriptProvider speaker;
+    speaker.setIntervals({ speakerInterval(0, 3000) });
+
+    ReframeCommandRequest base;
+    base.sourcePath = QStringLiteral("/tmp/reelcraft_dummy.mp4");
+    base.defaultRange = ReframePlan::TimeRange{ 0, 3000 };
+    base.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+    base.resolveConfig = smallResolverConfig();
+    base.speakerProvider = &speaker;
+
+    // A single requested lens is honoured through the speaker planner's config,
+    // so a speaker command is not silently rendered at the planner's own lens.
+    ReframeCommandRequest framed = base;
+    framed.instruction = QStringLiteral("follow the speaker, then zoom in");
+    const ReframeCommandResult framedResult =
+        ReframeCommandRunner::prepare(framed, &detector, &provider);
+    QVERIFY2(framedResult.ok, qPrintable(framedResult.error));
+    QVERIFY(framedResult.speakerCommand);
+    QVERIFY(!framedResult.plan.keyframes().isEmpty());
+    for (const CameraKeyframe &keyframe : framedResult.plan.keyframes()) {
+        QVERIFY(qAbs(keyframe.fieldOfViewDeg - 60.0) < 1e-9);
+    }
+
+    // A LENS CHANGE cannot be expressed by a speaker plan, and rendering one
+    // fixed lens instead would silently drop half the request: refused honestly.
+    ReframeCommandRequest changed = base;
+    changed.instruction =
+        QStringLiteral("start wide, then push in on the speaker");
+    const ReframeCommandResult changedResult =
+        ReframeCommandRunner::prepare(changed, &detector, &provider);
+    QVERIFY(!changedResult.ok);
+    QVERIFY2(changedResult.error.contains(QStringLiteral("lens change")),
+             qPrintable(changedResult.error));
+    QVERIFY(changedResult.plan.keyframes().isEmpty());
+}
+
+void ProjectTest::reframePipelineRendersRequestedFraming()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable in this environment");
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString source;
+    QVERIFY(createEquirectReviewVideo(directory.path(),
+                                      FrameExtractor::defaultExecutablePath(), 8,
+                                      &source));
+    // Framing is a decision, never an edit of the source.
+    const QFileInfo sourceBefore(source);
+    const QString sourceDigestBefore = sha256Of(readFileBytes(source));
+
+    ReframePipeline::Request base;
+    base.sourcePath = source;
+    base.sourceMediaId = QStringLiteral("framing-media");
+    base.defaultRange = ReframePlan::TimeRange{ 0, 4000 };
+    base.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+
+    ReframePipeline::Request plain = base;
+    plain.outputPath = directory.filePath(QStringLiteral("plain.mp4"));
+    plain.instruction = QStringLiteral("pan right");
+    const ReframePipeline::Result plainResult = ReframePipeline::run(plain);
+    QVERIFY2(plainResult.ok, qPrintable(plainResult.error));
+    QCOMPARE(plainResult.plan.keyframes().first().fieldOfViewDeg, 90.0);
+
+    ReframePipeline::Request zoomed = base;
+    zoomed.outputPath = directory.filePath(QStringLiteral("zoomed.mp4"));
+    zoomed.instruction = QStringLiteral("pan right and zoom in");
+    const ReframePipeline::Result zoomedResult = ReframePipeline::run(zoomed);
+    QVERIFY2(zoomedResult.ok, qPrintable(zoomedResult.error));
+    QCOMPARE(zoomedResult.plan.keyframes().first().fieldOfViewDeg, 60.0);
+    // The requested framing is reported to the caller, so a creator sees what
+    // was applied rather than having to infer it.
+    QVERIFY2(zoomedResult.notes.join(QStringLiteral("\n"))
+                 .contains(QStringLiteral("Framing: field of view 60 degrees")),
+             qPrintable(zoomedResult.notes.join(QStringLiteral(" | "))));
+
+    // The lens reached the PIXELS: the same camera direction at a tighter field
+    // of view cannot decode to the same frames.
+    const QByteArray plainFrames = decodeAllFramesRaw(plainResult.outputPath);
+    const QByteArray zoomedFrames = decodeAllFramesRaw(zoomedResult.outputPath);
+    QVERIFY(!plainFrames.isEmpty());
+    QVERIFY(!zoomedFrames.isEmpty());
+    QVERIFY2(sha256Of(zoomedFrames) != sha256Of(plainFrames),
+             "a tighter lens must change the rendered picture");
+
+    // Framing survives persistence AND replay: the resolved lens is part of the
+    // stored EditDecision plan, so replaying the decision reproduces the framed
+    // render through the perception-free path.
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(source));
+    QVERIFY(app.setActiveMedia(app.mediaItems().first().id()));
+    app.setReframeDefaultOutput(160, 90, 2.0);
+
+    const QString firstOutput = directory.filePath(QStringLiteral("app_render.mp4"));
+    QVERIFY2(app.runReframeCommandTo(QStringLiteral("pan right and zoom in"), 0, 4000,
+                                     firstOutput),
+             qPrintable(app.lastReframeCommandOutcome().error));
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    QVERIFY(app.reframeOutputs().at(0).hasEditDecision());
+    const ReframePlan stored = app.reframeOutputs().at(0).editDecision().plan();
+    QVERIFY(qAbs(stored.keyframes().first().fieldOfViewDeg - 60.0) < 1e-9);
+
+    const QByteArray appFrames = decodeAllFramesRaw(firstOutput);
+    QVERIFY(!appFrames.isEmpty());
+    const QString replayOutput =
+        directory.filePath(QStringLiteral("app_render_replay.mp4"));
+    const ReplayResult replay = app.replayEditDecision(0, replayOutput);
+    QVERIFY2(replay.ok, qPrintable(replay.error));
+    QCOMPARE(sha256Of(decodeAllFramesRaw(replayOutput)), sha256Of(appFrames));
+
+    // Three renders later (two pipeline runs and a command plus its replay), the
+    // original media is byte-identical and untouched.
+    QCOMPARE(QFileInfo(source).size(), sourceBefore.size());
+    QCOMPARE(QFileInfo(source).lastModified(), sourceBefore.lastModified());
+    QCOMPARE(sha256Of(readFileBytes(source)), sourceDigestBefore);
+}
 
 QTEST_MAIN(ProjectTest)
 #include "test_project.moc"

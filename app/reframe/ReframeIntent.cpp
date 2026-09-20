@@ -2,8 +2,12 @@
 
 #include <QPair>
 #include <QRegularExpression>
+#include <QStringList>
 
 #include <algorithm>
+#include <cmath>
+
+#include "reframe/ReframeMath.h"
 
 namespace {
 
@@ -151,6 +155,7 @@ const bool kFollowPatterns[] = {
     false, // centered on <subject>
     true,  // keep <subject> centered
     false, // center <subject>
+    false, // Objective 29: zoom/push/focus in on <subject> (an aim)
 };
 
 QString subjectFromClause(const QString &clause, bool *outFollow = nullptr)
@@ -172,6 +177,11 @@ QString subjectFromClause(const QString &clause, bool *outFollow = nullptr)
             "keep\\s+(?:the\\s+)?(.+?)\\s+center(?:ed|red)$")),
         QRegularExpression(QStringLiteral(
             "center(?:ed|red)?\\s+(?:the\\s+)?(.+)$")),
+        // Objective 29: a framing clause that also names what it frames
+        // ("zoom in on the presenter", "push in on me"). An aim, not a follow.
+        QRegularExpression(QStringLiteral(
+            "(?:zoom|zooming|push|pushing|focus|focusing|lock|locking)\\s+"
+            "(?:in\\s+)?(?:closer\\s+)?(?:on|onto)\\s+(?:the\\s+)?(.+)$")),
     };
     static const int patternCount =
         static_cast<int>(sizeof(patterns) / sizeof(patterns[0]));
@@ -193,6 +203,166 @@ QString subjectFromClause(const QString &clause, bool *outFollow = nullptr)
         }
     }
     return QString();
+}
+
+// Objective 29: framing. A framing clause asks for a LENS, not for a
+// direction: "zoom in", "go wide", "close-up", "field of view 60". The named
+// levels are absolute vertical fields of view in degrees and are listed most
+// specific first, so "much wider" is never read as "wider" and "extreme
+// close-up" never as "close-up". Every value lies inside the range the plan
+// already validates ([20, 140]); a request outside it is reported rather than
+// clamped, because silently changing what was asked for is not honest.
+struct FramingLevel
+{
+    const char *phrase;
+    double fieldOfViewDeg;
+};
+
+const FramingLevel kFramingLevels[] = {
+    // Tightening.
+    { "extreme close-up", 40.0 },
+    { "extreme close up", 40.0 },
+    { "zoom right in", 40.0 },
+    { "zoom all the way in", 40.0 },
+    { "zoom way in", 40.0 },
+    { "zoom in a lot", 40.0 },
+    { "much closer", 40.0 },
+    { "a lot closer", 40.0 },
+    { "much tighter", 40.0 },
+    { "very tight", 40.0 },
+    { "close-up", 60.0 },
+    { "close up", 60.0 },
+    { "zoomed in", 60.0 },
+    { "zoom into", 60.0 },
+    { "zoom in", 60.0 },
+    { "push in", 60.0 },
+    { "closer", 60.0 },
+    { "tighter", 60.0 },
+    { "tighten", 60.0 },
+    // Widening.
+    { "zoom all the way out", 140.0 },
+    { "zoom way out", 140.0 },
+    { "as wide as possible", 140.0 },
+    { "much wider", 140.0 },
+    { "a lot wider", 140.0 },
+    { "very wide", 140.0 },
+    { "ultra wide", 140.0 },
+    { "widest", 140.0 },
+    { "zoom out", 120.0 },
+    { "pull back", 120.0 },
+    { "back up", 120.0 },
+    { "pull out", 120.0 },
+    { "wider", 120.0 },
+    { "wide", 120.0 },
+    { "more of the scene", 120.0 },
+    { "show more", 120.0 },
+    { "see more", 120.0 },
+};
+
+// Index of a whole-word/whole-phrase occurrence, or -1. Whole-word matching is
+// what keeps "wide" out of "widescreen" and "closer" out of an unrelated word.
+int wholePhraseIndex(const QString &text, const QString &phrase)
+{
+    int from = 0;
+    while (true) {
+        const int index = text.indexOf(phrase, from);
+        if (index < 0) {
+            return -1;
+        }
+        const bool leftOk = index == 0 || !text.at(index - 1).isLetterOrNumber();
+        const int end = index + phrase.size();
+        const bool rightOk =
+            end >= text.size() || !text.at(end).isLetterOrNumber();
+        if (leftOk && rightOk) {
+            return index;
+        }
+        from = index + 1;
+    }
+}
+
+bool hasSofteningModifier(const QString &clause)
+{
+    return wholePhraseIndex(clause, QStringLiteral("slightly")) >= 0
+        || wholePhraseIndex(clause, QStringLiteral("a bit")) >= 0
+        || wholePhraseIndex(clause, QStringLiteral("a little")) >= 0;
+}
+
+// Detects a requested field of view in a clause and reports the clause span it
+// occupies, so the caller can remove it before direction detection: "pull back"
+// and "back up" contain direction words, and a phrase that has been consumed as
+// framing must not also be read as a camera move. Explicit numbers win over
+// names ("field of view 60", "60 degree field of view", "fov=60").
+bool fieldOfViewFromClause(const QString &clause, double *outFieldOfViewDeg,
+                           int *outStart = nullptr, int *outEnd = nullptr)
+{
+    static const QRegularExpression explicitAfter(QStringLiteral(
+        "(?:field[\\s-]*of[\\s-]*view|fov)\\s*(?:of|=|:|to|at|is)?\\s*"
+        "(\\d{1,3}(?:\\.\\d+)?)"));
+    static const QRegularExpression explicitBefore(QStringLiteral(
+        "(\\d{1,3}(?:\\.\\d+)?)\\s*(?:degrees?|deg|[\\x{00B0}])\\s*"
+        "(?:field[\\s-]*of[\\s-]*view|fov)"));
+
+    const QRegularExpression *explicitPatterns[] = { &explicitAfter,
+                                                     &explicitBefore };
+    for (const QRegularExpression *pattern : explicitPatterns) {
+        const QRegularExpressionMatch match = pattern->match(clause);
+        if (!match.hasMatch()) {
+            continue;
+        }
+        bool ok = false;
+        const double value = match.captured(1).toDouble(&ok);
+        if (!ok || !std::isfinite(value)) {
+            continue;
+        }
+        if (outStart) {
+            *outStart = match.capturedStart();
+        }
+        if (outEnd) {
+            *outEnd = match.capturedEnd();
+        }
+        if (outFieldOfViewDeg) {
+            *outFieldOfViewDeg = value;
+        }
+        return true;
+    }
+
+    const int levelCount =
+        static_cast<int>(sizeof(kFramingLevels) / sizeof(kFramingLevels[0]));
+    for (int i = 0; i < levelCount; ++i) {
+        const QString phrase = QString::fromLatin1(kFramingLevels[i].phrase);
+        const int index = wholePhraseIndex(clause, phrase);
+        if (index < 0) {
+            continue;
+        }
+        double value = kFramingLevels[i].fieldOfViewDeg;
+        // "slightly closer" is a smaller step than "closer". The modifier applies
+        // to a named level only: an explicit number is a request in itself.
+        if (hasSofteningModifier(clause)) {
+            value = 90.0 + (value - 90.0) / 2.0;
+        }
+        if (outStart) {
+            *outStart = index;
+        }
+        if (outEnd) {
+            *outEnd = index + phrase.size();
+        }
+        if (outFieldOfViewDeg) {
+            *outFieldOfViewDeg = value;
+        }
+        return true;
+    }
+    return false;
+}
+
+// The clause with one character span removed (the consumed framing phrase).
+QString withoutSpan(const QString &text, int start, int end)
+{
+    if (start < 0 || end <= start || end > text.size()) {
+        return text;
+    }
+    QString result = text;
+    result.remove(start, end - start);
+    return result;
 }
 
 QStringList splitClauses(const QString &text)
@@ -402,6 +572,35 @@ QString cameraClauseText(const QString &clause)
         return clause;
     }
     return removeSpans(clause, temporalSpansFromText(clause, tokens).spans);
+}
+
+// Objective 29: a framing clause joined by "and" ("follow me and zoom in")
+// must not become part of the subject reference, for exactly the reason a
+// trailing temporal word must not ("follow me and keep 0:00 to 0:30"). Note that
+// plain "and" is NOT a clause separator, so the subject capture can swallow a
+// framing instruction that the same clause also carries.
+QString stripTrailingFramingFiller(const QString &subject)
+{
+    // A bare comma does not separate clauses either ("follow me, zoom in"), so
+    // every conjunction that can introduce a trailing framing clause is
+    // considered, latest first, and only one whose tail really is a framing
+    // clause is removed.
+    static const QRegularExpression separator(
+        QStringLiteral("\\s+and\\s+|\\s*[,;]\\s*"));
+    QList<QPair<int, int>> separators;
+    QRegularExpressionMatchIterator it = separator.globalMatch(subject);
+    while (it.hasNext()) {
+        const QRegularExpressionMatch match = it.next();
+        separators.append(qMakePair(match.capturedStart(), match.capturedEnd()));
+    }
+    for (int i = separators.size() - 1; i >= 0; --i) {
+        const QString tail = subject.mid(separators.at(i).second).trimmed();
+        double ignored = 0.0;
+        if (!tail.isEmpty() && fieldOfViewFromClause(tail, &ignored)) {
+            return subject.left(separators.at(i).first).trimmed();
+        }
+    }
+    return subject;
 }
 
 // Removes a trailing temporal operation word left behind when the camera
@@ -639,6 +838,27 @@ TemporalParseResult parseTemporal(const QStringList &clauses)
 
 } // namespace
 
+QList<double> ReframeIntent::requestedFieldOfViews() const
+{
+    QList<double> values;
+    for (const ReframeCameraMove &move : moves) {
+        if (!move.hasFieldOfView) {
+            continue;
+        }
+        bool present = false;
+        for (double existing : values) {
+            if (qAbs(existing - move.fieldOfViewDeg) < 1e-9) {
+                present = true;
+                break;
+            }
+        }
+        if (!present) {
+            values.append(move.fieldOfViewDeg);
+        }
+    }
+    return values;
+}
+
 ReframeIntent ReframeIntentParser::parse(const QString &text)
 {
     ReframeIntent intent;
@@ -718,15 +938,45 @@ ReframeIntent ReframeIntentParser::parse(const QString &text)
                 QStringLiteral("[\\s.,;:!\\?]+$"));
             cameraText.remove(trailingPunctuation);
         }
-        if (!clauseHasCameraKeyword(cameraText)) {
+        // Objective 29: framing is a camera instruction even when the clause
+        // names no camera verb, so it is detected BEFORE the clause is
+        // classified, and the phrase it consumes is removed from the text used
+        // for direction detection — "pull back" and "back up" contain direction
+        // words that the framing phrase has already accounted for.
+        double requestedFieldOfViewDeg = 0.0;
+        int fieldOfViewStart = -1;
+        int fieldOfViewEnd = -1;
+        const bool hasFieldOfView =
+            fieldOfViewFromClause(cameraText, &requestedFieldOfViewDeg,
+                                  &fieldOfViewStart, &fieldOfViewEnd);
+        if (!clauseHasCameraKeyword(cameraText) && !hasFieldOfView) {
             continue;
         }
+        if (hasFieldOfView
+            && !reframe::isValidFieldOfViewDeg(requestedFieldOfViewDeg)) {
+            // Reported, never clamped: the plan validator refuses the
+            // unsatisfiable value, and this note says what was asked for.
+            intent.notes.append(
+                QStringLiteral("Requested field of view %1 degrees is outside "
+                               "the supported range [%2, %3].")
+                    .arg(QString::number(requestedFieldOfViewDeg, 'g', 10))
+                    .arg(reframe::kMinFieldOfViewDeg)
+                    .arg(reframe::kMaxFieldOfViewDeg));
+        }
+        const QString directionText = hasFieldOfView
+            ? withoutSpan(cameraText, fieldOfViewStart, fieldOfViewEnd)
+            : cameraText;
+
         ReframeCameraMove move;
         move.label = cameraText.trimmed();
+        if (hasFieldOfView) {
+            move.hasFieldOfView = true;
+            move.fieldOfViewDeg = requestedFieldOfViewDeg;
+        }
 
         double yaw = 0.0;
         double pitch = 0.0;
-        if (directionFromClause(cameraText, &yaw, &pitch)) {
+        if (directionFromClause(directionText, &yaw, &pitch)) {
             move.hasDirection = true;
             move.yawDeg = yaw;
             move.pitchDeg = pitch;
@@ -736,6 +986,7 @@ ReframeIntent ReframeIntentParser::parse(const QString &text)
             if (temporal) {
                 subject = stripTrailingTemporalFiller(subject);
             }
+            subject = stripTrailingFramingFiller(subject);
             if (!subject.isEmpty()) {
                 move.targetRef = subject;
                 move.followSubject = follow;
@@ -745,7 +996,11 @@ ReframeIntent ReframeIntentParser::parse(const QString &text)
             }
         }
 
-        if (move.hasDirection || !move.targetRef.isEmpty()) {
+        // A framing-only clause is KEPT: it changes the lens without moving the
+        // camera, which is what turns "start wide, then push in on me" into a
+        // real two-keyframe move instead of a silently dropped instruction.
+        if (move.hasDirection || !move.targetRef.isEmpty()
+            || move.hasFieldOfView) {
             intent.moves.append(move);
         }
     }
@@ -775,6 +1030,18 @@ ReframeIntent ReframeIntentParser::parse(const QString &text)
             "No camera instruction: a centered forward view is used."));
     }
 
+    // Objective 29: one deterministic note naming the framing the instruction
+    // asked for, in instruction order.
+    const QList<double> requestedFieldOfViews = intent.requestedFieldOfViews();
+    if (!requestedFieldOfViews.isEmpty()) {
+        QStringList values;
+        for (double value : requestedFieldOfViews) {
+            values.append(QString::number(value, 'g', 10));
+        }
+        intent.notes.append(QStringLiteral("Framing: field of view %1 degrees.")
+                                .arg(values.join(QStringLiteral(", "))));
+    }
+
     if (!intent.unresolvedTargets.isEmpty()) {
         intent.notes.append(QStringLiteral(
             "Unresolved subject reference(s): %1. Target resolution is a "
@@ -785,6 +1052,7 @@ ReframeIntent ReframeIntentParser::parse(const QString &text)
 
     intent.recognized = intent.hasOutput || intent.hasTimeRange
         || intent.hasTemporalRequest || !intent.moves.isEmpty();
+    // (A framing-only instruction is recognized because it produces a move.)
     if (!intent.recognized) {
         intent.notes.append(QStringLiteral(
             "Instruction was not recognized by the current grammar."));

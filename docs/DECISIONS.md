@@ -1750,3 +1750,48 @@ Making the picture pass through the existing encoder first was chosen over a sin
 
 *Decisions 001-047 are preserved verbatim; this decision adds to them and supersedes none of them.*
 
+
+---
+
+# Decision 049 — Natural-Language Framing Is a Lens on the Existing Plan, Not a New Instruction Type
+
+**Status:** Accepted (2026-09-18, 360 Reframing Objective 29)
+
+## Context
+
+The 360 pipeline could aim the virtual camera (`pan right`, `look at the car`), follow a resolved subject over time (Objectives 23-27), cut and re-time the source (Objective 14), and — since Objective 28 — deliver the retained audio with the picture. It could not change the **lens**. `ReframePlanBuilder` wrote `frame.fieldOfViewDeg = 90.0` for every keyframe it produced, and the other two planners carried their own constants (`TargetTrackPlanner::Config::fieldOfViewDeg = 90`, `SpeakerReframePlanner::Config::fieldOfViewDeg = 75`). No instruction, in any phrasing, could reach any of them — "zoom in on me" was not even *recognized*: the clause classifier looked for camera verbs, and "zoom" was not one, so the instruction was dropped with "Instruction was not recognized by the current grammar."
+
+This is a framing capability, not a direction capability. For automated reframing from natural language, tightness is half of what a creator asks for: a wide establishing view and a close-up on the speaker are the same camera *position* and a different *lens*.
+
+## Decision
+
+- **Framing is a property of a camera move, and the move already exists.** `ReframeCameraMove` gains `hasFieldOfView` / `fieldOfViewDeg` (in-memory only, exactly like `followSubject`), the deterministic parser sets them from a framing clause, and `ReframePlanBuilder` puts the value on the keyframe it was already producing. The executable representation does not change at all: `CameraKeyframe::fieldOfViewDeg` already existed, was already serialized, was already interpolated by `CameraPath`, was already rendered by `EquirectView`, and was already validated to `[20, 140]`.
+- **No new plan type, no schema change, no new field anywhere persisted.** `ReframeIntent` is never persisted; `ReframePlan`, `CameraKeyframe`, `EditDecision` and the `Project` schema are untouched, so existing decisions keep their payloads and digests, and a framing instruction is replayable through the existing perception-free path.
+- **A framing clause is a lens request, not a direction.** The vocabulary is a documented, deterministic ladder of absolute vertical fields of view — `zoom in` 60, `close-up` 60, `extreme close-up`/`zoom in a lot` 40, `wide`/`zoom out`/`pull back` 120, `very wide`/`zoom all the way out` 140 — plus explicit numbers (`field of view 60`, `60 degree field of view`, `fov=75`), with `slightly` / `a bit` / `a little` halving the step toward 90. Matching is whole-word, so `wide` never matches `widescreen` (an output aspect) and `closer` never matches a word it merely appears inside. Named levels are checked most specific first. There is no multiplier form ("2x") and no continuous dial from language; those are recorded limitations, not silent approximations.
+- **The consumed framing phrase is removed before direction detection.** `pull back` and `back up` contain direction words ("back"), and reading them as a 180° turn while also widening the lens would be two conflicting instructions from one phrase. The phrase is consumed by the framing parser and removed from the text the direction parser sees — the same technique Objective 15 already uses for temporal ranges.
+- **A clause that carries framing AND a direction or subject is ONE move carrying both** — "pan right and zoom in" is a pan at 60°, and "zoom in on the presenter" is an aim at the presenter at 60°. Because plain "and" (and a bare comma) do not separate clauses, the subject capture could otherwise swallow the framing half ("follow me and zoom in" captured `me and zoom in`); a trailing framing clause is therefore stripped from a subject reference exactly as a trailing temporal word already was.
+- **A framing-only clause is a real move.** It changes the lens without moving the camera, holding the direction the camera already has (centered forward when the instruction opens with a lens change). That is what makes `start wide, then push in on me` a genuine two-keyframe move — wide forward at t=0, tight on the subject at the end — using the interpolation `CameraPath` already performs.
+- **The lens persists until it is changed again**, in the builder, exactly as a zoom ring does. An instruction with no framing clause renders at the same default lens it always did, so nothing that does not mention framing changes behaviour.
+- **Every execution path is wired explicitly rather than assumed.** The ordinary builder carries the lens per move; the follow path passes it into `TargetTrackPlanner::Config` (its keyframes are its own); the speaker path passes a single requested lens into `SpeakerReframePlanner::Config`. A **lens change** cannot be expressed by the speaker planner, and rendering one fixed lens instead would drop half the request, so it is refused honestly through the existing preparation error path.
+- **IPC-4 guards the result.** The contract checker (Decision 035) gains a fourth rule: when the instruction requested one or more fields of view, the executable plan must actually **reach** each of them. It is deliberately not "every keyframe carries a requested value", because a lens change legitimately starts from the lens the camera already had. NotApplicable when no framing was requested.
+- **An unsatisfiable lens is reported, never clamped.** `field of view 200` is recorded in the intent's notes as outside the supported range and passed through, so the existing plan validator refuses the plan and the command fails with both messages.
+
+## Consequences
+
+- Reframing instructions can now set the framing: `zoom in`, `go wide`, `use a close-up`, `zoom in on the presenter`, `follow me and zoom in`, `keep me centered and slightly closer`, `start wide, then push in on me`, `field of view 45`, `keep 0:00 to 0:30 and zoom in`.
+- The framing that was applied is reported deterministically (`Framing: field of view 60 degrees.`) and travels with the command result into the application outcome, so a creator sees what was applied instead of inferring it.
+- **Nothing that does not mention framing changes.** The default lens stays 90° in the builder and the target planner and 75° in the speaker planner; directions, aim/follow classification, temporal editing, compound composition, source-audio preservation, replay and every persisted artifact are untouched.
+- A requested lens reaches the **pixels**: the same camera direction at a tighter field of view renders a different picture, and a stored decision carrying the lens replays identically — both asserted.
+- Recorded limitations: the vocabulary is a fixed ladder plus explicit numbers (no "2x", no arrow-key ramp); framing offsets (rule-of-thirds, lead room) remain deliberately absent (Decision 046); a lens change is not expressible on the speaker path and is refused rather than approximated.
+- Not in this objective: framing offsets, per-subject framing, multi-subject framing, zoom by multiplier, any UI control, any perception, analysis, reasoning or persisted-schema change. Decisions 017-048 are preserved.
+
+## Verification
+
+- 6 new model-free tests: the parser (`reframeIntentParsesFraming` — the ladder, explicit numbers, the softener, word boundaries, the "pull back" direction trap, subject capture with `and` and with a comma, compound temporal+framing, an unsatisfiable value reported, and a two-state lens change); the builder (`reframeBuilderAppliesRequestedFraming` — framing-only, direction+framing, the wide-to-tight path with interpolation checked mid-way, lens persistence, the unchanged default, and the honest refusal of an unsatisfiable lens); the contract (`reframeContractFieldOfViewFidelity` — NotApplicable, consistent, IPC-4 on a dropped lens, and the containment rule for a lens change); the follow path (`reframeCommandRunnerFollowsAtRequestedFraming` — the same trajectory at the requested lens, timestamps and yaw identical, plus a detector-free direction+framing command); the speaker path (`reframeCommandRunnerSpeakerFramingIsHonest` — a single lens honoured, a lens change refused); and end to end (`reframePipelineRendersRequestedFraming` — two FFmpeg renders whose pictures must differ, the note reported, and an Application command whose stored decision carries the lens and whose replay reproduces the frames byte-for-byte at decode level).
+- Targeted regression over the parser, builder, contract, command runner, camera path, follow/sampling/smoothing, planners, pipeline and render-equivalence, replay and application-command tests: **73 passed / 0 failed / 0 skipped** (29.6 s).
+- Full model-free suite run at the checkpoint.
+
+---
+
+*Decisions 001-048 are preserved verbatim; this decision adds to them and supersedes none of them.*
+

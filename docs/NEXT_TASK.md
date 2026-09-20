@@ -211,6 +211,42 @@ No change to `ReframePlan`, `CameraKeyframe`, `EditDecision`, the `Project` sche
 
 ---
 
+## 360 Reframing Objective 29 — Natural-Language Framing (Lens) Control — Complete
+
+Status: **Complete — implemented and verified (2026-09-18).**
+
+### Objective
+
+The virtual camera could aim and follow but could not change its **lens**: `ReframePlanBuilder` wrote `fieldOfViewDeg = 90.0` for every keyframe, and the target and speaker planners carried their own constants, so no instruction in any phrasing could reach a field of view — "zoom in on me" was not even recognized. Make framing a first-class part of a natural-language reframe instruction, using only the executable representation that already existed.
+
+### Scope (implemented)
+
+- **`ReframeCameraMove` gained `hasFieldOfView` / `fieldOfViewDeg`** (in-memory only, exactly like `followSubject`; `ReframeIntent` is never persisted). No change to `ReframePlan`, `CameraKeyframe` (which already carried the field and already serialized it), `EditDecision` or the `Project` schema.
+- **A deterministic framing vocabulary**: named absolute levels (`zoom in`/`close-up` 60, `extreme close-up`/`zoom in a lot` 40, `wide`/`zoom out`/`pull back` 120, `very wide`/`zoom all the way out` 140), explicit numbers (`field of view 60`, `60 degree field of view`, `fov=75`), and a `slightly`/`a bit`/`a little` softener that halves the step toward 90. Whole-word matching keeps `wide` out of `widescreen` (an output aspect) and named levels are checked most specific first.
+- **The consumed framing phrase is removed before direction detection**, so `pull back` and `back up` widen the lens instead of also turning the camera 180° — the same technique Objective 15 uses for temporal ranges.
+- **Framing combines with direction and subject in one move**: `pan right and zoom in` is a pan at 60°; `zoom in on the presenter` is an aim at the presenter at 60°; a trailing framing clause is stripped from a subject capture (`follow me and zoom in`, `follow me, zoom in`) exactly as a trailing temporal word already was.
+- **A framing-only clause is a real move that changes the lens without moving the camera**, holding the direction the camera already has. `start wide, then push in on me` is therefore a genuine two-keyframe move (wide forward → tight on the subject) interpolated by the existing `CameraPath`.
+- **The lens persists until changed again** (builder), and every path is wired explicitly: the ordinary builder per move, the follow path through `TargetTrackPlanner::Config`, the speaker path through `SpeakerReframePlanner::Config` for a single requested lens. A lens **change** on the speaker path is refused honestly rather than rendered at one lens.
+- **IPC-4** added to the Objective 18 contract checker: every requested field of view must be *reached* by the executable plan (not equality over keyframes, because a lens change legitimately starts from the previous lens); NotApplicable when no framing was requested.
+- **An unsatisfiable lens is reported, never clamped**: the note says so and the existing plan validator refuses the plan.
+- The applied framing is reported (`Framing: field of view 60 degrees.`) and travels with the command result into the application outcome.
+
+### Verification
+
+- 6 new model-free tests: `reframeIntentParsesFraming`, `reframeBuilderAppliesRequestedFraming`, `reframeContractFieldOfViewFidelity`, `reframeCommandRunnerFollowsAtRequestedFraming`, `reframeCommandRunnerSpeakerFramingIsHonest`, `reframePipelineRendersRequestedFraming` (two real FFmpeg renders whose pictures must differ, plus an Application command whose stored decision carries the lens and whose replay reproduces the frames).
+- Targeted regression over the parser, builder, contract, runner, camera path, follow/sampling/smoothing, planners, pipeline, render equivalence, replay and application-command tests: **73 passed / 0 failed / 0 skipped** (29.6 s).
+- Full model-free suite run at the checkpoint.
+
+### Boundary
+
+No change to `ReframePlan`, `CameraKeyframe`, `EditDecision`, the `Project` schema, perception, target tracking, analysis, reasoning or the UI. No new dependency, no model, no LLM. Framing offsets, multi-subject framing, multiplier zoom and any UI control remain out of scope.
+
+### Decision
+
+- Decision 049 (natural-language framing is a lens on the existing plan; a framing clause is a camera move, the lens persists, and IPC-4 guards that a requested lens is reached). Decisions 017-048 preserved.
+
+---
+
 ## Next Objective (Phase 3, Objective 5) — NOT STARTED (deferred behind the 360 priority)
 
 Application-level player lifecycle orchestration: have `Application` own/create/replace/dispose the media source, frame pump, and player in step with the active-media contract, and define how an event-loop driver (not the `Player`) invokes `tick()`. Preserve the Objective 10 preview-time contract and keep the viewer presentation-only. UI playback controls, duration/ffprobe, audio, and timeline remain deferred. Requires its own scoped objective before implementation. Do not begin automatically while the 360 reframing priority is active.
@@ -639,7 +675,8 @@ The established product direction is that Reelcraft must first become a working 
 - **the covering-view duplicate-identity finding from Objective 23** (two cover views reporting one subject with centroids further apart than the tracker merge distance) — **CLOSED by Objective 27 (Decision 047)**, which consolidates duplicates by the overlapping angular footprint the detection already reports; the merge distance was deliberately left at 8.0°.
 
 - **creator review and revision surface** over persisted decisions (`decisionProvenance()` and `reviseEditDecision()` exist as APIs with no UI);
-- **speaker/dialogue capability**, which first needs a licensing-and-capability evaluation before any engineering.
+- **speaker/dialogue capability**, which first needs a licensing-and-capability evaluation before any engineering;
+- **framing depth** — objects `zoom` reaches but the vocabulary does not: framing offsets (lead room / rule of thirds, deliberately refused by Decision 046 until a decision changes the meaning of "centered"), **multi-subject framing** ("keep both of us in frame", which needs plural references, two resolved tracks and an enclosure policy), and multiplier zoom ("2x"). Each needs its own scoped objective; none is started.
 
 **Carried-forward constraint (Decisions 033 / 034, binding):** persisted decisions are **immutable**. A revision is expressed as a **new decision referencing the prior one through a single parent hash**, never as a mutation.
 

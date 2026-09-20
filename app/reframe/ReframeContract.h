@@ -31,7 +31,10 @@
 //   - a temporal edit may widen the final source range;
 //   - an empty camera instruction may synthesize a centered-forward keyframe;
 //   - missing output and missing time range legitimately use caller defaults;
-//   - labels and notes are descriptive only.
+//   - labels and notes are descriptive only;
+//   - a requested lens CHANGE legitimately starts from the previous lens, so
+//     IPC-4 requires every requested field of view to be REACHED by the plan,
+//     never that every keyframe carry one of them.
 
 // One contract violation: a stable machine-readable rule id plus a deterministic
 // human-readable detail.
@@ -60,9 +63,11 @@ public:
     static QString outputFidelityRuleId();
     static QString timeRangeRuleId();
     static QString temporalMaterialisationRuleId();
+    // Objective 29.
+    static QString fieldOfViewRuleId();
 
-    // Evaluates IPC-1, IPC-2 and IPC-3 in a fixed order so that the returned
-    // violation list is deterministic.
+    // Evaluates IPC-1, IPC-2, IPC-3 and IPC-4 in a fixed order so that the
+    // returned violation list is deterministic.
     static ContractReport check(const ReframeIntent &intent,
                                 const ReframePlan &plan);
 };

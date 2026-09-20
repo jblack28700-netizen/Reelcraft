@@ -1,6 +1,7 @@
 #include "reframe/ReframeContract.h"
 
 #include <QStringList>
+#include <QtGlobal>
 
 namespace {
 
@@ -45,6 +46,11 @@ QString ReframeContract::timeRangeRuleId()
 QString ReframeContract::temporalMaterialisationRuleId()
 {
     return QStringLiteral("IPC-3");
+}
+
+QString ReframeContract::fieldOfViewRuleId()
+{
+    return QStringLiteral("IPC-4");
 }
 
 ContractReport ReframeContract::check(const ReframeIntent &intent,
@@ -117,6 +123,33 @@ ContractReport ReframeContract::check(const ReframeIntent &intent,
             "a temporal edit was requested and resolved, but the plan retains "
             "no source segment");
         report.violations.append(violation);
+    }
+
+    // IPC-4 -- requested field-of-view fidelity (Objective 29).
+    // NotApplicable when the instruction asked for no framing: the builder
+    // default is then intentionally used. Every requested lens must actually be
+    // REACHED by the executable plan, because a plan that never gets there has
+    // silently dropped a framing request. This is deliberately not "every
+    // keyframe carries a requested value": a lens change legitimately starts
+    // from the lens the camera already had.
+    const QList<double> requestedFieldOfViews = intent.requestedFieldOfViews();
+    for (double requested : requestedFieldOfViews) {
+        bool reached = false;
+        for (const CameraKeyframe &frame : plan.keyframes()) {
+            if (qAbs(frame.fieldOfViewDeg - requested) < 1e-6) {
+                reached = true;
+                break;
+            }
+        }
+        if (!reached) {
+            ContractViolation violation;
+            violation.ruleId = fieldOfViewRuleId();
+            violation.detail =
+                QStringLiteral("requested a %1 degree field of view but no "
+                               "keyframe of the plan renders at that lens")
+                    .arg(formatDouble(requested));
+            report.violations.append(violation);
+        }
     }
 
     return report;

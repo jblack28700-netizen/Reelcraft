@@ -841,3 +841,16 @@ Date: 2026-09-18
 - Still to come: Reelcraft cannot *play* sound. Playback inside the application remains pictures-only, and adding that is a separate piece of work with its own dependency decision; this change is about what Reelcraft exports.
 - 7 new tests, all on generated fixtures, none requiring real footage; targeted regression 20 passed / 0 failed / 0 skipped and the full model-free suite 466 passed / 0 failed / 9 skipped. Decision 048 records the design.
 
+
+## v0.2.66 — Reframed results can now be framed tight or wide
+
+Date: 2026-09-18
+
+- Reelcraft can now change how close a reframed result is, not just where it points. Asking for "zoom in", "go wide", "use a close-up", or naming an exact lens ("field of view 45") now produces a result at that framing, where previously every reframe used one fixed lens and such instructions were not understood at all.
+- Framing combines with what already worked. "Follow me and zoom in" follows the subject through the clip at the closer lens. "Zoom in on the presenter" aims at them, closer. "Start wide, then push in on me" opens wide and closes in over the clip, using the same camera-path machinery as any other multi-step reframe.
+- A framing instruction on its own simply changes the lens: "zoom in" is a close view of the centre of the frame, with the camera otherwise still.
+- The default lens is unchanged, so any instruction that does not mention framing produces exactly the result it did before.
+- A lens that cannot be produced is refused with an explanation rather than quietly ignored, and the framing that was applied is reported with the result so the creator can see what happened.
+- Nothing about detection, tracking, identity, timing, audio or saved decisions changed: the requested lens lives inside the edit plan Reelcraft already stores, so a saved edit still replays to exactly the same frames.
+- 6 new tests; targeted regression 73 passed / 0 failed / 0 skipped and the full model-free suite 472 passed / 0 failed / 9 skipped. Decision 049 records the design.
+

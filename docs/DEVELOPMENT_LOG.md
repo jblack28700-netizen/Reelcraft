@@ -2119,3 +2119,44 @@ Close the last incomplete stage of the priority pipeline. Every stage of *360 so
 
 - Decision 048 recorded (the rendered output preserves the source audio of the plan's retained spans; audio is an execution policy, not a plan field, and the picture keeps the encoder it always had). Decisions 017-047 preserved unchanged.
 
+
+
+## 2026-09-18 — Phase 4 Objective 29: Natural-Language Framing (Lens) Control
+
+### Objective
+
+The 360 pipeline could aim and follow the camera but could not change its lens. Give a natural-language reframe instruction control of the framing (`zoom in`, `go wide`, `close-up`, explicit field of view), using the executable representation that already exists rather than inventing one.
+
+### What inspection found
+
+- The gap was structural, not a missing keyword. `ReframePlanBuilder` wrote `frame.fieldOfViewDeg = 90.0` for every keyframe it built, and the other two planners own their own constants (`TargetTrackPlanner::Config::fieldOfViewDeg = 90`, `SpeakerReframePlanner::Config::fieldOfViewDeg = 75`). No instruction could reach any of them.
+- "zoom in" was not even *recognized*: `clauseHasCameraKeyword` lists camera verbs and `zoom` is not among them, so the clause was skipped and the instruction reported as unrecognized.
+- The executable representation needed **nothing new**: `CameraKeyframe::fieldOfViewDeg` already exists, is already serialized (a round-trip test already covers it), is already interpolated by `CameraPath::interpolate`, is already rendered by `ReframeRenderer` through `EquirectView`, and is already validated to [20, 140]. That is what made this a small objective instead of a plan change.
+- Two traps were found by reading the existing parser rather than by testing: `directionFromClause` treats `back` as a 180° turn, so the natural widening phrases `pull back` and `back up` would have produced a turn AND a lens change; and a subject capture is end-anchored and greedy, so `follow me and zoom in` would have captured `me and zoom in` as the subject (the same reason Objective 15 needed to strip a trailing temporal word).
+
+### What was built
+
+- **`ReframeCameraMove::hasFieldOfView` / `fieldOfViewDeg`** — in-memory only, exactly like `followSubject`. No `ReframePlan`, `CameraKeyframe`, `EditDecision` or `Project` schema change and no new persisted field.
+- **A deterministic framing vocabulary** in the parser: named absolute levels checked most specific first, explicit numbers (`field of view 60`, `60 degree field of view`, `fov=75`), and a `slightly`/`a bit`/`a little` softener that halves the step toward 90. Matching is whole-word, so `wide` never matches `widescreen` (which is an output aspect) and `closer` never matches a word it merely appears inside.
+- **The consumed phrase is removed from the text used for direction detection**, so `pull back`/`back up` change the lens without turning the camera — the same "strip the other half's words before parsing this half" technique Objective 15 established for temporal ranges.
+- **Framing composes with direction, subject and the follow class**: one clause carrying framing plus a direction or subject is one move carrying both; a trailing framing clause is stripped from a subject capture for `and` and for a bare comma, so `follow me and zoom in` and `follow me, zoom in` both keep the follow.
+- **A framing-only clause becomes a real move** that holds the direction the camera already has (centered forward when the instruction opens with a lens change), which turns `start wide, then push in on me` into a genuine two-keyframe move interpolated by the existing `CameraPath`.
+- **The lens persists until it is changed again** in the builder, and each execution path is wired explicitly: the builder per move, the follow path through `TargetTrackPlanner::Config`, the speaker path through `SpeakerReframePlanner::Config` for a single requested lens. A lens **change** on the speaker path is refused through the existing preparation error path rather than rendered at one lens.
+- **IPC-4** extends the Objective 18 contract checker: every requested field of view must be *reached* by the executable plan. It is deliberately not equality over every keyframe, because a lens change legitimately starts from the lens the camera already had.
+- **An unsatisfiable lens is reported, never clamped**: the intent note names the supported range and the existing plan validator refuses the plan; the applied framing is reported (`Framing: field of view 60 degrees.`) and reaches the application outcome through the existing notes plumbing.
+
+### Verification
+
+- 6 new model-free tests: `reframeIntentParsesFraming` (ladder, explicit numbers, softener, word boundaries, the `pull back` direction trap, subject capture with `and` and with a comma, compound temporal+framing, an unsatisfiable value reported, a two-state lens change); `reframeBuilderAppliesRequestedFraming` (framing-only, direction+framing, the wide→tight path with the mid-path lens checked, lens persistence, the unchanged default, honest refusal); `reframeContractFieldOfViewFidelity` (NotApplicable, consistent, IPC-4 on a dropped lens, containment for a lens change); `reframeCommandRunnerFollowsAtRequestedFraming` (the same trajectory at the requested lens — timestamps, yaw and keyframe count identical — plus a detector-free direction+framing command); `reframeCommandRunnerSpeakerFramingIsHonest` (a single lens honoured, a lens change refused); `reframePipelineRendersRequestedFraming` (two real FFmpeg renders whose decoded pictures must differ, the framing note reported, and an Application command whose stored decision carries the lens and whose replay reproduces the frames).
+- Targeted regression over the parser, builder, contract, runner, camera path, follow/sampling/smoothing, planners, pipeline, render equivalence, replay and application-command tests: **73 passed / 0 failed / 0 skipped** (29.6 s).
+- Official `scripts/build_and_test.sh`: exit 0, **472 passed / 0 failed / 9 skipped** (64.2 s). The skips are unchanged and by design (8 environment-gated real-media/model integrations plus the child-only replay slot).
+
+### Boundary notes / not implemented
+
+- No change to directions, aim/follow classification, temporal editing, compound composition, source-audio preservation, the planners' own default lenses, perception, target tracking, analysis, reasoning, replay or any persisted artifact. No new dependency, no model, no LLM, no network.
+- Recorded limitations: the vocabulary is a fixed ladder plus explicit numbers (no "2x" multiplier, no continuous dial); framing offsets (lead room / rule of thirds) remain deliberately absent per Decision 046; a lens change is not expressible on the speaker path and is refused rather than approximated; multi-subject framing ("keep both of us in frame") is not implemented.
+
+### Decisions
+
+- Decision 049 recorded (natural-language framing is a lens on the existing plan: a framing clause is a camera move, the lens persists until changed, and IPC-4 guarantees a requested lens is reached). Decisions 017-048 preserved unchanged.
+

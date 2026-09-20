@@ -32,6 +32,18 @@ struct ReframeCameraMove
     // This is an in-memory intent field only: ReframeIntent is never persisted
     // (EditDecision stores the resolved plan), so it carries no schema impact.
     bool followSubject = false;
+    // Objective 29: the lens this instruction asks for, when it asks for one.
+    // A framing clause ("zoom in", "go wide", "close-up", "field of view 60")
+    // sets it, and a clause that carries ONLY framing — neither a direction nor
+    // a subject — is a framing instruction that changes the lens without moving
+    // the camera. The value is an absolute vertical field of view in degrees,
+    // inside the range ReframePlan already validates.
+    //
+    // In-memory only, exactly like followSubject: ReframeIntent is never
+    // persisted, and the executable plan already carries each keyframe's field
+    // of view, so this introduces no schema change.
+    bool hasFieldOfView = false;
+    double fieldOfViewDeg = 90.0;
 };
 
 // Structured interpretation of a natural-language reframing request. This is
@@ -69,6 +81,13 @@ struct ReframeIntent
     {
         return hasTemporalRequest && !moves.isEmpty();
     }
+
+    // Objective 29: the DISTINCT field-of-view values this instruction asked
+    // for, in instruction order. Empty means the instruction said nothing about
+    // framing — which is deliberately different from "framing was requested at
+    // the default value", because only the first is compatible with silently
+    // using the default lens.
+    QList<double> requestedFieldOfViews() const;
 };
 
 // Deterministic, rule-based parser for a small, documented instruction

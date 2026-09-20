@@ -643,3 +643,30 @@ An audio output seam driven by the existing position/seek model — a `QAudioSin
 
 *Related, resolved by Objective 28: renders are no longer silent. Earlier statements that "rendered results are silent by design" (Decision 036 and the Objective 19 release notes) described the state before Decision 048 and are preserved as history.*
 
+
+# Issue — Framing vocabulary and framing depth are bounded (2026-09-18)
+
+### Status
+
+Open — intentional boundary, not a defect (Decision 049).
+
+### Description
+
+Objective 29 gave natural-language reframe instructions control of the lens. Three limits are deliberate and worth stating plainly:
+
+- **The vocabulary is a fixed ladder plus explicit numbers.** Named levels are absolute fields of view (40/60/75/90/105/120/140 degrees) and explicit forms are `field of view 60`, `60 degree field of view` and `fov=75`. A multiplier form ("2x zoom") and a continuous dial ("about 55 degrees", "a nudge tighter") are not understood; they fall through to the nearest named level or to no framing request at all.
+- **Framing offsets are deliberately absent.** "Centered" means centered (Decision 046): lead room and rule-of-thirds placement would change what the existing follow commands ask for and need their own decision.
+- **A lens change cannot be expressed on the speaker path.** `SpeakerReframePlanner` owns its keyframes, so a single requested lens is applied through its config and a request for two different lenses in one command is refused honestly rather than rendered at one lens. Multi-subject framing ("keep both of us in frame") is not implemented at all.
+
+### Impact
+
+A creator can frame a reframe tight or wide, including a slow push-in over the clip, but cannot ask for a fractional lens, a multiplier, an off-centre composition, or framing that holds two subjects. Unsupported phrasings are either resolved to the nearest documented level or reported; they are never silently clamped.
+
+### Planned Resolution
+
+Each of these is a future scoped objective if it serves the 360 workflow: a multiplier or relative-step vocabulary as a parser extension, framing offsets behind an explicit decision that changes the meaning of "centered", multi-subject framing (plural references, two resolved tracks, an enclosure policy) as its own objective, and lens changes on the speaker path only if the speaker planner gains a lens timeline.
+
+---
+
+*Related, resolved by Objective 29: no instruction could change the field of view at all. Earlier statements that every keyframe is built at a fixed 90 degrees describe the state before Decision 049 and are preserved as history.*
+

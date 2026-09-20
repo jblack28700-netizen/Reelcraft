@@ -186,11 +186,18 @@ ReframeCommandResult ReframeCommandRunner::prepare(
     // captured during resolution below. Only a single target-referencing follow
     // move qualifies; everything else keeps the existing behaviour.
     QString followReference;
+    // Objective 29: the follow path builds its own keyframes through
+    // TargetTrackPlanner, so a lens requested by the same instruction is carried
+    // across explicitly rather than assumed.
+    bool followHasFieldOfView = false;
+    double followFieldOfViewDeg = 0.0;
     if (result.intent.moves.size() == 1) {
         const ReframeCameraMove &move = result.intent.moves.first();
         if (move.followSubject && !move.hasDirection
             && !move.targetRef.isEmpty() && !isSpeakerReference(move.targetRef)) {
             followReference = move.targetRef;
+            followHasFieldOfView = move.hasFieldOfView;
+            followFieldOfViewDeg = move.fieldOfViewDeg;
         }
     }
     QString followTrackId;
@@ -356,11 +363,33 @@ ReframeCommandResult ReframeCommandRunner::prepare(
                                            result.intent.outputHeight,
                                            result.intent.outputFps }
                 : request.defaultOutput;
+        // Objective 29: a speaker plan's keyframes belong to
+        // SpeakerReframePlanner, so a requested lens is applied through its
+        // config. A LENS CHANGE cannot be expressed there, and rendering one
+        // fixed lens instead would silently drop half the request, so it is
+        // refused honestly.
+        const QList<double> speakerFieldOfViews =
+            result.intent.requestedFieldOfViews();
+        SpeakerReframePlanner::Config speakerConfig;
+        if (speakerFieldOfViews.size() > 1) {
+            QStringList requested;
+            for (double fieldOfView : speakerFieldOfViews) {
+                requested.append(QString::number(fieldOfView, 'g', 10));
+            }
+            result.error = QStringLiteral(
+                "A command cannot combine a speaker reference with a lens "
+                "change (requested fields of view: %1 degrees).")
+                               .arg(requested.join(QStringLiteral(", ")));
+            return result;
+        }
+        if (speakerFieldOfViews.size() == 1) {
+            speakerConfig.fieldOfViewDeg = speakerFieldOfViews.first();
+        }
+
         ReframePlan speakerPlan;
         QString speakerPlanError;
         if (!SpeakerReframePlanner::plan(analysis.segments, tracks, range,
-                                         output,
-                                         SpeakerReframePlanner::Config{},
+                                         output, speakerConfig,
                                          &speakerPlan, &speakerPlanError)) {
             result.error = speakerPlanError.isEmpty()
                 ? QStringLiteral("No active speaker could be associated with a "
@@ -517,6 +546,11 @@ ReframeCommandResult ReframeCommandRunner::prepare(
                     : request.defaultOutput;
             TargetTrackPlanner::Config followConfig;
             followConfig.minConfidence = request.resolveConfig.minConfidence;
+            if (followHasFieldOfView) {
+                // Objective 29: "follow me and zoom in" must follow at the
+                // requested lens, not at the planner's default.
+                followConfig.fieldOfViewDeg = followFieldOfViewDeg;
+            }
             ReframePlan followPlan;
             QString followError;
             if (TargetTrackPlanner::planTrack(track, range, followOutput,
