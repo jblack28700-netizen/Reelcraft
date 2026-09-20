@@ -1091,6 +1091,12 @@ private slots:
     void reframeCommandRunnerResolvesTwoDetectedPeople();
     void reframeCommandRunnerRejectsUnsatisfiableMultiSubject();
     void reframeCommandRunnerFramesMovingSubjectsAndReplays();
+    // Objective 31: N-way group framing.
+    void reframeIntentParsesGroupFraming();
+    void reframeGroupFramingResolvesCanonicalSets();
+    void reframeGroupFramingRefusesHonestly();
+    void reframeGroupFramingGeometrySweep();
+    void reframeGroupFramingRendersAndReplays();
     void mediaAnalysisJsonRoundTripAndIdentity();
     void mediaAnalysisSchemaVersionAndDigestHandling();
     void mediaAnalysisSourceStatusDistinguishesMissingFromChanged();
@@ -11661,8 +11667,14 @@ FrameDirection frameDirection(double yawDeg, double pitchDeg)
 
 // The EXACT containment test of EquirectView's camera basis (roll 0): every
 // corner of the subject's reported footprint must project inside the frame.
-// Used to prove the framing rule really contains the subjects rather than merely
-// returning a number.
+//
+// The renderer builds a pixel's ray as
+// forward + right*(ndcX*tanHalf*aspect) + up*(ndcY*tanHalf), so a direction d is
+// inside exactly when |d.right / d.forward| <= tanHalf*aspect and
+// |d.up / d.forward| <= tanHalf — the TANGENT form. (An earlier version of this
+// helper compared direction cosines, which is too permissive and would accept
+// directions well outside the frame; Objective 31's geometry sweep caught the
+// same mistake in the framing rule itself.)
 bool subjectInsideFrame(double aimYawDeg, double aimPitchDeg, double fovDeg,
                         double aspect, double yawDeg, double pitchDeg,
                         double yawRadiusDeg, double pitchRadiusDeg)
@@ -11692,17 +11704,61 @@ bool subjectInsideFrame(double aimYawDeg, double aimPitchDeg, double fovDeg,
         for (double cornerPitch : pitches) {
             const FrameDirection direction =
                 frameDirection(cornerYaw, cornerPitch);
+            const double alongForward = direction.x * forward.x
+                + direction.y * forward.y + direction.z * forward.z;
+            if (alongForward <= 1e-9) {
+                return false; // at or behind the view plane
+            }
             const double lateral = direction.x * right.x + direction.y * right.y
                 + direction.z * right.z;
             const double vertical = direction.x * up.x + direction.y * up.y
                 + direction.z * up.z;
-            if (qAbs(lateral) > tanHalf * aspect + 1e-9) {
+            if (qAbs(lateral / alongForward) > tanHalf * aspect + 1e-9) {
                 return false;
             }
-            if (qAbs(vertical) > tanHalf + 1e-9) {
+            if (qAbs(vertical / alongForward) > tanHalf + 1e-9) {
                 return false;
             }
         }
+    }
+    return true;
+}
+
+// Containment of a plan against the ACTUAL resolved observations it was built
+// from: at every keyframe, every requested track's footprint at that timestamp
+// must be inside the frame under the exact basis condition. This is the honest
+// assertion — it never assumes a footprint size the detector did not report.
+bool planContainsTracks(const ReframePlan &plan, const QList<TargetTrack> &tracks,
+                        const QStringList &ids, int *checkedPairs)
+{
+    const double aspect = static_cast<double>(plan.output().width)
+        / static_cast<double>(plan.output().height);
+    int checks = 0;
+    for (const CameraKeyframe &keyframe : plan.keyframes()) {
+        for (const TargetTrack &track : tracks) {
+            if (!ids.contains(track.id())) {
+                continue;
+            }
+            for (const TargetObservation &observation : track.observations()) {
+                if (observation.timeMs != keyframe.timeMs) {
+                    continue;
+                }
+                ++checks;
+                if (!subjectInsideFrame(keyframe.yawDeg, keyframe.pitchDeg,
+                                        keyframe.fieldOfViewDeg, aspect,
+                                        observation.yawDeg, observation.pitchDeg,
+                                        observation.yawRadiusDeg,
+                                        observation.pitchRadiusDeg)) {
+                    if (checkedPairs) {
+                        *checkedPairs = checks;
+                    }
+                    return false;
+                }
+            }
+        }
+    }
+    if (checkedPairs) {
+        *checkedPairs = checks;
     }
     return true;
 }
@@ -11730,7 +11786,7 @@ void ProjectTest::reframeIntentParsesMultiSubjectFraming()
         QStringLiteral("keep both of us in frame"));
     QVERIFY(us.recognized);
     QCOMPARE(us.moves.size(), 1);
-    QCOMPARE(us.moves.at(0).subjectGroup, ReframeSubjectGroup::CreatorAndOther);
+    QCOMPARE(us.moves.at(0).subjectGroup, ReframeSubjectGroup::CreatorAndOthers);
     QVERIFY(us.moves.at(0).followSubject);
     QVERIFY(us.moves.at(0).targetRef.isEmpty());
     QVERIFY(!us.moves.at(0).hasDirection);
@@ -11740,26 +11796,26 @@ void ProjectTest::reframeIntentParsesMultiSubjectFraming()
 
     QCOMPARE(ReframeIntentParser::parse(QStringLiteral("keep us both in frame"))
                  .moves.at(0).subjectGroup,
-             ReframeSubjectGroup::CreatorAndOther);
+             ReframeSubjectGroup::CreatorAndOthers);
     QCOMPARE(ReframeIntentParser::parse(QStringLiteral("follow both of us"))
                  .moves.at(0).subjectGroup,
-             ReframeSubjectGroup::CreatorAndOther);
+             ReframeSubjectGroup::CreatorAndOthers);
     QCOMPARE(ReframeIntentParser::parse(QStringLiteral("keep the two of us framed"))
                  .moves.at(0).subjectGroup,
-             ReframeSubjectGroup::CreatorAndOther);
+             ReframeSubjectGroup::CreatorAndOthers);
 
     QCOMPARE(ReframeIntentParser::parse(QStringLiteral("keep both people in frame"))
                  .moves.at(0).subjectGroup,
-             ReframeSubjectGroup::TwoPeople);
+             ReframeSubjectGroup::VisiblePeople);
     QCOMPARE(ReframeIntentParser::parse(QStringLiteral("keep both of them in frame"))
                  .moves.at(0).subjectGroup,
-             ReframeSubjectGroup::TwoPeople);
+             ReframeSubjectGroup::VisiblePeople);
     QCOMPARE(ReframeIntentParser::parse(QStringLiteral("frame both people"))
                  .moves.at(0).subjectGroup,
-             ReframeSubjectGroup::TwoPeople);
+             ReframeSubjectGroup::VisiblePeople);
     QCOMPARE(ReframeIntentParser::parse(QStringLiteral("follow both people"))
                  .moves.at(0).subjectGroup,
-             ReframeSubjectGroup::TwoPeople);
+             ReframeSubjectGroup::VisiblePeople);
 
     // Single-subject instructions are untouched: no group, same subject, same
     // follow/aim classification.
@@ -11787,13 +11843,13 @@ void ProjectTest::reframeIntentParsesMultiSubjectFraming()
         QStringLiteral("pan right and keep both of us in frame"));
     QCOMPARE(mixed.moves.size(), 1);
     QVERIFY(mixed.moves.at(0).hasDirection);
-    QCOMPARE(mixed.moves.at(0).subjectGroup, ReframeSubjectGroup::CreatorAndOther);
+    QCOMPARE(mixed.moves.at(0).subjectGroup, ReframeSubjectGroup::CreatorAndOthers);
 
     // Objective 29 composes with Objective 30.
     const ReframeIntent framed = ReframeIntentParser::parse(
         QStringLiteral("keep both of us in frame, wide"));
     QCOMPARE(framed.requestedFieldOfViews(), QList<double>{ 120.0 });
-    QCOMPARE(framed.moves.at(0).subjectGroup, ReframeSubjectGroup::CreatorAndOther);
+    QCOMPARE(framed.moves.at(0).subjectGroup, ReframeSubjectGroup::CreatorAndOthers);
 }
 
 void ProjectTest::reframeMultiSubjectFramingGeometry()
@@ -11991,12 +12047,18 @@ void ProjectTest::reframeCommandRunnerResolvesTwoDetectedPeople()
     QVERIFY(!result.plan.keyframes().isEmpty());
     for (const CameraKeyframe &keyframe : result.plan.keyframes()) {
         QVERIFY(qAbs(keyframe.yawDeg) < 12.0);
-        QVERIFY(subjectInsideFrame(keyframe.yawDeg, keyframe.pitchDeg,
-                                   keyframe.fieldOfViewDeg, 16.0 / 9.0, -30.0,
-                                   0.0, 10.0, 10.0));
-        QVERIFY(subjectInsideFrame(keyframe.yawDeg, keyframe.pitchDeg,
-                                   keyframe.fieldOfViewDeg, 16.0 / 9.0, 30.0,
-                                   0.0, 10.0, 10.0));
+    }
+    // Containment is asserted against the DETECTOR'S OWN reported footprints, not
+    // an assumed size: the framing must hold for what was actually seen.
+    {
+        QStringList ids;
+        for (const ReframeTarget &target : result.resolvedTargets) {
+            ids.append(target.id);
+        }
+        int pairs = 0;
+        QVERIFY2(planContainsTracks(result.plan, result.tracks, ids, &pairs),
+                 "a detected person's footprint is outside the frame");
+        QVERIFY(pairs > 0);
     }
 
     // The flagship phrasing: "keep both of us in frame" resolves the creator
@@ -12020,12 +12082,16 @@ void ProjectTest::reframeCommandRunnerResolvesTwoDetectedPeople()
     for (const CameraKeyframe &keyframe : usResult.plan.keyframes()) {
         QVERIFY2(qAbs(keyframe.yawDeg) < 12.0,
                  qPrintable(QString::number(keyframe.yawDeg)));
-        QVERIFY(subjectInsideFrame(keyframe.yawDeg, keyframe.pitchDeg,
-                                   keyframe.fieldOfViewDeg, 16.0 / 9.0, -30.0,
-                                   0.0, 10.0, 10.0));
-        QVERIFY(subjectInsideFrame(keyframe.yawDeg, keyframe.pitchDeg,
-                                   keyframe.fieldOfViewDeg, 16.0 / 9.0, 30.0,
-                                   0.0, 10.0, 10.0));
+    }
+    {
+        QStringList ids;
+        for (const ReframeTarget &target : usResult.resolvedTargets) {
+            ids.append(target.id);
+        }
+        int pairs = 0;
+        QVERIFY2(planContainsTracks(usResult.plan, usResult.tracks, ids, &pairs),
+                 "a detected person's footprint is outside the frame");
+        QVERIFY(pairs > 0);
     }
 }
 
@@ -12089,7 +12155,7 @@ void ProjectTest::reframeCommandRunnerRejectsUnsatisfiableMultiSubject()
     const ReframeCommandResult threeResult =
         ReframeCommandRunner::prepare(three, nullptr, nullptr);
     QVERIFY(!threeResult.ok);
-    QVERIFY2(threeResult.error.contains(QStringLiteral("exactly two visible people")),
+    QVERIFY2(threeResult.error.contains(QStringLiteral("needs exactly 2 visible people")),
              qPrintable(threeResult.error));
 
     // Subjects never observed together produce no honest framing at all.
@@ -12245,6 +12311,536 @@ void ProjectTest::reframeCommandRunnerFramesMovingSubjectsAndReplays()
     QCOMPARE(sha256Of(decodeAllFramesRaw(replayOutput)), sha256Of(firstFrames));
 
     // Source media is untouched by any of it.
+    QCOMPARE(QFileInfo(source).size(), sourceBefore.size());
+    QCOMPARE(QFileInfo(source).lastModified(), sourceBefore.lastModified());
+    QCOMPARE(sha256Of(readFileBytes(source)), sourceDigestBefore);
+}
+
+// ============ N-way group framing (Objective 31) ===========================
+//
+// "the three of us", "all of us", "the three people", "everyone": the group and
+// its SIZE come from the phrase; WHICH tracks is resolved at command time through
+// the selector's canonical order, so nothing depends on detector enumeration
+// order and a group is never completed by substituting or dropping a subject.
+
+namespace {
+
+// Objective 31: one member track of a group. The Objective 30 helper already
+// takes a single track; this name keeps the group tests readable.
+TargetTrack groupMember(const QString &id, double yawDeg, double pitchDeg,
+                        double yawRadiusDeg, double pitchRadiusDeg,
+                        const QList<qint64> &times)
+{
+    return pairTrack(id, yawDeg, pitchDeg, yawRadiusDeg, pitchRadiusDeg, times);
+}
+
+} // namespace
+
+void ProjectTest::reframeIntentParsesGroupFraming()
+{
+    const auto groupOf = [](const QString &text, int *count) {
+        const ReframeIntent intent = ReframeIntentParser::parse(text);
+        if (intent.moves.isEmpty()
+            || intent.moves.first().subjectGroup == ReframeSubjectGroup::None) {
+            return ReframeSubjectGroup::None;
+        }
+        if (count) {
+            *count = intent.moves.first().subjectCount;
+        }
+        return intent.moves.first().subjectGroup;
+    };
+
+    int count = -1;
+
+    // Named sizes, creator family: creator + (n-1) other visible people.
+    QCOMPARE(groupOf(QStringLiteral("keep the three of us in frame"), &count),
+             ReframeSubjectGroup::CreatorAndOthers);
+    QCOMPARE(count, 3);
+    QCOMPARE(groupOf(QStringLiteral("keep all three of us in frame"), &count),
+             ReframeSubjectGroup::CreatorAndOthers);
+    QCOMPARE(count, 3);
+    QCOMPARE(groupOf(QStringLiteral("frame the four of us"), &count),
+             ReframeSubjectGroup::CreatorAndOthers);
+    QCOMPARE(count, 4);
+    QCOMPARE(groupOf(QStringLiteral("keep the 5 of us in frame"), &count),
+             ReframeSubjectGroup::CreatorAndOthers);
+    QCOMPARE(count, 5);
+    QCOMPARE(groupOf(QStringLiteral("follow both of us"), &count),
+             ReframeSubjectGroup::CreatorAndOthers);
+    QCOMPARE(count, 2);
+
+    // Count-free creator family: the creator and every other visible person.
+    QCOMPARE(groupOf(QStringLiteral("keep all of us in frame"), &count),
+             ReframeSubjectGroup::CreatorAndOthers);
+    QCOMPARE(count, 0);
+    QCOMPARE(groupOf(QStringLiteral("keep us all in frame"), &count),
+             ReframeSubjectGroup::CreatorAndOthers);
+    QCOMPARE(count, 0);
+
+    // Named sizes, people family: exactly n visible people.
+    QCOMPARE(groupOf(QStringLiteral("keep the three people in frame"), &count),
+             ReframeSubjectGroup::VisiblePeople);
+    QCOMPARE(count, 3);
+    QCOMPARE(groupOf(QStringLiteral("keep three of them in frame"), &count),
+             ReframeSubjectGroup::VisiblePeople);
+    QCOMPARE(count, 3);
+    QCOMPARE(groupOf(QStringLiteral("frame 4 people"), &count),
+             ReframeSubjectGroup::VisiblePeople);
+    QCOMPARE(count, 4);
+    QCOMPARE(groupOf(QStringLiteral("keep both people in frame"), &count),
+             ReframeSubjectGroup::VisiblePeople);
+    QCOMPARE(count, 2);
+
+    // Count-free people family: every resolved person.
+    QCOMPARE(groupOf(QStringLiteral("keep everyone in frame"), &count),
+             ReframeSubjectGroup::VisiblePeople);
+    QCOMPARE(count, 0);
+    QCOMPARE(groupOf(QStringLiteral("keep everybody in shot"), &count),
+             ReframeSubjectGroup::VisiblePeople);
+    QCOMPARE(count, 0);
+    QCOMPARE(groupOf(QStringLiteral("keep all of them in frame"), &count),
+             ReframeSubjectGroup::VisiblePeople);
+    QCOMPARE(count, 0);
+    // The more specific phrase wins: "all of the people" is a group, not a
+    // passing mention.
+    QCOMPARE(groupOf(QStringLiteral("keep all of the people in frame"), &count),
+             ReframeSubjectGroup::VisiblePeople);
+    QCOMPARE(count, 0);
+
+    // A size below two is not a group request, and a passing mention is not one
+    // either: neither may silently become a framing instruction.
+    QCOMPARE(groupOf(QStringLiteral("keep the one of us in frame"), nullptr),
+             ReframeSubjectGroup::None);
+    QCOMPARE(groupOf(QStringLiteral("make a version with all of us"), nullptr),
+             ReframeSubjectGroup::None);
+
+    // Single-subject behavior is untouched.
+    QCOMPARE(groupOf(QStringLiteral("keep me centered"), nullptr),
+             ReframeSubjectGroup::None);
+    QCOMPARE(groupOf(QStringLiteral("follow the person"), nullptr),
+             ReframeSubjectGroup::None);
+
+    // The applied group and size are reported deterministically.
+    const ReframeIntent three =
+        ReframeIntentParser::parse(QStringLiteral("keep the three of us in frame"));
+    const QString threeNotes = three.notes.join(QStringLiteral("\n"));
+    QVERIFY2(threeNotes.contains(QStringLiteral("3 subjects")),
+             qPrintable(threeNotes));
+    QVERIFY2(threeNotes.contains(QStringLiteral("2 other visible people")),
+             qPrintable(threeNotes));
+    const ReframeIntent everyone =
+        ReframeIntentParser::parse(QStringLiteral("keep everyone in frame"));
+    QVERIFY2(everyone.notes.join(QStringLiteral("\n"))
+                 .contains(QStringLiteral("every visible person")),
+             qPrintable(everyone.notes.join(QStringLiteral(" | "))));
+}
+
+void ProjectTest::reframeGroupFramingResolvesCanonicalSets()
+{
+    const QList<qint64> times{ 0, 1000, 2000, 3000, 4000 };
+    const auto request = [](const QString &instruction) {
+        ReframeCommandRequest request;
+        request.instruction = instruction;
+        request.defaultRange = ReframePlan::TimeRange{ 0, 4000 };
+        request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+        return request;
+    };
+    const auto idsOfResult = [](const ReframeCommandResult &result) {
+        QStringList ids;
+        for (const ReframeTarget &target : result.resolvedTargets) {
+            ids.append(target.id);
+        }
+        return ids;
+    };
+
+    // Three visible people, exactly: resolved and framed together.
+    ReframeCommandRequest three = request(QStringLiteral("keep the three people in frame"));
+    three.resolvedTracks = {
+        groupMember(QStringLiteral("t1"), -30.0, 0.0, 4.0, 4.0, times),
+        groupMember(QStringLiteral("t2"), 0.0, 0.0, 5.0, 5.0, times),
+        groupMember(QStringLiteral("t3"), 30.0, 0.0, 4.0, 4.0, times)
+    };
+    const ReframeCommandResult threeResult =
+        ReframeCommandRunner::prepare(three, nullptr, nullptr);
+    QVERIFY2(threeResult.ok, qPrintable(threeResult.error));
+    QCOMPARE(threeResult.resolvedTargets.size(), 3);
+    QCOMPARE(idsOfResult(threeResult),
+             QStringList({ QStringLiteral("t1"), QStringLiteral("t2"),
+                           QStringLiteral("t3") }));
+    QVERIFY(!threeResult.plan.keyframes().isEmpty());
+    const double threeLens = threeResult.plan.keyframes().first().fieldOfViewDeg;
+    for (const CameraKeyframe &keyframe : threeResult.plan.keyframes()) {
+        QCOMPARE(keyframe.fieldOfViewDeg, threeLens);
+    }
+    // Every resolved subject's own reported footprint is inside every keyframe.
+    int threePairs = 0;
+    QVERIFY2(planContainsTracks(threeResult.plan, three.resolvedTracks,
+                                QStringList({ QStringLiteral("t1"),
+                                              QStringLiteral("t2"),
+                                              QStringLiteral("t3") }),
+                                &threePairs),
+             "a resolved subject's footprint is outside the frame");
+    QCOMPARE(threePairs, 3 * threeResult.plan.keyframes().size());
+
+    // Four or more, and canonical order regardless of input order.
+    ReframeCommandRequest four = request(QStringLiteral("keep the four people in frame"));
+    four.resolvedTracks = {
+        groupMember(QStringLiteral("t3"), 45.0, 0.0, 3.0, 3.0, times),
+        groupMember(QStringLiteral("t1"), -45.0, 0.0, 3.0, 3.0, times),
+        groupMember(QStringLiteral("t4"), 15.0, 0.0, 3.0, 3.0, times),
+        groupMember(QStringLiteral("t2"), -15.0, 0.0, 3.0, 3.0, times)
+    };
+    const ReframeCommandResult fourResult =
+        ReframeCommandRunner::prepare(four, nullptr, nullptr);
+    QVERIFY2(fourResult.ok, qPrintable(fourResult.error));
+    QCOMPARE(idsOfResult(fourResult),
+             QStringList({ QStringLiteral("t1"), QStringLiteral("t2"),
+                           QStringLiteral("t3"), QStringLiteral("t4") }));
+
+    ReframeCommandRequest everyone = request(QStringLiteral("keep everyone in frame"));
+    everyone.resolvedTracks = four.resolvedTracks;
+    const ReframeCommandResult everyoneResult =
+        ReframeCommandRunner::prepare(everyone, nullptr, nullptr);
+    QVERIFY2(everyoneResult.ok, qPrintable(everyoneResult.error));
+    QCOMPARE(everyoneResult.resolvedTargets.size(), 4);
+    QCOMPARE(everyoneResult.plan.toJsonObject(), fourResult.plan.toJsonObject());
+
+    // Creator-inclusive groups: the creator leads, the others keep canonical
+    // order, and the named size counts the OTHERS.
+    ReframeCommandRequest us = request(QStringLiteral("keep the three of us in frame"));
+    us.resolvedTracks = {
+        groupMember(QStringLiteral("t1"), -20.0, 0.0, 4.0, 4.0, times),
+        groupMember(QStringLiteral("t2"), 20.0, 0.0, 4.0, 4.0, times),
+        groupMember(QStringLiteral("t9"), -40.0, 0.0, 4.0, 4.0, times)
+    };
+    us.hasCreatorSelection = true;
+    us.creatorSelection.identity = QStringLiteral("me");
+    us.creatorSelection.timeMs = 0;
+    us.creatorSelection.yawDeg = -40.0;
+    us.creatorSelection.pitchDeg = 0.0;
+    us.creatorSelection.label = QStringLiteral("person");
+    const ReframeCommandResult usResult =
+        ReframeCommandRunner::prepare(us, nullptr, nullptr);
+    QVERIFY2(usResult.ok, qPrintable(usResult.error));
+    QCOMPARE(usResult.resolvedTargets.size(), 3);
+    QCOMPARE(usResult.resolvedTargets.first().id, QStringLiteral("t9"));
+
+    ReframeCommandRequest allOfUs = request(QStringLiteral("keep all of us in frame"));
+    allOfUs.resolvedTracks = us.resolvedTracks;
+    allOfUs.hasCreatorSelection = true;
+    allOfUs.creatorSelection = us.creatorSelection;
+    const ReframeCommandResult allOfUsResult =
+        ReframeCommandRunner::prepare(allOfUs, nullptr, nullptr);
+    QVERIFY2(allOfUsResult.ok, qPrintable(allOfUsResult.error));
+    QCOMPARE(allOfUsResult.resolvedTargets.size(), 3);
+
+    // Repeated planning is deterministic, in plan and in resolved set.
+    const ReframeCommandResult repeat =
+        ReframeCommandRunner::prepare(three, nullptr, nullptr);
+    QVERIFY2(repeat.ok, qPrintable(repeat.error));
+    QCOMPARE(repeat.plan.toJsonObject(), threeResult.plan.toJsonObject());
+    QCOMPARE(idsOfResult(repeat), idsOfResult(threeResult));
+}
+
+void ProjectTest::reframeGroupFramingRefusesHonestly()
+{
+    const QList<qint64> times{ 0, 1000, 2000 };
+    const auto request = [](const QString &instruction) {
+        ReframeCommandRequest request;
+        request.instruction = instruction;
+        request.defaultRange = ReframePlan::TimeRange{ 0, 2000 };
+        request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+        return request;
+    };
+
+    // A named size that cannot be satisfied is reported with its candidates.
+    ReframeCommandRequest threeWhenTwo =
+        request(QStringLiteral("keep the three people in frame"));
+    threeWhenTwo.resolvedTracks = {
+        groupMember(QStringLiteral("t1"), -20.0, 0.0, 4.0, 4.0, times),
+        groupMember(QStringLiteral("t2"), 20.0, 0.0, 4.0, 4.0, times)
+    };
+    const ReframeCommandResult threeWhenTwoResult =
+        ReframeCommandRunner::prepare(threeWhenTwo, nullptr, nullptr);
+    QVERIFY(!threeWhenTwoResult.ok);
+    QVERIFY2(threeWhenTwoResult.error.contains(
+                 QStringLiteral("needs exactly 3 visible people")),
+             qPrintable(threeWhenTwoResult.error));
+    QVERIFY(threeWhenTwoResult.error.contains(QStringLiteral("t1")));
+    QVERIFY(threeWhenTwoResult.plan.keyframes().isEmpty());
+
+    // The creator family counts the OTHERS, not the total.
+    ReframeCommandRequest threeOfUs =
+        request(QStringLiteral("keep the three of us in frame"));
+    threeOfUs.resolvedTracks = threeWhenTwo.resolvedTracks;
+    threeOfUs.hasCreatorSelection = true;
+    threeOfUs.creatorSelection.identity = QStringLiteral("me");
+    threeOfUs.creatorSelection.timeMs = 0;
+    threeOfUs.creatorSelection.yawDeg = -20.0;
+    threeOfUs.creatorSelection.pitchDeg = 0.0;
+    threeOfUs.creatorSelection.label = QStringLiteral("person");
+    const ReframeCommandResult threeOfUsResult =
+        ReframeCommandRunner::prepare(threeOfUs, nullptr, nullptr);
+    QVERIFY(!threeOfUsResult.ok);
+    QVERIFY2(threeOfUsResult.error.contains(
+                 QStringLiteral("exactly 2 other visible people")),
+             qPrintable(threeOfUsResult.error));
+
+    // "of us" without a selected creator is refused, never approximated.
+    ReframeCommandRequest usUnselected =
+        request(QStringLiteral("keep all of us in frame"));
+    usUnselected.resolvedTracks = threeWhenTwo.resolvedTracks;
+    const ReframeCommandResult usUnselectedResult =
+        ReframeCommandRunner::prepare(usUnselected, nullptr, nullptr);
+    QVERIFY(!usUnselectedResult.ok);
+    QVERIFY2(usUnselectedResult.error.contains(
+                 QStringLiteral("could not resolve 'me'")),
+             qPrintable(usUnselectedResult.error));
+
+    // A count-free group still needs at least two resolvable subjects.
+    ReframeCommandRequest everyoneAlone = request(QStringLiteral("keep everyone in frame"));
+    everyoneAlone.resolvedTracks = {
+        groupMember(QStringLiteral("t1"), 0.0, 0.0, 4.0, 4.0, times)
+    };
+    const ReframeCommandResult everyoneAloneResult =
+        ReframeCommandRunner::prepare(everyoneAlone, nullptr, nullptr);
+    QVERIFY(!everyoneAloneResult.ok);
+    QVERIFY2(everyoneAloneResult.error.contains(
+                 QStringLiteral("at least two visible people")),
+             qPrintable(everyoneAloneResult.error));
+
+    // A group that cannot fit inside the renderable field of view is refused with
+    // the measured requirement: never clamped, never reduced to fewer subjects.
+    ReframeCommandRequest tooWide = request(QStringLiteral("keep the three people in frame"));
+    tooWide.resolvedTracks = {
+        groupMember(QStringLiteral("t1"), -80.0, 0.0, 4.0, 4.0, times),
+        groupMember(QStringLiteral("t2"), 0.0, 0.0, 4.0, 4.0, times),
+        groupMember(QStringLiteral("t3"), 80.0, 0.0, 4.0, 4.0, times)
+    };
+    const ReframeCommandResult tooWideResult =
+        ReframeCommandRunner::prepare(tooWide, nullptr, nullptr);
+    QVERIFY(!tooWideResult.ok);
+    QVERIFY2(tooWideResult.error.contains(QStringLiteral("maximum")),
+             qPrintable(tooWideResult.error));
+    QVERIFY(tooWideResult.plan.keyframes().isEmpty());
+
+    // A named lens that cannot contain the group is refused, not widened; the
+    // same geometry at an explicitly wide lens is accepted.
+    ReframeCommandRequest tight =
+        request(QStringLiteral("keep the three people in frame, close-up"));
+    tight.resolvedTracks = {
+        groupMember(QStringLiteral("t1"), -50.0, 0.0, 4.0, 4.0, times),
+        groupMember(QStringLiteral("t2"), 0.0, 0.0, 4.0, 4.0, times),
+        groupMember(QStringLiteral("t3"), 50.0, 0.0, 4.0, 4.0, times)
+    };
+    const ReframeCommandResult tightResult =
+        ReframeCommandRunner::prepare(tight, nullptr, nullptr);
+    QVERIFY(!tightResult.ok);
+    QVERIFY2(tightResult.error.contains(QStringLiteral("too narrow")),
+             qPrintable(tightResult.error));
+
+    ReframeCommandRequest wide =
+        request(QStringLiteral("keep the three people in frame, wide"));
+    wide.resolvedTracks = tight.resolvedTracks;
+    const ReframeCommandResult wideResult =
+        ReframeCommandRunner::prepare(wide, nullptr, nullptr);
+    QVERIFY2(wideResult.ok, qPrintable(wideResult.error));
+    for (const CameraKeyframe &keyframe : wideResult.plan.keyframes()) {
+        QCOMPARE(keyframe.fieldOfViewDeg, 120.0);
+    }
+
+    // Single-subject and two-subject behavior are unchanged.
+    ReframeCommandRequest single = request(QStringLiteral("keep person 1 centered"));
+    single.resolvedTracks = tight.resolvedTracks;
+    const ReframeCommandResult singleResult =
+        ReframeCommandRunner::prepare(single, nullptr, nullptr);
+    QVERIFY2(singleResult.ok, qPrintable(singleResult.error));
+    QCOMPARE(singleResult.resolvedTargets.size(), 1);
+    for (const CameraKeyframe &keyframe : singleResult.plan.keyframes()) {
+        QCOMPARE(keyframe.fieldOfViewDeg, 90.0);
+    }
+    ReframeCommandRequest pair = request(QStringLiteral("keep both people in frame"));
+    pair.resolvedTracks = threeWhenTwo.resolvedTracks;
+    const ReframeCommandResult pairResult =
+        ReframeCommandRunner::prepare(pair, nullptr, nullptr);
+    QVERIFY2(pairResult.ok, qPrintable(pairResult.error));
+    QCOMPARE(pairResult.resolvedTargets.size(), 2);
+}
+
+void ProjectTest::reframeGroupFramingGeometrySweep()
+{
+    // A deterministic sweep of group geometries through the pure framing rule.
+    // Every accepted framing must contain EVERY subject's reported footprint when
+    // tested against the renderer's real camera basis; every refused one must say
+    // why (the renderable maximum), never silently clamp.
+    const int counts[] = { 3, 4, 5, 6 };
+    const double baseYaws[] = { 0.0, 170.0, -170.0 };
+    // 150 degrees forces the honest "cannot fit" refusal for several
+    // combinations, so the sweep exercises both outcomes.
+    const double spreads[] = { 10.0, 40.0, 90.0, 150.0 };
+    const double basePitches[] = { 0.0, 55.0 };
+    const int widths[] = { 1920, 1080, 1080, 2560 };
+    const int heights[] = { 1080, 1920, 1080, 1080 };
+
+    int accepted = 0;
+    int refused = 0;
+    for (int count : counts) {
+        for (double baseYaw : baseYaws) {
+            for (double spread : spreads) {
+                for (double basePitch : basePitches) {
+                    for (int output = 0; output < 4; ++output) {
+                        QList<TargetObservation> observations;
+                        for (int i = 0; i < count; ++i) {
+                            const double fraction =
+                                count > 1 ? static_cast<double>(i)
+                                                / static_cast<double>(count - 1)
+                                          : 0.5;
+                            const double yaw =
+                                baseYaw - spread / 2.0 + spread * fraction;
+                            // Non-uniform footprints and a little vertical spread.
+                            const double radius = 2.0 + (i % 3) * 3.0;
+                            observations.append(subjectObservation(
+                                0, yaw, basePitch + (i % 2 == 0 ? -3.0 : 3.0),
+                                radius, radius));
+                        }
+                        const int width = widths[output];
+                        const int height = heights[output];
+                        const auto framing =
+                            TargetTrackPlanner::enclosingFramingDeg(observations,
+                                                                    width, height);
+                        if (!framing.ok) {
+                            ++refused;
+                            QVERIFY2(framing.error.contains(
+                                         QStringLiteral("maximum")),
+                                     qPrintable(framing.error));
+                            continue;
+                        }
+                        ++accepted;
+                        QVERIFY(framing.fieldOfViewDeg >= 20.0);
+                        QVERIFY(framing.fieldOfViewDeg <= 140.0);
+                        const double aspect = static_cast<double>(width) / height;
+                        for (const TargetObservation &observation : observations) {
+                            QVERIFY2(
+                                subjectInsideFrame(
+                                    framing.yawDeg, framing.pitchDeg,
+                                    framing.fieldOfViewDeg, aspect,
+                                    observation.yawDeg, observation.pitchDeg,
+                                    observation.yawRadiusDeg,
+                                    observation.pitchRadiusDeg),
+                                qPrintable(QStringLiteral(
+                                    "count=%1 baseYaw=%2 spread=%3 pitch=%4 "
+                                    "%5x%6 yaw=%7 r=%8 fov=%9 aim=%10/%11")
+                                               .arg(count)
+                                               .arg(baseYaw)
+                                               .arg(spread)
+                                               .arg(basePitch)
+                                               .arg(width)
+                                               .arg(height)
+                                               .arg(observation.yawDeg)
+                                               .arg(observation.yawRadiusDeg)
+                                               .arg(framing.fieldOfViewDeg)
+                                               .arg(framing.yawDeg)
+                                               .arg(framing.pitchDeg)));
+                        }
+                        // A pure function: repeating it gives identical numbers.
+                        const auto again =
+                            TargetTrackPlanner::enclosingFramingDeg(observations,
+                                                                    width, height);
+                        QVERIFY(again.ok);
+                        QCOMPARE(again.yawDeg, framing.yawDeg);
+                        QCOMPARE(again.pitchDeg, framing.pitchDeg);
+                        QCOMPARE(again.fieldOfViewDeg, framing.fieldOfViewDeg);
+                    }
+                }
+            }
+        }
+    }
+    // The sweep must exercise BOTH outcomes: a group that fits, and a group that
+    // cannot be framed at all.
+    QVERIFY2(accepted > 0, "no accepted geometry in the sweep");
+    QVERIFY2(refused > 0, "no refused geometry in the sweep");
+}
+
+void ProjectTest::reframeGroupFramingRendersAndReplays()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable in this environment");
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString source;
+    QVERIFY(createEquirectReviewVideo(directory.path(),
+                                      FrameExtractor::defaultExecutablePath(), 8,
+                                      &source));
+    const QFileInfo sourceBefore(source);
+    const QString sourceDigestBefore = sha256Of(readFileBytes(source));
+
+    const QList<qint64> times{ 0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000 };
+    ReframeCommandRequest request;
+    request.sourcePath = source;
+    request.sourceMediaId = QStringLiteral("group-media");
+    request.instruction = QStringLiteral("keep the three people in frame");
+    request.defaultRange = ReframePlan::TimeRange{ 0, 4000 };
+    request.defaultOutput = ReframePlan::OutputSpec{ 160, 90, 2.0 };
+    request.resolvedTracks = {
+        groupMember(QStringLiteral("t1"), -28.0, 0.0, 4.0, 4.0, times),
+        groupMember(QStringLiteral("t2"), 0.0, 0.0, 4.0, 4.0, times),
+        groupMember(QStringLiteral("t3"), 28.0, 0.0, 4.0, 4.0, times)
+    };
+
+    const QString firstOutput = directory.filePath(QStringLiteral("group.mp4"));
+    request.outputPath = firstOutput;
+    const ReframeCommandResult result =
+        ReframeCommandRunner::run(request, nullptr, nullptr);
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QVERIFY(QFileInfo::exists(firstOutput));
+    const QList<CameraKeyframe> keyframes = result.plan.keyframes();
+    QVERIFY(keyframes.size() >= 5);
+    const double lens = keyframes.first().fieldOfViewDeg;
+    for (int i = 0; i < keyframes.size(); ++i) {
+        QCOMPARE(keyframes.at(i).fieldOfViewDeg, lens);
+        if (i > 0) {
+            QVERIFY(keyframes.at(i).timeMs > keyframes.at(i - 1).timeMs);
+        }
+        for (const double yaw : { -28.0, 0.0, 28.0 }) {
+            QVERIFY(subjectInsideFrame(keyframes.at(i).yawDeg,
+                                       keyframes.at(i).pitchDeg, lens, 16.0 / 9.0,
+                                       yaw, 0.0, 4.0, 4.0));
+        }
+    }
+
+    // Deterministic execution.
+    ReframeCommandRequest repeat = request;
+    const QString repeatOutput = directory.filePath(QStringLiteral("group_again.mp4"));
+    repeat.outputPath = repeatOutput;
+    const ReframeCommandResult repeatResult =
+        ReframeCommandRunner::run(repeat, nullptr, nullptr);
+    QVERIFY2(repeatResult.ok, qPrintable(repeatResult.error));
+    QCOMPARE(repeatResult.plan.toJsonObject(), result.plan.toJsonObject());
+    const QByteArray firstFrames = decodeAllFramesRaw(firstOutput);
+    QVERIFY(!firstFrames.isEmpty());
+    QCOMPARE(sha256Of(decodeAllFramesRaw(repeatOutput)), sha256Of(firstFrames));
+
+    // Replay stays perception-free: the stored plan reproduces the render.
+    const MediaItem media = MediaItem::createFromFilePath(source, nullptr);
+    QVERIFY(media.isValid());
+    const EditDecision decision = EditDecision::fromPlan(
+        result.plan, media, request.instruction,
+        QDateTime::fromMSecsSinceEpoch(0, Qt::UTC));
+    const QString decisionPath = directory.filePath(QStringLiteral("group.json"));
+    QString error;
+    QVERIFY2(decision.save(decisionPath, &error), qPrintable(error));
+    bool loaded = false;
+    const EditDecision restored = EditDecision::load(decisionPath, &loaded, &error);
+    QVERIFY2(loaded, qPrintable(error));
+    QCOMPARE(restored.plan().toJsonObject(), result.plan.toJsonObject());
+    const QString replayOutput = directory.filePath(QStringLiteral("group_replay.mp4"));
+    const ReframePipeline::Result replayed =
+        ReframePipeline::renderPlan(restored.plan(), source, replayOutput, nullptr);
+    QVERIFY2(replayed.ok, qPrintable(replayed.error));
+    QCOMPARE(sha256Of(decodeAllFramesRaw(replayOutput)), sha256Of(firstFrames));
+
+    // Source media untouched throughout.
     QCOMPARE(QFileInfo(source).size(), sourceBefore.size());
     QCOMPARE(QFileInfo(source).lastModified(), sourceBefore.lastModified());
     QCOMPARE(sha256Of(readFileBytes(source)), sourceDigestBefore);

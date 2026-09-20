@@ -2291,3 +2291,87 @@ touched.
 
 - Decision 051 recorded. Decisions 001-050 preserved unchanged.
 
+
+
+## 2026-09-18 — 360 Reframing Objective 31: N-Way Group Framing
+
+### Objective
+
+Extend Objective 30's two-subject framing to deterministic N-way group framing for "the three of us",
+"all of us", "the three people" and "everyone", reusing the generalised enclosure geometry where it is
+correct — and testing the real spherical camera basis against every target, which is what exposed the
+defect below.
+
+### What inspection found
+
+- **The engine was already N-general.** `enclosingFramingDeg` requires only ≥2 observations and
+  `planTracks` only ≥2 track ids; the joint-timestamp loop, the per-timestamp enclosure and the
+  single-lens rule all iterate every requested track. Nothing in the planner needed to change.
+- **The pair restriction lived entirely in the decision layer**: `ReframeSubjectGroup` knew two
+  groups, `pluralGroupFromClause` knew "both" phrasings only, and the runner expanded the group into
+  a hard-coded pair (`{me, the other person}` or `{person 1, person 2}`) with a `size() != 2` gate.
+- **The enclosure rule was an approximation, and the containment test was too permissive.**
+  Objective 30 derived the required field of view from the group's yaw and pitch *spans*, and the
+  test helper compared direction *cosines*. The renderer's condition is a *tangent* condition, so the
+  rule under-frames when a footprint occupies yaw and pitch together, and the helper accepted
+  directions outside the frame. The new property sweep reproduced it immediately (six subjects,
+  ±13° yaw, ±11° pitch, 1920x1080: a corner escaped the computed 22° lens).
+
+### What was built
+
+- **Count-carrying groups.** `ReframeSubjectGroup` is now `CreatorAndOthers` / `VisiblePeople`,
+  with `ReframeCameraMove::subjectCount` (0 = count-free). The vocabulary adds named sizes as words
+  or digits ("the three of us", "all three of us", "the 5 of us", "the three people", "three of
+  them", "4 people") and count-free forms ("all of us", "us all", "everyone", "everybody", "all of
+  them", "all of the people"), most specific phrase first. A size below two is not a group request.
+- **N-way resolution in the runner.** The group is expanded through the selector's canonical order:
+  the creator (through the existing identity rules, with the creator leading the group) plus the
+  other visible people, or the visible people themselves. A named size must be satisfied exactly and
+  is refused with its candidates otherwise; a count-free group needs at least two resolvable subjects
+  (or, for "of us", at least one other person). Nothing depends on detector or container order.
+- **The enclosure rule is now exact in the renderer's basis**: aim at the centre of the unwrapped
+  yaw/pitch span, built exactly as `EquirectView` builds its basis (including the degenerate
+  fallback), with the required half-tangent taken over **every footprint corner**. Containment holds
+  for the whole footprint; a corner at or behind the view plane, or a requirement above 140°, refuses
+  with the measured reason; the 20° floor still contains everything.
+- **Containment assertions now use the tangent form and the actual reported footprints**, including
+  in the Objective 30 tests (two of their assertions assumed a footprint size the detector had not
+  reported).
+
+### Verification
+
+- 5 new model-free tests: `reframeIntentParsesGroupFraming` (vocabulary, sizes, precedence, sizes
+  below two, passing mentions, single-subject non-regression, the reported note);
+  `reframeGroupFramingResolvesCanonicalSets` (three exact, four by digit, "everyone" count-free, the
+  creator leading "the three of us" and "all of us", canonical order regardless of input order,
+  repeated planning identical); `reframeGroupFramingRefusesHonestly` (count mismatch with
+  candidates, the creator family counting the others, no creator selected, a single subject for
+  "everyone", a group beyond the renderable maximum, a named lens too narrow plus the same geometry
+  accepted at a wide lens, and single/two-subject non-regression);
+  `reframeGroupFramingGeometrySweep` (a deterministic sweep over 3-6 subjects, three base yaws
+  including ±170, four spreads including 150, two pitch levels including 55°, non-uniform footprints
+  and four output aspects — every accepted framing asserted with the exact basis condition against
+  every footprint corner, every refusal asserted to name the renderable maximum, both outcomes
+  exercised, and the rule shown to be a pure function); `reframeGroupFramingRendersAndReplays`
+  (three-subject plan executed through the real pipeline twice with identical decoded frames, wrapped
+  in an `EditDecision`, re-loaded and replayed to identical frames, with the source's size, mtime and
+  content hash unchanged).
+- Targeted regression: **101 passed / 0 failed / 0 skipped** (40.7 s).
+- Full model-free suite at the checkpoint (baseline 478/0/9).
+
+### Boundary notes / not implemented
+
+- No schema, persisted artifact, plan type, dependency, provider or rendering change. Single-subject
+  and two-subject behaviour, the follow path (with its smoothing), lens control, temporal editing,
+  audio preservation and replay are unchanged; the contract still cannot verify containment
+  (Decision 050).
+- Recorded limits: sizes up to ten; group membership fixed for the instruction; the group path is not
+  smoothed; framing offsets remain absent. Explicit subject-reference sets are Objective 32.
+- `PROJECT_HISTORY.md` was deliberately not touched: under the Objective P1 convention it records
+  milestone-level narrative, and this family's milestone closes when Objective 32 lands.
+
+### Decisions
+
+- Decision 052 recorded (N-way group framing, plus the enclosure rule computed exactly in the
+  renderer's basis and the corrected containment assertions). Decisions 001-051 preserved.
+

@@ -225,44 +225,118 @@ TargetTrackPlanner::EnclosingFraming TargetTrackPlanner::enclosingFramingDeg(
         maxPitch = qMax(maxPitch, highPitch);
     }
 
-    const double yawSpan = maxYaw - minYaw;
-    const double pitchSpan = maxPitch - minPitch;
     const double aspect =
         static_cast<double>(outputWidth) / static_cast<double>(outputHeight);
-    // Vertical requirement from the pitch span, and the vertical requirement
-    // whose horizontal coverage equals the yaw span (the exact inversion of the
-    // renderer's basis). Both are conservative, as documented in the header.
-    const double verticalFromPitch = pitchSpan;
-    const double verticalFromYaw = qRadiansToDegrees(
-        2.0 * std::atan(std::tan(qDegreesToRadians(yawSpan / 2.0)) / aspect));
-    if (!std::isfinite(verticalFromPitch) || !std::isfinite(verticalFromYaw)) {
+
+    // The aim is the centre of the unwrapped yaw span and of the pitch span: the
+    // only preference-free choice, since it favours no subject.
+    const double aimYaw = EquirectProjection::normalizeYawDeg((minYaw + maxYaw) / 2.0);
+    const double aimPitch = EquirectProjection::clampPitchDeg((minPitch + maxPitch) / 2.0);
+
+    // The requirement is computed EXACTLY in the renderer's own basis at that
+    // aim (roll 0), not from the spans: EquirectView builds a pixel's ray as
+    // forward + right*(ndcX*tanHalf*aspect) + up*(ndcY*tanHalf), so a direction
+    // is inside the frame exactly when |lateral/forward| <= tanHalf*aspect and
+    // |vertical/forward| <= tanHalf. Deriving the requirement from the spans
+    // instead is only an approximation, and it under-frames where a footprint
+    // occupies yaw AND pitch at once.
+    const double aimYawRad = qDegreesToRadians(aimYaw);
+    const double aimPitchRad = qDegreesToRadians(aimPitch);
+    const double forward[3] = { std::cos(aimPitchRad) * std::sin(aimYawRad),
+                                std::cos(aimPitchRad) * std::cos(aimYawRad),
+                                std::sin(aimPitchRad) };
+    // Same construction and same degenerate fallback as the renderer.
+    double right[3] = { forward[1], -forward[0], 0.0 };
+    const double rightLength = std::sqrt(right[0] * right[0]
+                                         + right[1] * right[1]
+                                         + right[2] * right[2]);
+    if (rightLength < 1e-12) {
+        right[0] = 1.0;
+        right[1] = 0.0;
+        right[2] = 0.0;
+    } else {
+        right[0] /= rightLength;
+        right[1] /= rightLength;
+        right[2] /= rightLength;
+    }
+    const double up[3] = { right[1] * forward[2] - right[2] * forward[1],
+                           right[2] * forward[0] - right[0] * forward[2],
+                           right[0] * forward[1] - right[1] * forward[0] };
+
+    double requiredTanHalf = 0.0;
+    for (const TargetObservation &observation : observations) {
+        const double yaw = EquirectProjection::normalizeYawDeg(observation.yawDeg);
+        const double yawRadius = qMax(0.0, observation.yawRadiusDeg);
+        const double pitchRadius = qMax(0.0, observation.pitchRadiusDeg);
+        const double pitch = EquirectProjection::clampPitchDeg(observation.pitchDeg);
+        const double cornersYaw[2] = { yaw - yawRadius, yaw + yawRadius };
+        const double cornersPitch[2] = {
+            EquirectProjection::clampPitchDeg(pitch - pitchRadius),
+            EquirectProjection::clampPitchDeg(pitch + pitchRadius)
+        };
+        for (double cornerYaw : cornersYaw) {
+            for (double cornerPitch : cornersPitch) {
+                const double yawRad = qDegreesToRadians(cornerYaw);
+                const double pitchRad = qDegreesToRadians(cornerPitch);
+                const double direction[3] = {
+                    std::cos(pitchRad) * std::sin(yawRad),
+                    std::cos(pitchRad) * std::cos(yawRad),
+                    std::sin(pitchRad)
+                };
+                const double alongForward = direction[0] * forward[0]
+                    + direction[1] * forward[1] + direction[2] * forward[2];
+                if (alongForward <= 1e-9) {
+                    // A footprint corner at or behind the view plane cannot be
+                    // contained by any field of view from this aim: refuse rather
+                    // than claim a framing that would clip it.
+                    framing.error = QStringLiteral(
+                        "Keeping every requested subject in frame needs more "
+                        "than the supported maximum of %1 degrees of field of "
+                        "view.")
+                                        .arg(QString::number(
+                                            EquirectProjection::MaxFieldOfViewDeg,
+                                            'f', 1));
+                    return framing;
+                }
+                const double lateral = direction[0] * right[0]
+                    + direction[1] * right[1] + direction[2] * right[2];
+                const double vertical = direction[0] * up[0]
+                    + direction[1] * up[1] + direction[2] * up[2];
+                requiredTanHalf = qMax(requiredTanHalf,
+                                       qAbs(lateral / alongForward) / aspect);
+                requiredTanHalf = qMax(requiredTanHalf,
+                                       qAbs(vertical / alongForward));
+            }
+        }
+    }
+
+    if (!std::isfinite(requiredTanHalf)) {
         framing.error = QStringLiteral(
             "Enclosing framing could not be computed from the observations.");
         return framing;
     }
-
-    double required = qMax(verticalFromPitch, verticalFromYaw);
-    if (required > EquirectProjection::MaxFieldOfViewDeg) {
+    const double requiredFieldOfView =
+        qRadiansToDegrees(2.0 * std::atan(requiredTanHalf));
+    if (requiredFieldOfView > EquirectProjection::MaxFieldOfViewDeg) {
         framing.error = QStringLiteral(
             "Keeping every requested subject in frame needs at least %1 "
             "degrees of field of view, which exceeds the supported maximum of "
             "%2 degrees.")
-                            .arg(QString::number(required, 'f', 1))
+                            .arg(QString::number(requiredFieldOfView, 'f', 1))
                             .arg(QString::number(
                                 EquirectProjection::MaxFieldOfViewDeg, 'f', 1));
         return framing;
     }
-    // A framing tighter than the renderer's minimum is not renderable; raising
-    // it to the minimum still contains every subject, so this is not a clamp
-    // that could hide one.
-    required = qMax(required, EquirectProjection::MinFieldOfViewDeg);
+    // A framing tighter than the renderer's minimum is not renderable; raising it
+    // to the minimum still contains every subject, so this is not a clamp that
+    // could hide one.
+    const double lens =
+        qMax(requiredFieldOfView, EquirectProjection::MinFieldOfViewDeg);
 
     framing.ok = true;
-    framing.yawDeg =
-        EquirectProjection::normalizeYawDeg((minYaw + maxYaw) / 2.0);
-    framing.pitchDeg =
-        EquirectProjection::clampPitchDeg((minPitch + maxPitch) / 2.0);
-    framing.fieldOfViewDeg = required;
+    framing.yawDeg = aimYaw;
+    framing.pitchDeg = aimPitch;
+    framing.fieldOfViewDeg = lens;
     return framing;
 }
 

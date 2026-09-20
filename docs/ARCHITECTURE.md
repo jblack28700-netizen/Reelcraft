@@ -465,7 +465,7 @@ consumes it. This is an index, not a replacement for the sections above or for `
 | Plan model | `app/reframe/ReframePlan.*`, `CameraKeyframe.*` | validated, JSON-serializable decision; FOV [20,140]; ordered retained segments | camera path, renderer, decisions, replay |
 | Camera path | `app/reframe/CameraPath.*` | pure evaluation; shortest-yaw interpolation; hold; FOV interpolation | renderer, tests |
 | Plan builder | `app/reframe/ReframePlanBuilder.*` | intent + resolved targets -> validated plan; carries the lens state; refuses unresolved plural moves | command runner, pipeline |
-| Track/plan planner | `app/target/TargetTrackPlanner.*` | follow path from one track (smoothed); enclosing framing for several tracks | command runner |
+| Track/plan planner | `app/target/TargetTrackPlanner.*` | follow path from one track (smoothed); one enclosing framing for 2-10 tracks, computed exactly in the renderer's basis (tangent containment over every footprint corner) | command runner |
 | Frame provider seam (render/resolve) | `app/reframe/ReframeFrameProvider.h` | deterministic frame per timestamp; injectable | renderer, resolution, tests |
 | Persistent stream provider | `app/reframe/ReframeStreamFrameProvider.*` | one stream per anchor; bounded window; seek fallback; frames byte-identical to the seek path | renderer, resolution |
 | Renderer + encoder | `app/reframe/ReframeRenderer.*` | deterministic frames from (plan, timestamp); H.264/yuv420p; optional source-audio mux | pipeline, replay |
@@ -504,7 +504,7 @@ Section headers in `tests/test_project.cpp` name the objective each group belong
 | Media analysis (artifact, lifecycle, one pass) | `mediaAnalysis*`, `projectAnalysisRefs*`, `replayIsIndependentOfMediaAnalysis` |
 | Rendered-output audio (Obj 28) | `reframeRenderPreservesSourceAudio`, `reframeRenderAudioFollowsRetainedSegments`, `reframeRenderAudioTrimsToSourceRange`, `reframeRenderSilentSourceStaysSilent`, `reframeRenderUnusableAudioFactsDegradesHonestly`, `reframeRenderLeavesSourceMediaUntouched`, `replayReproducesRenderedAudio` |
 | Lens / FOV control (Obj 29) | `reframeIntentParsesFraming`, `reframeBuilderAppliesRequestedFraming`, `reframeContractFieldOfViewFidelity`, `reframeCommandRunnerFollowsAtRequestedFraming`, `reframeCommandRunnerSpeakerFramingIsHonest`, `reframePipelineRendersRequestedFraming` |
-| Multi-subject framing (Obj 30) | `reframeIntentParsesMultiSubjectFraming`, `reframeMultiSubjectFramingGeometry`, `reframeCommandRunnerFramesTwoSubjects`, `reframeCommandRunnerResolvesTwoDetectedPeople`, `reframeCommandRunnerRejectsUnsatisfiableMultiSubject`, `reframeCommandRunnerFramesMovingSubjectsAndReplays` |
+| Group framing (Obj 30/31) | `reframeIntentParsesMultiSubjectFraming`, `reframeIntentParsesGroupFraming`, `reframeMultiSubjectFramingGeometry`, `reframeGroupFramingGeometrySweep`, `reframeGroupFramingResolvesCanonicalSets`, `reframeGroupFramingRefusesHonestly`, `reframeCommandRunnerFramesTwoSubjects`, `reframeCommandRunnerResolvesTwoDetectedPeople`, `reframeCommandRunnerRejectsUnsatisfiableMultiSubject`, `reframeCommandRunnerFramesMovingSubjectsAndReplays`, `reframeGroupFramingRendersAndReplays` |
 | Source playback + rendered playback | `sourcePlayback*`, `applicationPlayback*`, `realSourcePlaybackIntegration` |
 | Environment-gated real-media / model validation | `real*` (see `NEXT_TASK.md` §4) |
 

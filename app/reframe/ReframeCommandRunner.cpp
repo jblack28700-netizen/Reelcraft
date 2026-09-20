@@ -498,76 +498,133 @@ ReframeCommandResult ReframeCommandRunner::prepare(
             }
         }
 
-        QStringList groupReferences;
-        if (pluralGroup == ReframeSubjectGroup::CreatorAndOther) {
-            // The creator and the one other visible person, resolved through the
-            // existing identity rules ("me" needs a selection; "the other
-            // person" is ambiguous when more than one other is visible).
-            groupReferences = { QStringLiteral("me"),
-                                QStringLiteral("the other person") };
-        } else {
-            // "both people": EXACTLY two visible people, in the selector's own
-            // canonical order. More or fewer is ambiguous and is reported with
-            // its candidates rather than choosing.
-            QList<TargetTrack> active;
-            for (const TargetTrack &track : tracks) {
-                if (track.active() && !track.isEmpty()) {
-                    active.append(track);
-                }
+        // Resolve the GROUP to concrete tracks. The pool, its ordering and its
+        // ambiguity rules are the selector's own: nothing depends on detector or
+        // container order.
+        QList<TargetTrack> active;
+        for (const TargetTrack &track : tracks) {
+            if (track.active() && !track.isEmpty()) {
+                active.append(track);
             }
-            QList<TargetTrack> people;
-            for (const TargetTrack &track : active) {
-                if (track.label().compare(QStringLiteral("person"),
-                                          Qt::CaseInsensitive) == 0) {
-                    people.append(track);
-                }
+        }
+        QList<TargetTrack> people;
+        for (const TargetTrack &track : active) {
+            if (track.label().compare(QStringLiteral("person"),
+                                      Qt::CaseInsensitive) == 0) {
+                people.append(track);
             }
-            if (people.isEmpty()) {
-                people = active;
+        }
+        if (people.isEmpty()) {
+            people = active;
+        }
+        const QList<TargetTrack> ordered =
+            TargetSelector::canonicalOrder(people, QString());
+        const auto idsOf = [](const QList<TargetTrack> &list) {
+            QStringList ids;
+            for (const TargetTrack &track : list) {
+                ids.append(track.id());
             }
-            if (people.size() != 2) {
-                QStringList ids;
-                for (const TargetTrack &track : people) {
-                    ids.append(track.id());
-                }
+            return ids.isEmpty() ? QStringLiteral("none")
+                                 : ids.join(QStringLiteral(", "));
+        };
+        const int groupCount = result.intent.moves.first().subjectCount;
+        const auto describe = [&pluralGroup, groupCount]() {
+            return pluralGroup == ReframeSubjectGroup::CreatorAndOthers
+                ? QStringLiteral("the creator and %1 other visible people")
+                      .arg(qMax(0, groupCount - 1))
+                : groupCount >= 2
+                      ? QStringLiteral("%1 visible people").arg(groupCount)
+                      : QStringLiteral("every visible person");
+        };
+
+        QList<TargetTrack> group;
+        if (pluralGroup == ReframeSubjectGroup::CreatorAndOthers) {
+            // "both of us" / "the three of us" / "all of us": the creator first,
+            // through the existing identity rules, then the OTHER visible people
+            // in canonical order.
+            const TargetSelectionResult me =
+                TargetSelector::select(QStringLiteral("me"), tracks, registry);
+            if (!me.resolved) {
                 result.error = QStringLiteral(
-                    "Keeping both people in frame needs exactly two visible "
-                    "people; %1 were resolved (%2).")
-                                   .arg(people.size())
-                                   .arg(ids.isEmpty()
-                                            ? QStringLiteral("none")
-                                            : ids.join(QStringLiteral(", ")));
+                    "Multi-subject framing could not resolve 'me': %1")
+                                   .arg(me.error);
                 return result;
             }
-            groupReferences = { QStringLiteral("person 1"),
-                                QStringLiteral("person 2") };
+            QList<TargetTrack> creatorTrack;
+            for (const TargetTrack &track : ordered) {
+                if (track.id() == me.targetId) {
+                    creatorTrack.append(track);
+                } else {
+                    group.append(track);
+                }
+            }
+            const int requiredOthers = groupCount >= 2 ? groupCount - 1 : 0;
+            if (requiredOthers > 0 && group.size() != requiredOthers) {
+                result.error = QStringLiteral(
+                    "Framing %1 needs exactly %2 other visible people besides "
+                    "the creator; %3 were resolved (%4).")
+                                   .arg(describe())
+                                   .arg(requiredOthers)
+                                   .arg(group.size())
+                                   .arg(idsOf(group));
+                return result;
+            }
+            if (requiredOthers == 0 && group.isEmpty()) {
+                result.error = QStringLiteral(
+                    "Framing %1 needs at least one other visible person besides "
+                    "the creator.")
+                                   .arg(describe());
+                return result;
+            }
+            result.notes.append(
+                QStringLiteral("Creator identity resolved to %1 (%2).")
+                    .arg(me.targetId, me.method));
+            // The creator leads the group; the others keep canonical order.
+            group = creatorTrack + group;
+        } else {
+            // "both people" / "the three people" / "everyone": visible people
+            // only, in canonical order. A named count must be satisfied EXACTLY;
+            // a count-free group takes every resolved person.
+            const int required = groupCount >= 2 ? groupCount : 0;
+            if (required > 0 && ordered.size() != required) {
+                result.error = QStringLiteral(
+                    "Framing %1 needs exactly %2 visible people; %3 were "
+                    "resolved (%4).")
+                                   .arg(describe())
+                                   .arg(required)
+                                   .arg(ordered.size())
+                                   .arg(idsOf(ordered));
+                return result;
+            }
+            if (required == 0 && ordered.size() < 2) {
+                result.error = QStringLiteral(
+                    "Framing %1 needs at least two visible people; %2 were "
+                    "resolved (%3).")
+                                   .arg(describe())
+                                   .arg(ordered.size())
+                                   .arg(idsOf(ordered));
+                return result;
+            }
+            group = ordered;
         }
 
         QList<ReframeTarget> resolved;
         QStringList resolvedIds;
-        for (const QString &reference : groupReferences) {
-            const TargetSelectionResult selection =
-                TargetSelector::select(reference, tracks, registry);
-            if (!selection.resolved) {
-                result.error = QStringLiteral(
-                    "Multi-subject framing could not resolve '%1': %2")
-                                   .arg(reference, selection.error);
-                return result;
+        for (const TargetTrack &track : group) {
+            if (resolvedIds.contains(track.id())) {
+                continue; // defensive: a track can only appear once
             }
-            if (resolvedIds.contains(selection.targetId)) {
-                result.error = QStringLiteral(
-                    "Multi-subject framing resolved two references to the same "
-                    "target (%1).")
-                                   .arg(selection.targetId);
-                return result;
-            }
-            resolvedIds.append(selection.targetId);
-            resolved.append(selection.target);
-            result.notes.append(QStringLiteral("Resolved '%1' to %2 (%3).")
-                                    .arg(reference, selection.targetId,
-                                         selection.method));
+            resolvedIds.append(track.id());
+            ReframeTarget target = track.representativeTarget();
+            target.id = track.id();
+            resolved.append(target);
         }
         result.resolvedTargets = resolved;
+        result.notes.append(
+            QStringLiteral("Multi-subject framing of %1 subject(s): %2.")
+                .arg(resolvedIds.size())
+                .arg(resolvedIds.join(QStringLiteral(", "))));
+
 
         const ReframePlan::OutputSpec pluralOutput =
             result.intent.hasOutput

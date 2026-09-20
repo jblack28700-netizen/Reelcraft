@@ -1,5 +1,6 @@
 #include "ReframeIntent.h"
 
+#include <QHash>
 #include <QPair>
 #include <QRegularExpression>
 #include <QStringList>
@@ -365,12 +366,70 @@ QString withoutSpan(const QString &text, int start, int end)
     return result;
 }
 
-// Objective 30: plural framing. The phrase names a GROUP, not tracks — which
-// tracks is decided at command time against the current tracks and identity
-// state, exactly as a single reference is. A framing verb (or an explicit "in
-// frame") must be present, so a passing mention of two people is not turned into
-// a framing instruction.
-bool pluralGroupFromClause(const QString &clause, ReframeSubjectGroup *outGroup)
+// Objective 30/31: group framing. The phrase names a GROUP and, when it says so,
+// its SIZE — never which tracks: those are decided at command time against the
+// current tracks and identity state, exactly as a single reference is. A framing
+// verb (or an explicit "in frame") must be present, so a passing mention of
+// several people is not turned into a framing instruction.
+//
+//   "both of us" / "the three of us"   -> creator + (n-1) other visible people
+//   "all of us"                        -> creator + every other visible person
+//   "both people" / "the three people" -> exactly n visible people
+//   "everyone" / "all of them"         -> every visible person
+//
+// A size is read as a word (two..ten) or digits (2..10); a named size below two
+// is not a group request at all. Most specific phrases are listed first, so
+// "everyone of us" is never read as "everyone" (a different family).
+struct GroupPhrase
+{
+    const char *phrase;
+    ReframeSubjectGroup group;
+    int count; // 0 = count-free: the whole resolvable set
+};
+
+const GroupPhrase kGroupPhrases[] = {
+    // Creator family, named size.
+    { "both of us", ReframeSubjectGroup::CreatorAndOthers, 2 },
+    { "us both", ReframeSubjectGroup::CreatorAndOthers, 2 },
+    { "both of we", ReframeSubjectGroup::CreatorAndOthers, 2 },
+    // Creator family, count-free.
+    { "all of us", ReframeSubjectGroup::CreatorAndOthers, 0 },
+    { "us all", ReframeSubjectGroup::CreatorAndOthers, 0 },
+    { "everyone of us", ReframeSubjectGroup::CreatorAndOthers, 0 },
+    // People family, named size (the numbered form below also catches these).
+    { "both people", ReframeSubjectGroup::VisiblePeople, 2 },
+    { "both persons", ReframeSubjectGroup::VisiblePeople, 2 },
+    { "both of them", ReframeSubjectGroup::VisiblePeople, 2 },
+    { "both of the people", ReframeSubjectGroup::VisiblePeople, 2 },
+    // People family, count-free.
+    { "everyone", ReframeSubjectGroup::VisiblePeople, 0 },
+    { "everybody", ReframeSubjectGroup::VisiblePeople, 0 },
+    { "all people", ReframeSubjectGroup::VisiblePeople, 0 },
+    { "all persons", ReframeSubjectGroup::VisiblePeople, 0 },
+    { "all of them", ReframeSubjectGroup::VisiblePeople, 0 },
+    { "all the people", ReframeSubjectGroup::VisiblePeople, 0 },
+    { "all of the people", ReframeSubjectGroup::VisiblePeople, 0 },
+};
+
+int numberWordToInt(const QString &word)
+{
+    static const QHash<QString, int> words = {
+        { QStringLiteral("two"), 2 },   { QStringLiteral("three"), 3 },
+        { QStringLiteral("four"), 4 },  { QStringLiteral("five"), 5 },
+        { QStringLiteral("six"), 6 },   { QStringLiteral("seven"), 7 },
+        { QStringLiteral("eight"), 8 }, { QStringLiteral("nine"), 9 },
+        { QStringLiteral("ten"), 10 },
+    };
+    bool ok = false;
+    const int digits = word.toInt(&ok);
+    if (ok) {
+        return digits;
+    }
+    return words.value(word, 0);
+}
+
+bool pluralGroupFromClause(const QString &clause, ReframeSubjectGroup *outGroup,
+                           int *outCount)
 {
     static const QRegularExpression framingVerb(QStringLiteral(
         "\\b(keep|keeping|follow|following|frame|frames|framing|hold|holding|"
@@ -379,25 +438,39 @@ bool pluralGroupFromClause(const QString &clause, ReframeSubjectGroup *outGroup)
     if (!framingVerb.match(clause).hasMatch()) {
         return false;
     }
-    static const char *creatorPhrases[] = {
-        "both of us", "us both", "the two of us", "two of us", "both of we",
-    };
-    for (const char *phrase : creatorPhrases) {
-        if (wholePhraseIndex(clause, QString::fromLatin1(phrase)) >= 0) {
-            *outGroup = ReframeSubjectGroup::CreatorAndOther;
+
+    // A named size first ("the three of us", "3 people", "four of them"), so a
+    // phrase like "all three of us" is a group of exactly three.
+    static const QRegularExpression numbered(QStringLiteral(
+        "\\b(\\d{1,2}|two|three|four|five|six|seven|eight|nine|ten)\\s+"
+        "(?:of\\s+)?(us|we|people|persons|them)\\b"));
+    const QRegularExpressionMatch numberedMatch = numbered.match(clause);
+    if (numberedMatch.hasMatch()) {
+        const int count = numberWordToInt(numberedMatch.captured(1));
+        if (count >= 2) {
+            const QString noun = numberedMatch.captured(2);
+            *outGroup = (noun == QLatin1String("us") || noun == QLatin1String("we"))
+                ? ReframeSubjectGroup::CreatorAndOthers
+                : ReframeSubjectGroup::VisiblePeople;
+            if (outCount) {
+                *outCount = count;
+            }
             return true;
         }
     }
-    static const char *peoplePhrases[] = {
-        "both people", "both persons", "both of them", "the two people",
-        "the two persons", "the two of them", "two people", "two persons",
-        "both of the people",
-    };
-    for (const char *phrase : peoplePhrases) {
-        if (wholePhraseIndex(clause, QString::fromLatin1(phrase)) >= 0) {
-            *outGroup = ReframeSubjectGroup::TwoPeople;
-            return true;
+
+    const int phraseCount =
+        static_cast<int>(sizeof(kGroupPhrases) / sizeof(kGroupPhrases[0]));
+    for (int i = 0; i < phraseCount; ++i) {
+        const QString phrase = QString::fromLatin1(kGroupPhrases[i].phrase);
+        if (wholePhraseIndex(clause, phrase) < 0) {
+            continue;
         }
+        *outGroup = kGroupPhrases[i].group;
+        if (outCount) {
+            *outCount = kGroupPhrases[i].count;
+        }
+        return true;
     }
     return false;
 }
@@ -990,8 +1063,9 @@ ReframeIntent ReframeIntentParser::parse(const QString &text)
         // it is detected before the single-subject patterns so that "keep both
         // of us centered" is never read as the single subject "both of us".
         ReframeSubjectGroup subjectGroup = ReframeSubjectGroup::None;
+        int subjectCount = 0;
         const bool plural =
-            pluralGroupFromClause(cameraText, &subjectGroup);
+            pluralGroupFromClause(cameraText, &subjectGroup, &subjectCount);
         if (!clauseHasCameraKeyword(cameraText) && !hasFieldOfView && !plural) {
             continue;
         }
@@ -1023,6 +1097,7 @@ ReframeIntent ReframeIntentParser::parse(const QString &text)
             // the same clause is still parsed, so the command can refuse the
             // combination honestly instead of silently dropping half of it.
             move.subjectGroup = subjectGroup;
+            move.subjectCount = subjectCount;
             move.followSubject = true;
         }
 
@@ -1083,19 +1158,32 @@ ReframeIntent ReframeIntentParser::parse(const QString &text)
             "No camera instruction: a centered forward view is used."));
     }
 
-    // Objective 30: one deterministic note naming the plural group asked for.
+    // Objective 30/31: one deterministic note naming the group asked for.
     for (const ReframeCameraMove &move : intent.moves) {
-        if (move.subjectGroup == ReframeSubjectGroup::CreatorAndOther) {
-            intent.notes.append(QStringLiteral(
-                "Multi-subject framing: the creator and the other visible "
-                "person."));
-            break;
+        if (move.subjectGroup == ReframeSubjectGroup::None) {
+            continue;
         }
-        if (move.subjectGroup == ReframeSubjectGroup::TwoPeople) {
-            intent.notes.append(QStringLiteral(
-                "Multi-subject framing: the two visible people."));
-            break;
+        const bool creator =
+            move.subjectGroup == ReframeSubjectGroup::CreatorAndOthers;
+        if (move.subjectCount >= 2) {
+            intent.notes.append(
+                QStringLiteral("Multi-subject framing: %1 (%2 subjects).")
+                    .arg(creator
+                             ? QStringLiteral("the creator and %1 other visible "
+                                              "people")
+                                   .arg(move.subjectCount - 1)
+                             : QStringLiteral("%1 visible people")
+                                   .arg(move.subjectCount))
+                    .arg(move.subjectCount));
+        } else {
+            intent.notes.append(
+                creator
+                    ? QStringLiteral("Multi-subject framing: the creator and "
+                                     "every other visible person.")
+                    : QStringLiteral("Multi-subject framing: every visible "
+                                     "person."));
         }
+        break;
     }
 
     // Objective 29: one deterministic note naming the framing the instruction

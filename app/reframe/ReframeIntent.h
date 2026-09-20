@@ -17,22 +17,27 @@ struct ReframeTarget
     double pitchDeg = 0.0;
 };
 
-// Objective 30: a PLURAL framing request. The parser records WHICH GROUP was
-// asked for and never which tracks: resolution happens against the current
-// tracks and identity state at command time, exactly as a single reference
-// does, so nothing is fabricated at parse time and nothing is persisted.
+// Objective 30 (extended by Objective 31): a GROUP framing request. The parser
+// records WHICH GROUP was asked for and never which tracks: resolution happens
+// against the current tracks and identity state at command time, exactly as a
+// single reference does, so nothing is fabricated at parse time and nothing is
+// persisted.
+//
+// The group size travels in ReframeCameraMove::subjectCount: a phrase that names
+// a number ("the three of us") requires EXACTLY that many subjects, and a
+// count-free phrase ("all of us", "everyone") takes the whole resolvable set.
+// A count that cannot be satisfied is refused with its candidates; a group is
+// never completed by substituting or dropping a subject.
 enum class ReframeSubjectGroup
 {
     // An ordinary single-subject (or direction-only) instruction.
     None,
-    // "both of us", "us both", "the two of us": the creator and the one other
-    // visible person. Resolved through the existing identity rules, so an
-    // unselected creator or more than one other person is refused honestly.
-    CreatorAndOther,
-    // "both people", "both of them": exactly two visible people, in the
-    // selector's canonical order. More (or fewer) than two is ambiguous and is
-    // refused rather than silently choosing.
-    TwoPeople,
+    // "... of us": the creator plus other visible people. Resolution goes through
+    // the existing identity rules (an unselected creator is refused), and the
+    // others are taken in the selector's canonical order.
+    CreatorAndOthers,
+    // "people"/"them": visible people only, in canonical order.
+    VisiblePeople,
 };
 
 // One ordered camera instruction parsed from a natural-language request.
@@ -63,12 +68,16 @@ struct ReframeCameraMove
     bool hasFieldOfView = false;
     double fieldOfViewDeg = 90.0;
 
-    // Objective 30: set when the clause asked to keep SEVERAL subjects framed
-    // together ("keep both of us in frame"). Such a move carries no single
-    // `targetRef` and no direction: the group is resolved at command time and
-    // executed as one camera path that keeps every resolved subject inside the
-    // frame. In-memory only, like every other field here.
+    // Objective 30/31: set when the clause asked to keep SEVERAL subjects framed
+    // together ("keep both of us in frame", "keep the three of us in frame").
+    // Such a move carries no single `targetRef` and no direction: the group is
+    // resolved at command time and executed as one camera path that keeps every
+    // resolved subject inside the frame. In-memory only, like every other field.
     ReframeSubjectGroup subjectGroup = ReframeSubjectGroup::None;
+    // The TOTAL number of subjects the phrase named, or 0 when it named none
+    // ("all of us", "everyone"). A named count is a requirement: it is refused
+    // when the resolvable people cannot satisfy it exactly.
+    int subjectCount = 0;
 };
 
 // Structured interpretation of a natural-language reframing request. This is

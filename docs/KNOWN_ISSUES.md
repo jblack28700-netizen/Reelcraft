@@ -698,3 +698,46 @@ Each is a future scoped objective if it serves the 360 workflow: groups larger t
 
 *Related, resolved by Objective 30: no instruction could frame more than one subject. Earlier statements that every camera path aims at a single resolved track describe the state before Decision 050 and are preserved as history.*
 
+
+# Issue — Group framing is bounded by size vocabulary, membership and smoothing (2026-09-18)
+
+### Status
+
+Open — intentional boundary, not a defect (Decision 052).
+
+### Description
+
+Objective 31 extended framing to groups of two to ten subjects. Four limits are deliberate:
+
+- **The size vocabulary stops at ten** (words two..ten, or digits 2..10). A larger group has no
+  phrasing; a count-free form ("everyone") takes whatever the command resolved.
+- **Group membership is fixed for the instruction.** The group is the set resolved at command time;
+  a person entering or leaving later does not change it, and "whoever is in frame at the time" is not
+  a supported request.
+- **A group that cannot fit is refused, not trimmed.** If the enclosure needs more than 140 degrees
+  of field of view, the command fails with the measured requirement rather than dropping a subject or
+  clamping the lens.
+- **The group path is not smoothed.** The Objective 26 smoothing is defined for one direction
+  sequence; applying it to a per-sample enclosure could move the camera off the framing that
+  guarantees containment.
+
+### Impact
+
+A creator can frame a small group with an exact size and is told precisely when a request cannot be
+satisfied. They cannot frame groups larger than ten by phrase, cannot follow a changing group, and
+cannot have a smoothed group pan. Enclosed groups that need more than 140 degrees are refused, which
+on crowded real footage is expected but has not been measured (see the validation debt in
+`NEXT_TASK.md` §4).
+
+### Planned Resolution
+
+Each is a future scoped objective if it serves the 360 workflow: a larger or open-ended size
+vocabulary, dynamic membership (which needs its own semantics and real-footage evidence), and
+containment-preserving smoothing for group paths.
+
+---
+
+*Related, resolved by Objective 31: framing was limited to exactly two subjects, and the enclosure
+rule was a span-based approximation that could under-frame a footprint occupying yaw and pitch at
+once. The rule is now computed exactly in the renderer's basis and refuses what it cannot contain.*
+

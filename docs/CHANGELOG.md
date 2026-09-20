@@ -868,3 +868,15 @@ Date: 2026-09-18
 - Single-subject instructions, following one person, aiming at something, timing, sound and saved edits are all unchanged; a saved edit replays to exactly the same frames.
 - 6 new tests; targeted regression 102 passed / 0 failed / 0 skipped and the full model-free suite 478 passed / 0 failed / 9 skipped. Decision 050 records the design.
 
+
+## v0.2.68 — Framing can hold a whole group
+
+Date: 2026-09-18
+
+- Reelcraft can now keep a **whole group** in frame, not just two people: "keep the three of us in frame", "keep all of us in frame", "keep the three people in frame" and "keep everyone in frame" all produce a camera movement that holds every subject inside the shot.
+- The group size in the request is a requirement, not a hint. "The three of us" means you plus two other visible people; if only one other person can be found, Reelcraft says so and lists who it found instead of quietly framing two people. "Everyone" means every person it resolved for that command.
+- Which people are framed never depends on the order a detector happened to report them: the same footage produces the same group, and repeating a command gives the identical result.
+- The framing is also more exact than before. It is now computed against the same camera mathematics that produces the picture, checking every subject's full width and height rather than an approximation — so a group is genuinely inside the shot, and a group that simply cannot fit is refused with the reason instead of being clipped or silently thinned out.
+- Single-person and two-person instructions behave exactly as they did, and saved edits still replay to precisely the same frames.
+- 5 new tests (plus strengthened containment checks in the existing two-subject tests); targeted regression 101 passed / 0 failed / 0 skipped and the full model-free suite 483 passed / 0 failed / 9 skipped. Decision 052 records the design.
+

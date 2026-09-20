@@ -52,12 +52,17 @@ public:
     // reported angular footprint — the camera direction and the minimum VERTICAL
     // field of view that fits them all. Pure, stateless and model-free.
     //
-    // The rule is the exact inversion of EquirectView's own camera basis: a ray
-    // at yaw offset t and pitch p is inside a vertical-FOV v view when
-    // |sin t · cos p| <= tan(v/2) · aspect and |sin p| <= tan(v/2). Because
-    // tan x >= sin x, requiring tan(span/2) <= tan(v/2) for both axes is
-    // CONSERVATIVE — it can never under-frame — and every subject's own reported
-    // footprint contributes to the spans, so no arbitrary constant is involved.
+    // The rule is exact in EquirectView's own camera basis, not an approximation
+    // from the spans. The renderer builds a pixel's ray as
+    // forward + right·(ndcX·tanHalf·aspect) + up·(ndcY·tanHalf), so a direction is
+    // inside the frame exactly when |lateral/forward| <= tanHalf·aspect and
+    // |vertical/forward| <= tanHalf. The aim is the centre of the group's
+    // unwrapped yaw/pitch span (preference-free), and the lens is the smallest
+    // one at that aim that contains every footprint CORNER — so the guarantee
+    // holds for the whole footprint, not just its centre, and no arbitrary
+    // constant or merge threshold is involved. (Objective 30 used a span-based
+    // approximation here; Objective 31's property sweep showed it can under-frame
+    // where a footprint occupies yaw and pitch at once.)
     struct EnclosingFraming
     {
         bool ok = false;

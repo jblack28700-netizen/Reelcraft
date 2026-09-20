@@ -1917,3 +1917,96 @@ reading thousands of lines; and a documented configuration value had already dri
 
 *Decisions 001-050 are preserved verbatim; this decision adds to them and supersedes none of them.*
 
+
+---
+
+# Decision 052 — N-Way Group Framing, and the Enclosure Rule Computed Exactly in the Renderer's Basis
+
+**Status:** Accepted (2026-09-18, 360 Reframing Objective 31)
+
+## Context
+
+Objective 30 framed **exactly two** subjects. Inspection before this objective confirmed that the
+*engine* was already general — `enclosingFramingDeg` and `planTracks` accept any number of
+observations/tracks — while the *decision* layer was not: the group enum knew two groups, the
+vocabulary knew "both", and the runner hard-coded a pair.
+
+Objective 31 was asked to extend that to N **and** to test the *real* spherical camera basis against
+every target, without arbitrary thresholds. That second requirement exposed a defect in what
+Objective 30 had shipped:
+
+- **The enclosure rule was an approximation.** It derived the required vertical field of view from the
+  group's yaw span and pitch span (`2·atan(tan(yawSpan/2)/aspect)` and `pitchSpan`). The renderer
+  builds a pixel's ray as `forward + right·(ndcX·tanHalf·aspect) + up·(ndcY·tanHalf)`, so
+  containment is the **tangent** condition `|lateral/forward| ≤ tanHalf·aspect` and
+  `|vertical/forward| ≤ tanHalf`. Span-derived requirements coincide with it only when a footprint
+  occupies one axis at a time: the property sweep found a six-subject, high-pitch case
+  (±13° yaw, ±11° pitch) that escaped a 22° lens because a diagonally opposite corner's true vertical
+  component exceeded `sin(Δpitch)`.
+- **The test helper was too permissive.** It compared direction *cosines*
+  (`|lateral| ≤ tanHalf·aspect`) where the condition requires tangents, so Objective 30's
+  containment evidence was weaker than its decision text claimed. The sweep caught both.
+
+## Decision
+
+- **Group framing is N-way, and the size travels with the group.** `ReframeSubjectGroup` becomes
+  `CreatorAndOthers` / `VisiblePeople` with `ReframeCameraMove::subjectCount` (0 = count-free).
+  Semantics, all deterministic and preference-free:
+  - "the three of us" / "all three of us" / "the 5 of us" → creator + exactly (n-1) other visible
+    people; a different count is refused with its candidates.
+  - "all of us" / "us all" → creator + every other visible person (at least one).
+  - "the three people" / "three of them" / "4 people" → exactly n visible people.
+  - "everyone" / "everybody" / "all of them" / "all of the people" → every resolved visible person
+    (at least two; a single subject is not a group framing).
+  Sizes are read as words (two..ten) or digits (2..10); a size below two is not a group request. The
+  more specific phrase always wins ("everyone of us" is the creator family, not "everyone").
+- **Which tracks is still resolved at command time**, through the selector's canonical order (first
+  observation, then numeric id, then id) — never detector or container order — and the creator leads
+  a creator-inclusive group. A group is never completed by substituting, dropping or inventing a
+  subject.
+- **The lens is computed exactly in the renderer's own basis.** The aim is the centre of the group's
+  unwrapped yaw/pitch span (the only preference-free choice), the basis is built exactly as
+  `EquirectView` builds it (including its degenerate fallback), and the required half-tangent is the
+  maximum over **every footprint corner** of `|lateral/forward|/aspect` and `|vertical/forward|`.
+  Containment therefore holds for the whole footprint, not just its centre, and no arbitrary
+  constant, margin or merge threshold is involved.
+- **Honest limits are unchanged and now exact.** A corner at or behind the view plane, or a
+  requirement above the renderable maximum (140°), refuses with the measured requirement; a named
+  lens narrower than the requirement is refused rather than widened; a requirement below the
+  renderable minimum (20°) is raised to it, which still contains every subject.
+- **Containment is asserted in the tangent form against the actual reported footprints** — including
+  in the Objective 30 tests, which used assumed footprint sizes. The contract checker still does not
+  (and cannot) verify containment; Decision 050 stands.
+
+## Consequences
+
+- Natural language now reaches group framing: "keep the three of us in frame", "keep all of us in
+  frame", "keep the three people in frame", "keep everyone in frame", with sizes up to ten.
+- **Objective 30's plan numbers change slightly**: the exact rule is tighter than the approximation
+  where the approximation over-estimated, and it refuses where the approximation would have
+  under-framed. Two Objective 30 assertions were updated for that reason (an assumed footprint size
+  replaced by the detector's own reported one, and the pitch-dominated expectation), and its
+  containment assertions were strengthened rather than relaxed.
+- No schema, persisted artifact, dependency or plan-type change; single-subject behaviour is
+  untouched; replay remains perception-free.
+- Recorded limitations: the vocabulary is bounded at ten named sizes; group membership is fixed for
+  the instruction (no dynamic membership); the group path is not smoothed; framing offsets remain
+  absent (Decision 046). Objective 32 (explicit subject-reference sets) builds on this resolution.
+
+## Verification
+
+- 5 new model-free tests plus the strengthened Objective 30 tests: vocabulary and sizes
+  (`reframeIntentParsesGroupFraming`), canonical N-way resolution with creator leadership and
+  order-independence (`reframeGroupFramingResolvesCanonicalSets`), every honest refusal
+  (`reframeGroupFramingRefusesHonestly`), a deterministic geometry sweep over 3-6 subjects, ±180
+  wraparound, high pitch, non-uniform footprints and four output aspects with both outcomes exercised
+  (`reframeGroupFramingGeometrySweep`), and render + replay equivalence with source immutability
+  (`reframeGroupFramingRendersAndReplays`).
+- Targeted regression across parser, builder, contract, runner, planner, camera path, selector,
+  resolver, pipeline, audio, replay and application tests: **101 passed / 0 failed / 0 skipped**.
+- Full model-free suite run at the checkpoint.
+
+---
+
+*Decisions 001-051 are preserved verbatim; this decision adds to them and supersedes none of them.*
+

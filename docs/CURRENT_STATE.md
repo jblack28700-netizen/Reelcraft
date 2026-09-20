@@ -17,9 +17,9 @@ repeated here: it lives in `DEVELOPMENT_LOG.md` (chronological record), `DECISIO
   structured edit/reframe plan -> virtual-camera decisions -> deterministic execution -> flat output.
 - **Stage:** Phase 4 (360 reframing engine) — 30 objectives complete and verified; Phase 3 media
   engine is open, its player-lifecycle objective deferred behind the 360 priority.
-- **Current objective:** Process Objective P1 — development-management consolidation (register,
-  indexes, batch+gate policy, checkpoint hygiene; Decision 051), complete at this checkpoint.
-  **Objective 31 is not selected or started.**
+- **Current objective:** Objective 31 — N-way group framing (Decision 052), complete at this
+  checkpoint. **Objective 32 — explicit multi-subject references** is the next approved objective of
+  the current batch and starts only if the batch gate passes.
 
 ## Subsystem status
 
@@ -30,8 +30,8 @@ repeated here: it lives in `DEVELOPMENT_LOG.md` (chronological record), `DECISIO
 | Equirectangular viewer presentation + look-around | implemented, verified | `app/viewer/`, `app/ui/ViewerWidget.*` |
 | 360 source playback (proxy stream, seek, viewpoint) | implemented, verified; **video-only** | `app/application/Application.*` |
 | Reframing engine (plan, camera path, render, encode) | implemented, verified | `app/reframe/` |
-| Follow-subject framing (path, density, decoder reuse, smoothing) | implemented, verified | `TargetTrackPlanner`, `ReframeCommandRunner` |
-| Natural-language intent (directions, subjects, temporal, compound, lens, plural groups) | implemented, verified | `app/reframe/ReframeIntent.*` |
+| Subject framing: follow path, sampling density, decoder reuse, smoothing; **group framing (2-10 subjects)** | implemented, verified (fixtures) | `TargetTrackPlanner`, `ReframeCommandRunner` |
+| Natural-language intent (directions, subjects, temporal, compound, lens, group sizes) | implemented, verified | `app/reframe/ReframeIntent.*` |
 | Target resolution, tracking, identity, selection | implemented, verified (real detector via external helper) | `app/target/` |
 | Appearance re-identification, speaker evidence | implemented as **optional seams**; real inference needs external helpers | `app/target/` |
 | Persisted reproducible decisions + provenance/revision | implemented, verified (fresh-process replay) | `app/reframe/EditDecision.*` |
@@ -43,7 +43,7 @@ repeated here: it lives in `DEVELOPMENT_LOG.md` (chronological record), `DECISIO
 
 ## Test baseline
 
-- Current result: **478 passed, 0 failed, 9 skipped** (Objective 30 checkpoint; this is the
+- Current result: **483 passed, 0 failed, 9 skipped** (Objective 31 checkpoint; this is the
   canonical form `scripts/checkpoint_check.sh` reads). Full suite with
   `scripts/build_and_test.sh`; a focused set by passing QtTest function names to
   `tests/reelcraft_tests`.
@@ -74,8 +74,11 @@ framing (Obj 30).** See `NEXT_TASK.md` §4.
 - **Perception needs external helpers**: detection, appearance and speaker evidence are optional
   subprocess helpers; Reelcraft links no CV/ML runtime. Identity is geometric (+ optional
   appearance), not biometric; automatic speaker attribution remains provider-gated.
-- **Framing limits**: exactly two subjects can be framed together; framing offsets/lead room are
-  deliberately absent; the two-subject path is not smoothed; groups larger than two are unsupported.
+- **Framing limits**: group framing covers two to ten subjects by group phrase ("the three of us",
+  "everyone"), and a group is refused rather than trimmed when it cannot fit the renderable field of
+  view or when its size cannot be satisfied; sizes above ten, dynamic membership and explicitly named
+  subject sets are not supported; the group path is not smoothed; framing offsets/lead room are
+  deliberately absent (Decision 046).
 - **No timeline editor, multi-source editing, transitions, captions or colour work**; output is flat
   video only (no 360/equirect export).
 - **No retention policy** for accumulated edit decisions or analysis artifacts.
@@ -127,7 +130,7 @@ each objective.
 | Phase 4 Obj 7-15 | provider-attribution seam, end-to-end command execution, application orchestration, persisted outputs + duration, speaker-aware commands, command UI + preview, rendered-result playback, temporal editing, compound commands | `f4ad631`, `c581f95`, `ec641a7`, `1bc7324`, `b5b5120`, `41ab5f9`, `766e3ef`, `aaae143`, `98b0413` |
 | Phase 4 Obj 16-21 | reproducible edit decisions, provenance/revision, contract checker, source playback, persistent render decoding, persistent media analysis | `bed4f97`, `0902a16`, `dc42d82`, `94d8bb4`, `56f7ac2`, `90f671c` |
 | Phase 4 Obj 23-27 | follow camera paths, follow sampling density, decoder reuse, trajectory smoothing, covering-view duplicate consolidation (no Objective 22 was scoped) | `39668ca`, `99a7282`, `c872dc3`, `0e90fc3`, `0144bfa` |
-| Phase 4 Obj 28-30 | source-audio preservation, lens/FOV control, two-subject framing | `7adf433`, `d971009`, `5592118` |
+| Phase 4 Obj 28-31 | source-audio preservation, lens/FOV control, two-subject framing, N-way group framing (with the enclosure rule recomputed exactly in the renderer's basis) | `7adf433`, `d971009`, `5592118`, `this checkpoint` |
 | Process Obj P1 | development-management consolidation (register, seam/test indexes, batch+gate policy, checkpoint hygiene) | this checkpoint |
 
 ^ `f4ad631` also carries the canonical workflow policy (Objective 7's precedent).
