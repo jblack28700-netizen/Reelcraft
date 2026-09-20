@@ -1339,6 +1339,10 @@ private slots:
     void applicationRenderDestinationsNeverOverwriteARecordedRender();
     void applicationCommandRefusesAnExplicitPathHeldByARecord();
     void applicationReviewAcceptRefusesAClaimedDestination();
+    // Objective 38: unreadable render records are preserved verbatim, not dropped.
+    void applicationPreservesUnreadableRecordsAcrossReopen();
+    void preservedRenderRecordIsNeverUsedAsARecord();
+    void mainWindowListsUnreadableRecordHonestly();
 };
 
 void ProjectTest::initTestCase()
@@ -10448,14 +10452,26 @@ void ProjectTest::restoreReframeOutputsReportsUnrestorableRecord()
     QVERIFY(app.openProject(projectPath));
 
     // The restorable record survives ...
-    QCOMPARE(app.reframeOutputs().size(), 1);
+    QCOMPARE(app.reframeOutputs().size(), 3);
     QCOMPARE(app.reframeOutputs().at(0).instruction, QStringLiteral("pan right"));
+    QVERIFY(!app.reframeOutputs().at(0).hasRawRecord());
 
-    // ... and the two unrestorable entries were REPORTED, not dropped in silence.
+    // ... and the two unrestorable entries are REPORTED **and preserved in place**
+    // (Objective 38): index 1 was the non-object entry, index 2 the object without
+    // its required output path.
+    QVERIFY(app.reframeOutputs().at(1).hasRawRecord());
+    QVERIFY(app.reframeOutputs().at(1).rawRecord().isString());
+    QCOMPARE(app.reframeOutputs().at(1).rawRecord().toString(),
+             QStringLiteral("not-an-object"));
+    QVERIFY(app.reframeOutputs().at(2).hasRawRecord());
+    QVERIFY(app.reframeOutputs().at(2).rawRecord().isObject());
+    QCOMPARE(app.reframeOutputs().at(2).rawRecord().toObject()
+                 .value(QStringLiteral("instruction")).toString(),
+             QStringLiteral("orphan"));
     bool reported = false;
     for (int i = 0; i < statusSpy.count(); ++i) {
         const QString message = statusSpy.at(i).at(0).toString();
-        if (message.contains(QStringLiteral("could not be restored"))) {
+        if (message.contains(QStringLiteral("could not be read and were preserved"))) {
             reported = true;
             QVERIFY(message.contains(QStringLiteral("2")));
         }
@@ -22956,6 +22972,172 @@ void ProjectTest::applicationReviewAcceptRefusesAClaimedDestination()
     QVERIFY(record.outputPath != app.reframeOutputs().at(0).outputPath);
     QCOMPARE(fileBytes(claimed), claimedBytes);
     QVERIFY(!app.hasPendingReview());
+}
+
+void ProjectTest::applicationPreservesUnreadableRecordsAcrossReopen()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    // A project whose record list mixes usable records with entries this build
+    // cannot parse: a valid record, a non-object entry, an object missing its
+    // required output path, and another valid record.
+    QJsonObject firstValid;
+    firstValid.insert(QStringLiteral("ok"), true);
+    firstValid.insert(QStringLiteral("instruction"), QStringLiteral("follow person 1"));
+    firstValid.insert(QStringLiteral("outputPath"),
+                      directory.filePath(QStringLiteral("one.mp4")));
+    QJsonObject lastValid;
+    lastValid.insert(QStringLiteral("ok"), true);
+    lastValid.insert(QStringLiteral("instruction"), QStringLiteral("follow person 2"));
+    lastValid.insert(QStringLiteral("outputPath"),
+                     directory.filePath(QStringLiteral("two.mp4")));
+    QJsonObject orphanObject;
+    orphanObject.insert(QStringLiteral("instruction"), QStringLiteral("orphan"));
+    orphanObject.insert(QStringLiteral("futureField"), 42);
+
+    QJsonArray outputs;
+    outputs.append(firstValid);
+    outputs.append(QStringLiteral("not-an-object"));
+    outputs.append(orphanObject);
+    outputs.append(lastValid);
+
+    Project project;
+    project.setReframeOutputs(outputs);
+    const QString projectPath = directory.filePath(QStringLiteral("mixed.reel"));
+    QVERIFY2(project.save(projectPath), "could not save the fixture project");
+
+    Application app;
+    QVERIFY(app.openProject(projectPath));
+    // Every entry is restored, in its original position.
+    QCOMPARE(app.reframeOutputs().size(), 4);
+    QCOMPARE(app.reframeOutputs().at(0).instruction, QStringLiteral("follow person 1"));
+    QVERIFY(app.reframeOutputs().at(1).hasRawRecord());
+    QVERIFY(app.reframeOutputs().at(2).hasRawRecord());
+    QCOMPARE(app.reframeOutputs().at(3).instruction, QStringLiteral("follow person 2"));
+
+    // THE GUARANTEE: opening and re-saving the project cannot destroy data this
+    // build does not understand. Every entry survives, in its original position and
+    // with its original JSON type; the entries this build could NOT parse are
+    // re-emitted byte-for-byte. (Records that parsed are re-serialized from their
+    // typed form, which is the pre-existing behaviour of every persisted record and
+    // is asserted below by their own fields.)
+    const QString savedPath = directory.filePath(QStringLiteral("resaved.reel"));
+    QVERIFY(app.saveProject(savedPath));
+    Project resaved;
+    bool ok = false;
+    QString loadError;
+    resaved = Project::load(savedPath, &ok, &loadError);
+    QVERIFY2(ok, qPrintable(loadError));
+    const QJsonArray resavedRecords = resaved.reframeOutputs();
+    QCOMPARE(resavedRecords.size(), outputs.size());
+    QCOMPARE(resavedRecords.at(1), outputs.at(1));
+    QCOMPARE(resavedRecords.at(2), outputs.at(2));
+    QCOMPARE(resavedRecords.at(0).toObject().value(QStringLiteral("instruction")).toString(),
+             QStringLiteral("follow person 1"));
+    QCOMPARE(resavedRecords.at(0).toObject().value(QStringLiteral("outputPath")).toString(),
+             outputs.at(0).toObject().value(QStringLiteral("outputPath")).toString());
+    QCOMPARE(resavedRecords.at(3).toObject().value(QStringLiteral("instruction")).toString(),
+             QStringLiteral("follow person 2"));
+
+    // A re-save after a REOPEN is equally stable (the preservation is not a one-shot
+    // effect of the first load).
+    Application second;
+    QVERIFY(second.openProject(savedPath));
+    QCOMPARE(second.reframeOutputs().size(), 4);
+    const QString thirdPath = directory.filePath(QStringLiteral("resaved2.reel"));
+    QVERIFY(second.saveProject(thirdPath));
+    Project third;
+    third = Project::load(thirdPath, &ok, &loadError);
+    QVERIFY2(ok, qPrintable(loadError));
+    QCOMPARE(third.reframeOutputs(), resavedRecords);
+
+    // The usable records are still fully usable, and the preserved entries did not
+    // disturb the ones around them.
+    QCOMPARE(second.reframeOutputs().at(0).outputPath,
+             QFileInfo(directory.filePath(QStringLiteral("one.mp4"))).absoluteFilePath());
+    QCOMPARE(second.reframeOutputs().at(3).outputPath,
+             QFileInfo(directory.filePath(QStringLiteral("two.mp4"))).absoluteFilePath());
+}
+
+void ProjectTest::preservedRenderRecordIsNeverUsedAsARecord()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    QJsonObject valid;
+    valid.insert(QStringLiteral("ok"), true);
+    valid.insert(QStringLiteral("instruction"), QStringLiteral("pan right"));
+    valid.insert(QStringLiteral("outputPath"),
+                 directory.filePath(QStringLiteral("good.mp4")));
+    QJsonObject orphan;
+    orphan.insert(QStringLiteral("instruction"), QStringLiteral("orphan"));
+
+    QJsonArray outputs;
+    outputs.append(valid);
+    outputs.append(orphan);
+
+    Project project;
+    project.setReframeOutputs(outputs);
+    const QString projectPath = directory.filePath(QStringLiteral("preserved.reel"));
+    QVERIFY(project.save(projectPath));
+
+    Application app;
+    QVERIFY(app.openProject(projectPath));
+    QCOMPARE(app.reframeOutputs().size(), 2);
+    const int preservedIndex = 1;
+    QVERIFY(app.reframeOutputs().at(preservedIndex).hasRawRecord());
+    // A preserved entry carries nothing executable and nothing claimable.
+    QVERIFY(app.reframeOutputs().at(preservedIndex).outputPath.isEmpty());
+    QVERIFY(!app.reframeOutputs().at(preservedIndex).hasEditDecision());
+
+    // Every execution path refuses it, honestly and without rendering.
+    QVERIFY(app.revisionOutputPath(preservedIndex).isEmpty());
+    QVERIFY(app.revisionsOf(preservedIndex).isEmpty());
+    QVERIFY(!app.decisionProvenance(preservedIndex).available);
+    QVERIFY(!app.decisionProvenance(preservedIndex).error.isEmpty());
+    const RevisionResult revision =
+        app.reviseEditDecision(preservedIndex, QStringLiteral("zoom in"),
+                               directory.filePath(QStringLiteral("rev.mp4")));
+    QVERIFY(!revision.ok);
+    QVERIFY(revision.error.contains(QStringLiteral("no edit decision")));
+    QVERIFY(!app.previewReframeOutput(preservedIndex));
+    const ReplayResult replay =
+        app.replayEditDecision(preservedIndex, directory.filePath(QStringLiteral("r.mp4")));
+    QVERIFY(!replay.ok);
+    QVERIFY(replay.error.contains(QStringLiteral("no edit decision")));
+    QCOMPARE(app.reframeOutputs().size(), 2);
+
+    // A preserved entry cannot claim a destination either: the default destination
+    // of a later render is unaffected by it.
+    Application empty;
+    QVERIFY(empty.openProject(projectPath));
+    QVERIFY(empty.reframeOutputs().at(preservedIndex).outputPath.isEmpty());
+}
+
+void ProjectTest::mainWindowListsUnreadableRecordHonestly()
+{
+    MainWindow window;
+    auto *outputsList =
+        window.findChild<QListWidget *>(QStringLiteral("reframeOutputsList"));
+    QVERIFY(outputsList);
+
+    QJsonObject orphan;
+    orphan.insert(QStringLiteral("instruction"), QStringLiteral("orphan"));
+    ReframeCommandOutcome preserved;
+    preserved.setRawRecord(orphan);
+
+    ReframeCommandOutcome normal;
+    normal.ok = true;
+    normal.instruction = QStringLiteral("pan right");
+    normal.outputPath = QStringLiteral("/tmp/pan.mp4");
+
+    window.showReframeOutputs({ normal, preserved });
+    QCOMPARE(outputsList->count(), 2);
+    QVERIFY(outputsList->item(0)->text().contains(QStringLiteral("pan right")));
+    // The unreadable entry is described as such, never as an empty record.
+    QVERIFY(outputsList->item(1)->text().contains(QStringLiteral("[unreadable]")));
+    QVERIFY(outputsList->item(1)->text().contains(QStringLiteral("preserved unchanged")));
 }
 
 QTEST_MAIN(ProjectTest)

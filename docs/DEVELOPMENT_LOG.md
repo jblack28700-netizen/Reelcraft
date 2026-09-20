@@ -2914,3 +2914,73 @@ a valid destination) and had explicitly declined to answer the wider question. T
 ### Decisions
 
 - Decision 057 recorded, superseding exactly the one sentence of Decision 056 that deferred this question.
+
+
+## 2026-09-20 — 360 Reframing Objective 38: Unreadable Render Records Are Preserved, Not Discarded
+
+### Objective
+
+Implement the resolution already recorded in `KNOWN_ISSUES.md` for a documented data-loss gap: a render
+record that a build cannot parse was reported and then **discarded**, so opening and re-saving a project
+destroyed it.
+
+### What inspection found
+
+- `Application::restoreReframeOutputsFromJson` counted two failure classes (a non-object entry, and an
+  object that fails `ReframeCommandOutcome::readFromJsonObject`) and reported both, but **dropped the
+  value in both cases**. Since `saveProject` writes `reframeOutputsJson()` — which rebuilt the array from
+  the parsed list — the entry was gone on the next save.
+- The project already had the right precedent one level down: `ReframeCommandOutcome::m_rawEditDecision`
+  preserves an **unreadable decision** byte-for-byte and re-emits it verbatim, precisely so that
+  "opening and re-saving a project can never destroy data this build cannot interpret" (Decision 033).
+  The record level simply had not been brought up to that standard; `KNOWN_ISSUES.md` named the fix as
+  the planned resolution.
+
+### What was built
+
+- **`ReframeCommandOutcome` can carry a preserved raw entry** (`hasRawRecord()`/`rawRecord()`/
+  `setRawRecord()`), with the same explicit `QJsonValue::Undefined` initialization that the decision
+  field needs, and `toJsonValue()` returning the entry exactly as persisted (whatever JSON type it had)
+  or the record's object form otherwise.
+- **`Application::reframeOutputsJson()` serializes VALUES**, so a preserved entry is re-emitted
+  byte-identically and in its original position; a normal record is unchanged.
+- **Both restore failure paths preserve in place** instead of dropping, and the status message now says so
+  ("could not be read and were preserved unchanged; they cannot be replayed or revised") rather than
+  claiming they were skipped.
+- **A preserved entry is never usable.** It has no output path and no decision, so preview, playback,
+  replay, revision, review, provenance and destination claiming all refuse it unchanged — verified rather
+  than assumed. It also cannot claim a destination, so it can never block a later render.
+- **The render list says so honestly** ("[unreadable] this persisted render record could not be read; it is
+  preserved unchanged") instead of showing an empty record.
+
+### Verification
+
+- `applicationPreservesUnreadableRecordsAcrossReopen` (the reproduction and the guarantee): a project
+  mixing two usable records with a non-object entry and an object missing its required output path opens
+  with all four entries in position; re-saving produces an array whose preserved entries are byte-identical
+  and whose usable records still carry their own instruction/output path; a second open/save cycle is
+  stable.
+- `preservedRenderRecordIsNeverUsedAsARecord`: every execution path refuses the preserved entry
+  (destination derivation, supersession, provenance, revision, preview, replay) and nothing is appended.
+- `mainWindowListsUnreadableRecordHonestly` pins the list label.
+- `restoreReframeOutputsReportsUnrestorableRecord` was UPDATED, not deleted: its intent ("reported, never
+  dropped in silence") is preserved and strengthened — it now asserts both entries survive in place, and it
+  matches the corrected message wording.
+- Targeted regression across record persistence/restore, decisions, replay, revision, review and the
+  touched UI; official `scripts/build_and_test.sh`. Numbers are in `CURRENT_STATE.md`.
+
+### Boundary notes / not implemented
+
+- **No new decision was required.** This implements the resolution already recorded for the gap, and
+  applies Decision 033's existing preservation principle one level up. No schema bump (the array already
+  holds arbitrary JSON entries), no new artifact, no change to what a *usable* record serializes as, and no
+  change to the decision-preservation path.
+- Deliberately not attempted: repairing or interpreting a damaged record (the whole point is that this
+  build must not guess), retention/compaction, and any change to how projects are saved otherwise.
+- No real-media claim (no perception or rendering behaviour is involved).
+
+### Decisions
+
+- None required; the recorded `KNOWN_ISSUES.md` resolution was implemented, and both of its statements
+  (here and in the revision-boundary-limits entry) were updated from "not retained" to the implemented
+  behaviour. Decisions 001-057 preserved.

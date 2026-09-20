@@ -640,6 +640,14 @@ void MainWindow::showReframeOutputs(const QList<ReframeCommandOutcome> &outputs)
     }
     m_reframeOutputsList->clear();
     for (const ReframeCommandOutcome &outcome : outputs) {
+        // Objective 38: an entry this build could not read is listed honestly rather
+        // than shown as an empty record.
+        if (outcome.hasRawRecord()) {
+            m_reframeOutputsList->addItem(
+                QStringLiteral("[unreadable] this persisted render record could not "
+                               "be read; it is preserved unchanged"));
+            continue;
+        }
         const QString status =
             outcome.ok ? QStringLiteral("ok") : QStringLiteral("failed");
         QString text = QStringLiteral("[%1] %2 -> %3")

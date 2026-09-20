@@ -58,6 +58,7 @@ file authorises starting one automatically.
 | **Group framing (2-10 subjects)** | done | `TargetTrackPlanner::{planTracks,enclosingFramingDeg}` (exact basis), `ReframeSubjectGroup`/`subjectCount`, runner group resolution | two or more resolved tracks | **fixture only** | `5592118`, this checkpoint (Obj 31) |
 | Persistent media analysis (artifact + runner) | partial | `app/analysis/{MediaAnalysis,MediaAnalysisRunner}.*` | detector / ffprobe | fixture; **no consumer** | `90f671c` |
 | **Creator review (inspect the plan, accept or reject)** | done | `app/application/ReframePlanReview.*`, `Application` review API + preparer seam, `MainWindow` review panel | — | **fixture only** | this checkpoint (Obj 34) |
+| **Project round-trip preservation** (an unreadable render record or edit decision is kept verbatim, never destroyed by open+save) | done | `Application::{reframeOutputsJson,restoreReframeOutputsFromJson}`, `ReframeCommandOutcome::rawRecord` | — | **fixture only** | this checkpoint (Obj 38) |
 | **Non-destructive render destinations** (no render writes to a path a render record owns; derived names are fresh) | done | `Application::{defaultReframeOutputPath,recordHoldingOutputPath}` + `buildReframeCommandContext`/`acceptReframeReview` guards | — | **fixture only** | this checkpoint (Obj 37) |
 | **Creator revision v1 (revise a rendered edit) + provenance/supersession readout** | done | `Application::{revisionOutputPath,reviseReframeOutput,revisionsOf,recordHoldingOutputPath}` over the Objective 17 mechanism, `MainWindow` revision/provenance controls | — | **fixture only** | `6cf1d1e` (Obj 35), this checkpoint (Obj 36) |
 | Pre-render revision (revise a reviewed-but-unrendered plan) | blocked | `ReframePlanReview` + review API exist | a semantic decision: an unrendered plan has no persisted parent decision to point at (parentless `creator-revision` origin / plan-level parentage) | — | — |
@@ -81,6 +82,8 @@ file authorises starting one automatically.
   `realReframePlaybackIntegration`, `realTemporalEditIntegration`, `realCompoundCommandIntegration`,
   `realUserCommandIntegration`, `realApplicationCommandIntegration`), the 5 Objective 28-32 harness
   tests below, and the child-only `replayFreshProcessChild` slot.
+- **Objective 38 adds no validation debt either.** Preservation is a persistence-path property verified by
+  model-free project round-trip tests; it involves no perception or rendering behaviour.
 - **Objective 37 adds no validation debt either.** The destination rule and the creator-workflow
   end-to-end coverage are application-level behaviour over injected seams; they add no perception or
   rendering behaviour, and the one behaviour change (repeated renders no longer overwrite) is fully covered

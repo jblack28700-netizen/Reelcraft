@@ -1238,7 +1238,10 @@ QJsonArray Application::reframeOutputsJson() const
 {
     QJsonArray array;
     for (const ReframeCommandOutcome &outcome : m_reframeOutputs) {
-        array.append(outcome.toJsonObject());
+        // toJsonValue() rather than toJsonObject(): a preserved unreadable entry is
+        // re-emitted exactly as it was persisted, whatever JSON type it had and in
+        // its original position (Objective 38).
+        array.append(outcome.toJsonValue());
     }
     return array;
 }
@@ -1266,6 +1269,10 @@ void Application::restoreReframeOutputsFromJson(const QJsonArray &outputs)
                 firstRecordError =
                     QStringLiteral("a render record entry is not an object");
             }
+            // Objective 38: preserved verbatim, in position, instead of dropped.
+            ReframeCommandOutcome preserved;
+            preserved.setRawRecord(value);
+            m_reframeOutputs.append(preserved);
             continue;
         }
         ReframeCommandOutcome outcome;
@@ -1284,6 +1291,12 @@ void Application::restoreReframeOutputsFromJson(const QJsonArray &outputs)
             if (firstRecordError.isEmpty()) {
                 firstRecordError = error;
             }
+            // Objective 38: preserved verbatim, in position, instead of dropped. The
+            // record stays unusable -- it has no output path and no decision -- but
+            // the project no longer loses it on the next save.
+            ReframeCommandOutcome preserved;
+            preserved.setRawRecord(value);
+            m_reframeOutputs.append(preserved);
         }
     }
 
@@ -1297,8 +1310,8 @@ void Application::restoreReframeOutputsFromJson(const QJsonArray &outputs)
 
     if (unrestorableRecords > 0) {
         emit backgroundCompleted(
-            QStringLiteral("%1 persisted render record(s) could not be restored "
-                           "and were skipped: %2")
+            QStringLiteral("%1 persisted render record(s) could not be read and were "
+                           "preserved unchanged; they cannot be replayed or revised: %2")
                 .arg(unrestorableRecords)
                 .arg(firstRecordError));
     }

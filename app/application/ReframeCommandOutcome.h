@@ -89,8 +89,38 @@ struct ReframeCommandOutcome
         m_editDecisionError = reason;
     }
 
+    // --- Objective 38: a preserved unreadable render record -------------------
+    // A persisted render record that cannot be parsed is PRESERVED verbatim rather
+    // than discarded, exactly as an unreadable edit decision is (Objective 16). It
+    // keeps its position in the record list and is re-emitted byte-identically when
+    // the project is saved again, so opening and re-saving a project can never
+    // destroy data this build cannot interpret -- the resolution recorded for this
+    // gap in KNOWN_ISSUES.
+    //
+    // A preserved record is NOT a usable record: it carries no output path and no
+    // decision, so every execution path (preview, playback, replay, revision,
+    // review, provenance, destination claiming) refuses it. Only persistence sees
+    // it.
+    bool hasRawRecord() const { return !m_rawRecord.isUndefined(); }
+    QJsonValue rawRecord() const { return m_rawRecord; }
+    void setRawRecord(const QJsonValue &raw) { m_rawRecord = raw; }
+
+    // The record as a JSON VALUE: a preserved unreadable entry is returned exactly
+    // as it was persisted (whatever JSON type it had); a normal record as its
+    // object form. Persistence uses THIS, so nothing is normalized away.
+    QJsonValue toJsonValue() const
+    {
+        return m_rawRecord.isUndefined() ? QJsonValue(toJsonObject()) : m_rawRecord;
+    }
+
     QJsonObject toJsonObject() const
     {
+        if (!m_rawRecord.isUndefined()) {
+            // A preserved entry has no parsed form. An object entry is returned
+            // verbatim; a non-object entry has no object form at all and is only
+            // representable as a VALUE (toJsonValue()).
+            return m_rawRecord.isObject() ? m_rawRecord.toObject() : QJsonObject();
+        }
         QJsonObject object;
         object.insert(QStringLiteral("ok"), ok);
         object.insert(QStringLiteral("instruction"), instruction);
@@ -284,6 +314,10 @@ private:
     // is initialized explicitly. Getting it wrong silently emits
     // "editDecision": null for every record that has no decision.
     QJsonValue m_rawEditDecision = QJsonValue(QJsonValue::Undefined);
+
+    // Objective 38: the persisted entry, byte-for-byte, of a render record this
+    // build could not parse. Same initialization hazard as above.
+    QJsonValue m_rawRecord = QJsonValue(QJsonValue::Undefined);
 };
 
 Q_DECLARE_METATYPE(ReframeCommandOutcome)

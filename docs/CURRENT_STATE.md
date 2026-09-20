@@ -7,28 +7,29 @@ repeated here: it lives in `DEVELOPMENT_LOG.md` (chronological record), `DECISIO
 
 ## Version and branch
 
-- Version: **0.2.73** (user-facing history: `CHANGELOG.md`).
-- Branch: `main`. Current checkpoint: this commit (Objective 37); the previous checkpoint was
-  `dae2864a6feeb27feb2804f08c5ec1101fda69e4` (Objective 36), preceded by
-  `6cf1d1ed6a138d22ea26efe7e1a255f5e0e333fb` (Objective 35).
+- Version: **0.2.74** (user-facing history: `CHANGELOG.md`).
+- Branch: `main`. Current checkpoint: this commit (Objective 38); the previous checkpoint was
+  `abfafc99c252749ec7241b93a3da75481f5e20be` (Objective 37), preceded by
+  `dae2864a6feeb27feb2804f08c5ec1101fda69e4` (Objective 36).
 
 ## Priority and stage
 
 - **Human-approved priority:** a working **360 reframing / editing capability**.
   Pipeline: 360 source -> scene/subject understanding -> natural-language or structured request ->
   structured edit/reframe plan -> virtual-camera decisions -> deterministic execution -> flat output.
-- **Stage:** Phase 4 (360 reframing engine) — 34 objectives complete and verified; Phase 3 media
+- **Stage:** Phase 4 (360 reframing engine) — 38 objectives complete and verified; Phase 3 media
   engine is open, its player-lifecycle objective deferred behind the 360 priority.
-- **Current objective:** none selected. Objective 37 (render destinations never overwrite a recorded
-  render, and the creator workflow covered end to end; Decision 057) is complete, following Objective 36
-  (revision safety, Decision 056) and Objective 35 (creator revision v1, Decision 055). The next
-  capability is chosen by the human from `NEXT_TASK.md` §5.
+- **Current objective:** none selected. Objective 38 (unreadable render records are preserved instead of
+  discarded; the recorded `KNOWN_ISSUES.md` resolution) is complete, following Objective 37 (render
+  destinations, Decision 057), Objective 36 (revision safety, Decision 056) and Objective 35 (creator
+  revision v1, Decision 055). The next capability is chosen by the human from `NEXT_TASK.md` §5.
 
 ## Subsystem status
 
 | Subsystem | Status | Where |
 |---|---|---|
 | Desktop shell, project/media library, additive schema v3 | implemented, verified | `app/core/`, `app/ui/` |
+| Project round-trip preservation (unreadable records/decisions kept verbatim) | implemented, verified | `Application::{reframeOutputsJson,restoreReframeOutputsFromJson}`, `ReframeCommandOutcome` |
 | Decode seam, frame pump, player/timing | implemented, verified (no Application lifecycle wiring) | `app/media/`, `app/playback/` |
 | Equirectangular viewer presentation + look-around | implemented, verified | `app/viewer/`, `app/ui/ViewerWidget.*` |
 | 360 source playback (proxy stream, seek, viewpoint) | implemented, verified; **video-only** | `app/application/Application.*` |
@@ -48,7 +49,7 @@ repeated here: it lives in `DEVELOPMENT_LOG.md` (chronological record), `DECISIO
 
 ## Test baseline
 
-- Current result: **516 passed, 0 failed, 14 skipped** (Objective 37 checkpoint; this is the
+- Current result: **519 passed, 0 failed, 14 skipped** (Objective 38 checkpoint; this is the
   canonical form `scripts/checkpoint_check.sh` reads). Full suite with
   `scripts/build_and_test.sh`; a focused set by passing QtTest function names to
   `tests/reelcraft_tests`.
@@ -117,7 +118,12 @@ renderer is byte-identical to the reviewed plan.
   smoothed; framing offsets/lead room are deliberately absent (Decision 046).
 - **No timeline editor, multi-source editing, transitions, captions or colour work**; output is flat
   video only (no 360/equirect export).
-- **No retention policy** for accumulated edit decisions or analysis artifacts.
+- **No retention policy** for accumulated edit decisions or analysis artifacts. Renders also accumulate by
+  design (Decision 057), which makes the absent retention policy a project-size concern sooner; the
+  recorded resolution is a retention/compaction policy that must not break replay or lineage.
+- **A persisted render record this build cannot read is preserved but never repaired**: it is re-emitted
+  verbatim and refused by every execution path, so a project can carry an entry that is visible but
+  unusable (labelled as such in the render list).
 - Technology choices that remain open: final AI provider/model selection, local/cloud split, GPU
   acceleration, packaging/deployment (see `ARCHITECTURE.md` §20).
 
@@ -172,6 +178,7 @@ each objective.
 | Phase 4 Obj 34 | creator review foundation: inspect the prepared plan, accept it (rendering exactly that plan) or reject it | `0401d35` |
 | Phase 4 Obj 35 | creator revision v1: revise a rendered edit to a fresh sibling destination, derived supersession, provenance readout | `6cf1d1e` |
 | Phase 4 Obj 36 | revision safety (never target a held render's output path) and visible derived supersession | `dae2864` |
-| Phase 4 Obj 37 | render destinations never overwrite a recorded render; creator workflow covered end to end | this checkpoint |
+| Phase 4 Obj 37 | render destinations never overwrite a recorded render; creator workflow covered end to end | `abfafc9` |
+| Phase 4 Obj 38 | unreadable render records preserved verbatim instead of discarded (recorded KI resolution) | this checkpoint |
 
 ^ `f4ad631` also carries the canonical workflow policy (Objective 7's precedent).

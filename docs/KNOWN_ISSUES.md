@@ -534,10 +534,12 @@ artifacts. Four limits are deliberate and worth stating plainly:
   state machine. `AI_EDIT_CONTRACT.md` §9's status vocabulary (Proposed, Approved,
   Superseded, ...) therefore remains conceptual, not implemented. Reopening a project
   loses any accept/reject decisions made in the previous session.
-- **An unparseable render record is reported but still discarded.**
-  `restoreReframeOutputsFromJson()` now counts and reports such records through the status
-  channel instead of dropping them silently, but unlike an *unreadable decision* (which is
-  preserved verbatim by `ReframeCommandOutcome`) the record itself is not retained.
+- **An unparseable render record is reported and PRESERVED (resolved, Objective 38).** Until
+  Objective 38, `restoreReframeOutputsFromJson()` counted and reported such records but did not retain
+  them, so opening and re-saving a project destroyed them. They are now preserved verbatim and in
+  position, exactly as an unreadable decision is, and re-emitted byte-identically by
+  `reframeOutputsJson()`. A preserved entry stays unusable — it has no output path and no decision, so
+  every execution path refuses it — but the project no longer loses it.
 - **Lineage resolution requires the parent record to be present.**
   `Application::decisionProvenance()` resolves `parentDecisionHash` against the records the
   application currently holds and reports `parentResolved` honestly. If the parent record
@@ -548,7 +550,8 @@ artifacts. Four limits are deliberate and worth stating plainly:
 ### Impact
 
 Creator decisions are attributable and revisable, but the accept/reject workflow does not
-survive a project reopen, and a damaged record is reported rather than recovered.
+survive a project reopen. (A damaged record is now reported AND preserved rather than discarded —
+Objective 38 closed that part of this entry.)
 
 ### Planned Resolution
 

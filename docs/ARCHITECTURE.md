@@ -445,6 +445,7 @@ consumes it. This is an index, not a replacement for the sections above or for `
 | Seam | Implementation | Guarantee | Major consumers |
 |---|---|---|---|
 | Project / edit model | `app/core/Project.*`, `MediaItem.*` | deterministic project state; additive schema v3; original media never modified | Application, UI, decision/analysis artifacts |
+| Project round-trip preservation | `Application::{reframeOutputsJson,restoreReframeOutputsFromJson}`, `ReframeCommandOutcome::rawRecord` | an entry this build cannot parse (record or decision) is preserved verbatim, in position, and re-emitted byte-identically, so open+save can never destroy data it does not understand; a preserved entry is never executable | project persistence |
 | Media-source seam | `app/media/FrameSource.h` (abstract) | bounded reads; Ok / EndOfStream / Error / Timeout; caller-supplied geometry | `FramePump`, `Player`, playback |
 | Persistent FFmpeg source | `app/media/FfmpegFrameSource.*` | one subprocess per open; input seek; aspect-preserving proxy; `-an` | source playback, analysis runner, stream provider |
 | Frame pump | `app/media/FramePump.*` | synchronous, caller-driven; no timer/thread | `Player` |
@@ -511,6 +512,7 @@ Section headers in `tests/test_project.cpp` name the objective each group belong
 | Lens / FOV control (Obj 29) | `reframeIntentParsesFraming`, `reframeBuilderAppliesRequestedFraming`, `reframeContractFieldOfViewFidelity`, `reframeCommandRunnerFollowsAtRequestedFraming`, `reframeCommandRunnerSpeakerFramingIsHonest`, `reframePipelineRendersRequestedFraming` |
 | Explicit subject sets (Obj 32) | `reframeIntentParsesExplicitSubjectSets`, `reframeCommandRunnerResolvesExplicitSubjects`, `reframeCommandRunnerExplicitSubjectsRefuseHonestly`, `reframeExplicitSubjectsRenderAndReplay` |
 | Group framing (Obj 30/31) | `reframeIntentParsesMultiSubjectFraming`, `reframeIntentParsesGroupFraming`, `reframeMultiSubjectFramingGeometry`, `reframeGroupFramingGeometrySweep`, `reframeGroupFramingResolvesCanonicalSets`, `reframeGroupFramingRefusesHonestly`, `reframeCommandRunnerFramesTwoSubjects`, `reframeCommandRunnerResolvesTwoDetectedPeople`, `reframeCommandRunnerRejectsUnsatisfiableMultiSubject`, `reframeCommandRunnerFramesMovingSubjectsAndReplays`, `reframeGroupFramingRendersAndReplays` |
+| Unreadable persisted records preserved across reopen (Obj 38) | `applicationPreservesUnreadableRecordsAcrossReopen`, `preservedRenderRecordIsNeverUsedAsARecord`, `restoreReframeOutputsReportsUnrestorableRecord`, `mainWindowListsUnreadableRecordHonestly` |
 | Render destinations never overwrite a recorded render (Obj 37) | `applicationRenderDestinationsNeverOverwriteARecordedRender`, `applicationCommandRefusesAnExplicitPathHeldByARecord`, `applicationReviewAcceptRefusesAClaimedDestination` |
 | Creator workflow end to end (Obj 37) | `creatorWorkflowEndToEndPreservesInvariants`, `creatorWorkflowSupersessionIsDecisionLevel` |
 | Creator revision + provenance readout (Obj 35) | `applicationRevision*`, `mainWindowRevisionAndProvenanceSurface` |

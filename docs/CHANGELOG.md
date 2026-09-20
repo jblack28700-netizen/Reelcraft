@@ -937,6 +937,16 @@ Date: 2026-09-20
 - The first render of a clip still uses the same familiar name, and naming your own fresh destination still works exactly as before. Replay keeps its own stricter rule of never writing over an existing file.
 - 5 new tests (including an end-to-end pass through the whole creator workflow: command, review, accept, revise, replay, reopen); one existing determinism test was updated because it used to prove determinism by re-rendering onto the same file, which is now refused and is asserted as such. Full model-free suite 516 passed / 0 failed / 14 skipped. Decision 057 records the rule.
 
+## v0.2.74 — Opening and re-saving a project can no longer lose a damaged entry
+
+Date: 2026-09-20
+
+- If a saved project contains a rendered-result entry that this build cannot read, Reelcraft now **keeps it exactly as it was saved** instead of quietly dropping it. Previously the entry was reported in the status line but was gone the next time the project was saved, which could lose part of the project's history for good.
+- A preserved entry is shown in the results list as unreadable and clearly marked as preserved unchanged. It cannot be previewed, played, replayed or revised — Reelcraft never guesses at what it cannot read — but it is no longer destroyed by simply opening and saving the project.
+- This matches what already happened for an unreadable edit decision inside a result, so the two halves of a project record now behave the same way.
+- 3 new tests, plus an existing test strengthened (it used to assert only that a damaged entry was reported; it now asserts it survives in place). Full model-free suite 519 passed / 0 failed / 14 skipped.
+
+
 
 
 
