@@ -59,9 +59,14 @@ repeated here: it lives in `DEVELOPMENT_LOG.md` (chronological record), `DECISIO
 
 Fixture-verified: the whole model-free suite. Real-media-verified at some earlier checkpoint: source
 playback, target detection, follow pipelines, temporal edits, rendered-result playback, application
-commands (when the `REELCRAFT_*` inputs are configured — see `DEVELOPMENT_ENVIRONMENT.md`).
-**Not yet real-media-verified: rendered-output audio (Obj 28), lens control (Obj 29), two-subject
-framing (Obj 30).** See `NEXT_TASK.md` §4.
+commands (when the `REELCRAFT_*` inputs are configured).
+
+**Not real-media-verified: rendered-output audio (Obj 28), lens control (Obj 29), two-subject framing
+(Obj 30), N-way group framing (Obj 31) and explicit subject sets (Obj 32).** A readiness assessment on
+2026-09-18 found this container cannot run that sweep: no real 360 clip, no `numpy`/`cv2`/
+`onnxruntime`, no model weights, and no existing gated test asserting Objectives 28-32 behaviour.
+Exact inventory, probes and the invocation contract are in `DEVELOPMENT_ENVIRONMENT.md`; the debt and
+its minimum unblocking action are in `NEXT_TASK.md` §4.
 
 ## Known limitations (current, not historical)
 

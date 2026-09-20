@@ -359,3 +359,55 @@ This is not a code defect and not a compiler bug: it is a stale generated build 
 
       awk '/^test_project.o:/{f=1} f{print} f&&!/\\$/{exit}' tests/Makefile | grep -c 'ReframeStreamFrameProvider.h'
 
+
+## Real-media validation prerequisites in this container (2026-09-18)
+
+Measured, not assumed, before attempting the Objective 28-32 validation sweep. Re-run these probes
+instead of re-deriving them.
+
+### AVAILABLE
+
+- `ffmpeg` 6.1.1 and `ffprobe` at `/usr/bin` (libx264, aac, scale/atrim/concat filters): proxy
+  extraction and normal renders work.
+- Python 3.12.3.
+- Resources: 8 CPUs, ~1 TB RAM, ~9.2 GB free on `/` (a 12 s 1280x640 proxy is ~600 KB), no GPU
+  (matches the documented CPU-only helper setup).
+- The gated-test mechanism itself: the 8 `real*` tests run and skip with their documented messages
+  when the `REELCRAFT_*` inputs are unset, so the invocation contract is verified.
+
+### MISSING
+
+- **Real 360 footage.** `~/360_TEST_4K.mp4`, `~/.cache/reelcraft/media/` (proxy clips) do not exist,
+  and a filesystem search for video files larger than 20 MB found none. No `/mnt`, `/media` or
+  `/data` mount holds media; `/workspace` is a 94 GB volume containing only this repository (22 MB
+  used).
+- **`numpy`, `cv2`, `onnxruntime`**: all three fail to import (`ModuleNotFoundError`). Debian/Ubuntu
+  packages `python3-numpy` (1.26.4) and `python3-opencv` (4.6.0) are available as apt candidates; no
+  `python3-onnxruntime` candidate was found (pip would be required).
+- **Model weights**: `~/.cache/reelcraft/models/` does not exist, so `yolox_2022nov.onnx`,
+  `reid_0277.onnx` and `silero_vad.onnx` are all absent.
+
+### OPTIONAL (not needed for a first sweep)
+
+- Appearance re-identification and speaker evidence helpers (Obj 4-7 behaviour); a detector-only sweep
+  needs neither.
+
+### Exact probes
+
+    ls -la ~/360_TEST_4K.mp4 ~/.cache/reelcraft/{media,models}
+    find / -xdev -type f \( -name '*.mp4' -o -name '*.mov' -o -name '*.mkv' \) -size +20M 2>/dev/null
+    python3 -c 'import numpy, cv2, onnxruntime'
+    nproc; free -h; df -h /
+
+### Invocation contract for the existing harness
+
+    REELCRAFT_TARGET_CLIP=<proxy-or-clip> \
+    REELCRAFT_TARGET_DETECTOR_PY=<python3> REELCRAFT_TARGET_DETECTOR_SCRIPT=tools/detector_helper/yolox_detector.py \
+    REELCRAFT_TARGET_YOLOX_MODEL=~/.cache/reelcraft/models/yolox_2022nov.onnx \
+    QT_QPA_PLATFORM=offscreen ./tests/reelcraft_tests realDetectorIntegration realUserCommandIntegration \
+      realApplicationCommandIntegration realTemporalEditIntegration realCompoundCommandIntegration \
+      realSourcePlaybackIntegration realReframePlaybackIntegration
+
+Each test prints the exact variables it needs when it skips. Coverage note: this harness predates
+Objectives 28-32 and asserts none of their behaviour (see `NEXT_TASK.md` §4).
+

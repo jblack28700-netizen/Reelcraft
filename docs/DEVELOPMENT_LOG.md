@@ -2447,3 +2447,59 @@ rather than adding a second multi-subject implementation.
   framing construction; duplicates resolved then de-duplicated; canonical order decides the set).
   Decisions 001-052 preserved.
 
+
+
+## 2026-09-18 — Validation Readiness Assessment: Real-Media Sweep for Objectives 28-32
+
+### Objective
+
+Determine whether this RunPod environment can actually perform real-media validation of the 360
+reframing behaviour accumulated in Objectives 28-32 (rendered-output audio, lens control, two-subject
+framing, N-way group framing, explicit subject sets). Readiness only: no product code, no substitutes.
+
+### What inspection found
+
+- **The documented assets are absent here.** `~/360_TEST_4K.mp4`, `~/.cache/reelcraft/media/` and
+  `~/.cache/reelcraft/models/` do not exist, and a filesystem search found no video file larger than
+  20 MB anywhere on the root filesystem or the 94 GB workspace volume (which holds only this
+  repository). The documentation does identify `360_TEST_4K.mp4` as the project's real footage
+  (`DEVELOPMENT_ENVIRONMENT.md`, Decision 023, the Objective 3/5 log entries), so no substitute was
+  sought and none was invented.
+- **The helper runtimes are absent.** `numpy`, `cv2` and `onnxruntime` all fail to import
+  (`ModuleNotFoundError`); apt offers `python3-numpy` and `python3-opencv` but no
+  `python3-onnxruntime`; no model weights exist.
+- **The environment is otherwise capable**: ffmpeg 6.1.1 with libx264/aac, 8 CPUs, ~1 TB RAM, ~9 GB
+  free disk, no GPU (the helpers are documented CPU-only).
+- **The gated harness exists and works, but predates these objectives.** Running the 8 `real*` tests
+  skips them with their documented messages in 1 ms, verifying the invocation contract. Reading their
+  bodies shows they assert Objectives 13/14/19 behaviour only — rendered playback, temporal segments,
+  a single-subject "follow person 1", source playback, project reopen — and **nothing** for output
+  audio (Obj 28), a requested lens reaching the render (Obj 29), or multi-subject framing, group and
+  explicit references, containment against real footprints and honest refusals (Obj 30-32).
+- Conclusion: the sweep is blocked twice over — by missing assets **and** by the absence of an
+  Objective 28-32 real-media harness. Fabricating either would be exactly the substitution this
+  objective forbids.
+
+### What changed
+
+- Documentation only, with measured facts: `NEXT_TASK.md` §4 (validation debt now records the
+  two-part blocker, the exact missing prerequisites and the minimum human action),
+  `DEVELOPMENT_ENVIRONMENT.md` (new section: AVAILABLE / MISSING / OPTIONAL inventory, the exact probe
+  commands, and the invocation contract for the existing harness), `CURRENT_STATE.md` (validation
+  status).
+- No product code, test, script, schema or dependency change. The model-free baseline stands at the
+  Objective 32 checkpoint: **487 passed / 0 failed / 9 skipped** (no code changed, so the suite was
+  not re-run merely for ceremony). No real-media validation result is claimed anywhere.
+
+### Boundary notes
+
+- The distinction the objective demanded is preserved: nothing here reports that a code path executed,
+  that a renderer produced output, that a real detector produced evidence, or that framing is visually
+  acceptable on real footage. **No real-media evidence exists for Objectives 28-32.**
+- Validation debt was **not** reduced; it was made precisely actionable.
+- No decision entry: no architectural decision was required.
+
+### Decisions
+
+- None. Decisions 001-053 preserved.
+
