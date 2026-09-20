@@ -7,19 +7,21 @@ repeated here: it lives in `DEVELOPMENT_LOG.md` (chronological record), `DECISIO
 
 ## Version and branch
 
-- Version: **0.2.67** (user-facing history: `CHANGELOG.md`).
-- Branch: `main`. Current checkpoint: `5592118074624348033185afcb462069284e6c13` (Objective 30).
+- Version: **0.2.70** (user-facing history: `CHANGELOG.md`).
+- Branch: `main`. Current checkpoint: this commit (Objective 34); the previous checkpoint was
+  `14df4e5096e8b76febd567d0782b55dcdec65bef` (Objective 33). Objective 31 and 32 landed in
+  `414c33d` and `5f7734f`.
 
 ## Priority and stage
 
 - **Human-approved priority:** a working **360 reframing / editing capability**.
   Pipeline: 360 source -> scene/subject understanding -> natural-language or structured request ->
   structured edit/reframe plan -> virtual-camera decisions -> deterministic execution -> flat output.
-- **Stage:** Phase 4 (360 reframing engine) — 30 objectives complete and verified; Phase 3 media
+- **Stage:** Phase 4 (360 reframing engine) — 34 objectives complete and verified; Phase 3 media
   engine is open, its player-lifecycle objective deferred behind the 360 priority.
-- **Current objective:** none selected. The approved multi-subject framing batch is complete —
-  Objective 31 (N-way group framing, Decision 052) and Objective 32 (explicit subject sets,
-  Decision 053) — and the next capability is chosen by the human from `NEXT_TASK.md` §5.
+- **Current objective:** none selected. Objective 34 (creator review foundation — inspect the plan,
+  accept or reject it; Decision 054) is complete, and the next capability is chosen by the human from
+  `NEXT_TASK.md` §5.
 
 ## Subsystem status
 
@@ -38,16 +40,17 @@ repeated here: it lives in `DEVELOPMENT_LOG.md` (chronological record), `DECISIO
 | Intent -> plan contract checker (IPC-1..4) | implemented, verified | `app/reframe/ReframeContract.*` |
 | Rendered-output audio preservation | implemented, verified **on fixtures only** | `ReframeRenderer`, `ReframePipeline` |
 | Persistent media analysis (artifact + one-pass runner) | implemented; **no consumer yet** | `app/analysis/` |
-| Creator review/revision UI | **missing** (APIs exist) | — |
+| Creator review (inspect the prepared plan, accept or reject) | implemented, verified (fixtures) | `app/application/ReframePlanReview.*`, `Application` review API, `MainWindow` panel |
+| Creator revision UI | **missing** (`reviseEditDecision` is an API only) | — |
 | In-app audio playback | **missing** (Decision 036 follow-up) | — |
 
 ## Test baseline
 
-- Current result: **487 passed, 0 failed, 14 skipped** (Objective 33 checkpoint; this is the
+- Current result: **500 passed, 0 failed, 14 skipped** (Objective 34 checkpoint; this is the
   canonical form `scripts/checkpoint_check.sh` reads). Full suite with
   `scripts/build_and_test.sh`; a focused set by passing QtTest function names to
   `tests/reelcraft_tests`.
-- Measured wall time: **~66 s** on the current RunPod container; ~730 s on the proot development
+- Measured wall time: **~80 s** on the current RunPod container; ~730 s on the proot development
   device, which the script's **900 s** ceiling accommodates. The FFmpeg render/decode/analysis tests
   dominate; a 25-test logic subset runs in ~1.7 s.
 - The **14 skips are by design**: 13 environment-gated real-media/model integrations (8 from
@@ -72,12 +75,21 @@ commands (when the `REELCRAFT_*` inputs are configured).
 Exact inventory, probes and the invocation contract are in `DEVELOPMENT_ENVIRONMENT.md`; the debt and
 its minimum unblocking action are in `NEXT_TASK.md` §4.
 
+Objective 34 (creator review) adds **no** real-media debt and needs no sweep: it orchestrates
+application and UI behaviour over artifacts that are already validated (the plan, the edit decision,
+the render seam) and adds no perception, geometry or rendering behaviour. Its validation level is
+fixture by design, and the fixture tests assert the invariant that matters — the plan handed to the
+renderer is byte-identical to the reviewed plan.
+
 ## Known limitations (current, not historical)
 
 - **No audio output in the application**: rendered files carry audio (Obj 28), but source and
   rendered-result playback are video-only (Decision 036).
-- **No creator review/revision UI**: `decisionProvenance()`, `reviseEditDecision()` and
-  `replayEditDecision()` exist as APIs only; accept/reject status is session-only.
+- **Creator review is accept-or-reject only**: the prepared plan can be inspected and either
+  accepted (which renders exactly that plan) or rejected, but it cannot be revised, edited on a
+  timeline, or undone; `reviseEditDecision()` and `decisionProvenance()` remain APIs without a review
+  surface. The pending review is session state, so closing and reopening a project leaves nothing to
+  accept, and it shows the plan rather than a preview frame.
 - **Media analysis has no consumer**: artifacts are produced and referenced, never yet used to make
   a decision; sampling defaults to a 1 s grid.
 - **Perception needs external helpers**: detection, appearance and speaker evidence are optional
@@ -142,6 +154,8 @@ each objective.
 | Phase 4 Obj 16-21 | reproducible edit decisions, provenance/revision, contract checker, source playback, persistent render decoding, persistent media analysis | `bed4f97`, `0902a16`, `dc42d82`, `94d8bb4`, `56f7ac2`, `90f671c` |
 | Phase 4 Obj 23-27 | follow camera paths, follow sampling density, decoder reuse, trajectory smoothing, covering-view duplicate consolidation (no Objective 22 was scoped) | `39668ca`, `99a7282`, `c872dc3`, `0e90fc3`, `0144bfa` |
 | Phase 4 Obj 28-32 | source-audio preservation, lens/FOV control, two-subject framing, N-way group framing (with the enclosure rule recomputed exactly in the renderer's basis), explicit subject sets | `7adf433`, `d971009`, `5592118`, `414c33d`, `this checkpoint` |
-| Process Obj P1 | development-management consolidation (register, seam/test indexes, batch+gate policy, checkpoint hygiene) | this checkpoint |
+| Process Obj P1 | development-management consolidation (register, seam/test indexes, batch+gate policy, checkpoint hygiene) | `6198273` |
+| Phase 4 Obj 33 | real-media validation harness for Objectives 28-32 (env-gated; still unrun) | `14df4e5` |
+| Phase 4 Obj 34 | creator review foundation: inspect the prepared plan, accept it (rendering exactly that plan) or reject it | this checkpoint |
 
 ^ `f4ad631` also carries the canonical workflow policy (Objective 7's precedent).

@@ -4,6 +4,7 @@
 #include <QMainWindow>
 
 #include "application/ReframeCommandOutcome.h"
+#include "application/ReframePlanReview.h"
 #include "core/MediaItem.h"
 #include "core/Project.h"
 
@@ -72,6 +73,12 @@ public slots:
     // (Objective 12). The providers are external and optional.
     void showProviderStatus(bool hasDetector, bool hasSpeaker);
 
+    // Presents the pending creator review of a prepared plan (Objective 34), or
+    // the "nothing is waiting" state for an invalid review. The panel is a VIEW:
+    // it displays what the plan will do and offers accept or reject, and it
+    // cannot change the plan.
+    void showReframeReview(const ReframePlanReview &review);
+
     // Updates the rendered-result playback state readout (Objective 13).
     void showReframePlaybackState(bool playing);
     void showReframePlaybackPosition(qint64 frameCount, qint64 positionMs);
@@ -92,6 +99,12 @@ signals:
     void setMediaProjectionRequested(const QString &mediaId, const QString &projectionValue);
     void reframeCommandRequested(const QString &instruction, qint64 startMs,
                                  qint64 endMs);
+    // Objective 34: "review the plan before committing to a render" and the two
+    // decisions a creator can make about a reviewed plan.
+    void reframeReviewRequested(const QString &instruction, qint64 startMs,
+                                qint64 endMs);
+    void acceptReframeReviewRequested();
+    void rejectReframeReviewRequested();
     void selectCreatorTargetRequested();
     void clearCreatorTargetRequested();
     void previewReframeOutputRequested(int index);
@@ -144,6 +157,12 @@ private:
     QDoubleSpinBox *m_commandEndSeconds = nullptr;
     QPushButton *m_runCommandButton = nullptr;
     QLabel *m_commandResultLabel = nullptr;
+
+    // Objective 34: creator review panel (inspect -> accept or reject).
+    QPushButton *m_reviewButton = nullptr;
+    QPushButton *m_acceptReviewButton = nullptr;
+    QPushButton *m_rejectReviewButton = nullptr;
+    QLabel *m_reviewSummaryLabel = nullptr;
     QListWidget *m_reframeOutputsList = nullptr;
 
     // Objective 12: creator selection, render preview, provider status.

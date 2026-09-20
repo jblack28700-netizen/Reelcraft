@@ -73,6 +73,18 @@ MainWindow::MainWindow(QWidget *parent)
     m_commandEndSeconds->setValue(0.0);
     m_runCommandButton = new QPushButton(QStringLiteral("Run 360 Command"), central);
     m_commandResultLabel = new QLabel(QStringLiteral("No reframe command run."), central);
+
+    // Objective 34: inspect the plan before committing to a render.
+    m_reviewButton = new QPushButton(QStringLiteral("Review Plan"), central);
+    m_acceptReviewButton = new QPushButton(QStringLiteral("Accept & Render"), central);
+    m_rejectReviewButton = new QPushButton(QStringLiteral("Reject"), central);
+    m_reviewSummaryLabel = new QLabel(
+        QStringLiteral("No plan is waiting for review."), central);
+    m_reviewSummaryLabel->setWordWrap(true);
+    m_reviewSummaryLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    // A plan must be reviewed before it can be accepted or rejected.
+    m_acceptReviewButton->setEnabled(false);
+    m_rejectReviewButton->setEnabled(false);
     m_reframeOutputsList = new QListWidget(central);
     m_reframeOutputsList->setMinimumHeight(60);
     m_previewRenderButton = new QPushButton(QStringLiteral("Preview Selected Render"), central);
@@ -127,6 +139,10 @@ MainWindow::MainWindow(QWidget *parent)
     m_commandEndSeconds->setObjectName("reframeEndSeconds");
     m_runCommandButton->setObjectName("runReframeCommandButton");
     m_commandResultLabel->setObjectName("reframeResultLabel");
+    m_reviewButton->setObjectName("reviewReframePlanButton");
+    m_acceptReviewButton->setObjectName("acceptReframeReviewButton");
+    m_rejectReviewButton->setObjectName("rejectReframeReviewButton");
+    m_reviewSummaryLabel->setObjectName("reframeReviewSummaryLabel");
     m_reframeOutputsList->setObjectName("reframeOutputsList");
     m_previewRenderButton->setObjectName("previewRenderButton");
     m_selectCreatorButton->setObjectName("selectCreatorButton");
@@ -175,6 +191,10 @@ MainWindow::MainWindow(QWidget *parent)
     layout->addWidget(m_commandEndSeconds);
     layout->addWidget(m_runCommandButton);
     layout->addWidget(m_commandResultLabel);
+    layout->addWidget(m_reviewButton);
+    layout->addWidget(m_reviewSummaryLabel);
+    layout->addWidget(m_acceptReviewButton);
+    layout->addWidget(m_rejectReviewButton);
     layout->addWidget(m_reframeOutputsList);
     layout->addWidget(m_previewRenderButton);
     layout->addWidget(m_selectCreatorButton);
@@ -274,6 +294,20 @@ MainWindow::MainWindow(QWidget *parent)
             qRound64(m_commandEndSeconds->value() * 1000.0));
         emit reframeCommandRequested(m_commandEdit->text(), startMs, endMs);
     });
+
+    // Objective 34. Reviewing reuses the same instruction and range inputs as
+    // running: a review is the decision stage of the command the creator typed.
+    connect(m_reviewButton, &QPushButton::clicked, this, [this]() {
+        const qint64 startMs = static_cast<qint64>(
+            qRound64(m_commandStartSeconds->value() * 1000.0));
+        const qint64 endMs = static_cast<qint64>(
+            qRound64(m_commandEndSeconds->value() * 1000.0));
+        emit reframeReviewRequested(m_commandEdit->text(), startMs, endMs);
+    });
+    connect(m_acceptReviewButton, &QPushButton::clicked, this,
+            &MainWindow::acceptReframeReviewRequested);
+    connect(m_rejectReviewButton, &QPushButton::clicked, this,
+            &MainWindow::rejectReframeReviewRequested);
 
     connect(m_selectCreatorButton, &QPushButton::clicked, this,
             &MainWindow::selectCreatorTargetRequested);
@@ -466,6 +500,30 @@ void MainWindow::showReframeCommandResult(const ReframeCommandOutcome &outcome)
         m_commandResultLabel->setText(
             QStringLiteral("Reframe command failed: %1").arg(outcome.error));
     }
+}
+
+void MainWindow::showReframeReview(const ReframePlanReview &review)
+{
+    if (!m_reviewSummaryLabel) {
+        return;
+    }
+    // The accept/reject controls are only meaningful while a plan is waiting.
+    const bool pending = review.isValid();
+    m_acceptReviewButton->setEnabled(pending);
+    m_rejectReviewButton->setEnabled(pending);
+    if (!pending) {
+        m_reviewSummaryLabel->setText(
+            QStringLiteral("No plan is waiting for review."));
+        return;
+    }
+    // The summary is the review's own deterministic lines; the panel adds no
+    // interpretation of its own.
+    m_reviewSummaryLabel->setText(
+        QStringLiteral("Reviewing a plan of %1 keyframe(s) (digest %2). Nothing "
+                       "has been rendered yet.\n%3")
+            .arg(review.keyframeCount)
+            .arg(review.planDigest.left(12),
+                 review.summaryLines().join(QStringLiteral("\n"))));
 }
 
 void MainWindow::showReframeOutputs(const QList<ReframeCommandOutcome> &outputs)

@@ -11,6 +11,7 @@
 
 #include "analysis/MediaAnalysis.h"
 #include "application/ReframeCommandOutcome.h"
+#include "application/ReframePlanReview.h"
 #include "core/MediaItem.h"
 #include "core/Project.h"
 #include "media/MediaDurationProbe.h"
@@ -72,6 +73,17 @@ struct RevisionResult
 {
     bool ok = false;
     int newRecordIndex = -1;
+    QString error;
+};
+
+// The outcome of one creator-review accept attempt (Objective 34). Accept
+// either renders the reviewed plan (ok, newRecordIndex points at the appended
+// record) or fails honestly with a reason; a rejection is not an attempt.
+struct ReframeReviewResult
+{
+    bool ok = false;
+    int newRecordIndex = -1;
+    int frameCount = 0;
     QString error;
 };
 
@@ -220,6 +232,58 @@ public slots:
 
     // Default output specification used when the command does not specify one.
     void setReframeDefaultOutput(int width, int height, double fps);
+
+    // --- creator review of the prepared plan (Objective 34) ------------------
+    // Creator Review lets a creator inspect the structured edit/reframe plan
+    // BEFORE committing to a render. It is a VIEW of the canonical plan, not a
+    // second editor and not a second plan representation:
+    //
+    //   prepare -> inspect -> accept (render EXACTLY the reviewed plan)
+    //                      -> reject (render nothing)
+    //
+    // There is no revision path here, no timeline editing, and no undo: the
+    // creator either accepts what the decision stage planned or goes back and
+    // runs a different command. The authoritative artifact stays the validated
+    // ReframePlan and, once rendered, the EditDecision that carries it.
+    //
+    // prepareReframeCommand() runs the DECISION stage only (parse, resolve,
+    // plan) through the same validation and request construction the direct
+    // command path uses, so a reviewed plan cannot drift from an executed one.
+    // It never renders, never appends a record, and never modifies the source
+    // media. On success a pending review is available; on failure the reason is
+    // reported through reframeCommandFinished() with no output path, so nothing
+    // is recorded as a render.
+    bool prepareReframeCommand(const QString &instruction, qint64 startMs,
+                               qint64 endMs);
+
+    // True while a prepared plan is awaiting the creator's decision.
+    bool hasPendingReview() const;
+    // The pending review; an invalid review (isValid() false) when there is
+    // none. The plan it carries is the exact plan Accept executes.
+    ReframePlanReview pendingReview() const;
+
+    // Accept: renders the EXACT reviewed plan through the existing
+    // deterministic render seam (the same ReframePipeline entry point replay
+    // uses) and records the result through the single append gate, with an
+    // EditDecision built from that same plan. The plan is never re-parsed,
+    // re-resolved or re-planned, and it is never mutated by review.
+    //
+    // An empty outputPath keeps the destination the review was prepared with; a
+    // non-empty one replaces it after the same validation the command path
+    // applies (the directory must exist and the path must differ from the
+    // source media). The pending review is cleared on every outcome, so a
+    // failed render cannot be re-accepted against a stale plan.
+    ReframeReviewResult acceptReframeReview(const QString &outputPath = QString());
+
+    // Reject: discards the pending review. Nothing is rendered, no record is
+    // appended, and the source media is untouched.
+    void rejectReframeReview();
+
+    // Test/DI seam: the preparer defaults to ReframeCommandRunner::prepare. It
+    // has the same shape as the command executor, and only the decision stage
+    // is used.
+    void setReframeCommandPreparer(const ReframeCommandExecutor &preparer);
+    void resetReframeCommandPreparer();
 
     // --- generated render records (Objective 10) ----------------------------
     // The authoritative, ordered list of command attempts that reached an
@@ -430,8 +494,16 @@ signals:
     void previewTimeChanged(double seconds);
 
     // Emitted after every 360 reframe command attempt (success or failure) with
-    // structured, application-visible information.
+    // structured, application-visible information. A preparation that produced
+    // no plan (Objective 34) reports its failure the same way, with an empty
+    // output path, so a failed preparation is never recorded as a render.
     void reframeCommandFinished(const ReframeCommandOutcome &outcome);
+
+    // Emitted whenever the pending creator review changes (Objective 34): after
+    // a successful prepare it carries the review, and after accept, reject, or
+    // any change that invalidates it (new/opened project, active-media change
+    // or removal) it carries an invalid review, meaning "there is none".
+    void reframeReviewChanged(const ReframePlanReview &review);
 
     // Emitted whenever the persisted render-record list changes (a new record,
     // a new/opened project).
@@ -487,6 +559,27 @@ private:
                                    qint64 endMs, const QString &outputPath,
                                    const EditDecision *parentDecision);
 
+    // Objective 34. The shared command-side validation and request
+    // construction: the direct command path, the revision path and the review
+    // prepare stage all build their request here, so the plan a creator reviews
+    // is built from exactly the request that would otherwise have been executed.
+    // On failure ok is false and outcome.error carries the reason, with everything
+    // before the failing step already filled in.
+    struct CommandContext
+    {
+        bool ok = false;
+        ReframeCommandOutcome outcome;
+        MediaItem media;                 // by-value snapshot of the active media
+        ReframeCommandRequest request;   // meaningful only when ok
+    };
+    CommandContext buildReframeCommandContext(const QString &instruction,
+                                              qint64 startMs, qint64 endMs,
+                                              const QString &outputPath);
+
+    // Discards any pending review, emitting reframeReviewChanged() only when
+    // there was one. Never renders and never touches media.
+    void clearPendingReview();
+
     QJsonArray mediaJson() const;
     void restoreMediaFromJson(const QJsonArray &media);
     // Restores the active id from a persisted value after the media list has
@@ -503,6 +596,9 @@ private:
 
     // 360 reframe command orchestration (Objective 9).
     ReframeCommandExecutor m_commandExecutor;
+    // Objective 34: the decision-stage-only counterpart of m_commandExecutor,
+    // used by the creator review prepare stage.
+    ReframeCommandExecutor m_commandPreparer;
     TargetDetector *m_targetDetector = nullptr;
     ReframeFrameProvider *m_commandFrameProvider = nullptr;
     ReframeCommandOutcome m_lastReframeOutcome;
@@ -517,6 +613,12 @@ private:
     QList<ReframeCommandOutcome> m_reframeOutputs;
     QList<MediaAnalysisReference> m_analysisRefs;
     ReframeReplayRenderer m_replayRenderer;
+
+    // Objective 34: the pending creator review (session state, never persisted)
+    // and the destination Accept will use unless it is given another one.
+    ReframePlanReview m_pendingReview;
+    QString m_pendingReviewOutputPath;
+    QList<ReframeTarget> m_pendingReviewTargets;
 
     // Objective 12: creator "me" selection and render preview.
     CreatorTargetSelection m_creatorSelection;

@@ -7,6 +7,7 @@ TARGET = reelcraft
 SOURCES += \
     app/main.cpp \
     app/application/Application.cpp \
+    app/application/ReframePlanReview.cpp \
     app/analysis/MediaAnalysis.cpp \
     app/analysis/MediaAnalysisRunner.cpp \
     app/core/MediaItem.cpp \
@@ -65,6 +66,7 @@ HEADERS += \
     app/analysis/MediaAnalysis.h \
     app/analysis/MediaAnalysisRunner.h \
     app/application/ReframeCommandOutcome.h \
+    app/application/ReframePlanReview.h \
     app/core/MediaItem.h \
     app/core/MediaSourceReference.h \
     app/core/Project.h \

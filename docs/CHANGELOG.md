@@ -893,3 +893,17 @@ Date: 2026-09-18
 - Single-person instructions, group phrases and saved edits behave exactly as before, and replays still produce precisely the same frames.
 - 4 new tests; targeted regression 105 passed / 0 failed / 0 skipped and the full model-free suite 487 passed / 0 failed / 9 skipped. Decision 053 records the design.
 
+
+## v0.2.70 — You can now review an edit before rendering it
+
+Date: 2026-09-18
+
+- Reelcraft can now show you **what it is about to do before it does it**. A new "Review Plan" action takes the instruction you typed — with the same time range and the same subject selection the "Run 360 Command" action uses — works out the edit, and shows it to you, without rendering anything and without writing a file.
+- The review describes the decision in plain terms: what Reelcraft understood, which subjects it framed and how, where the camera starts and ends up, whether it moves, which lens it chose and whether that lens changes, which parts of the clip are kept, the shape and frame rate of the result, and what happens to the sound. It also shows how many camera keyframes the plan contains and a short fingerprint of the exact plan.
+- You then **Accept** or **Reject**. Accept renders precisely the plan you were shown — the same keyframes, the same lens, the same kept sections, the same destination — and records it like any other render, so it can be replayed and reopened later. Reject throws the plan away: nothing is rendered, no file is written, and your original footage is untouched.
+- Reviewing is deliberately only a review. There is no editing of the proposed plan, no timeline, and no undo: you either accept what was worked out or go back and give a different instruction. The instruction boxes and the time range are the ones already on screen.
+- A review belongs to the footage it was made from. Switching footage, removing it, creating a new project or opening another one discards a plan that is still waiting, so an old plan can never be accepted against the wrong source. Preparing a new plan replaces the previous one.
+- Nothing changed about how the existing one-step "Run 360 Command" action behaves, nor about how an edit is planned, rendered, saved, or replayed.
+- 13 new tests; targeted regression 87 passed / 0 failed / 0 skipped and the full model-free suite 500 passed / 0 failed / 14 skipped. Decision 054 records the design.
+
+

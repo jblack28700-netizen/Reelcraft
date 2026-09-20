@@ -474,8 +474,10 @@ consumes it. This is an index, not a replacement for the sections above or for `
 | Contract checker | `app/reframe/ReframeContract.*` | pure IPC-1..4 checks over the final (intent, plan) pair | command runner |
 | Edit-decision artifact | `app/reframe/EditDecision.*` | versioned, hashed, immutable; strict loader; replay without perception | Application, replay |
 | Media-analysis artifact | `app/analysis/MediaAnalysis.*`, `MediaAnalysisRunner.*` | versioned layered evidence with explicit lifecycle/coverage; never an editorial decision | project references only (no consumer yet) |
-| Application orchestration | `app/application/{Application,ReframeCommandOutcome}.*` | owns project/media/selection/playback/commands; injectable seams for model-free tests | UI |
-| UI shell | `app/ui/{MainWindow,ViewerWidget}.*` | presentation only; no decoding or planning logic | user |
+| Application orchestration | `app/application/{Application,ReframeCommandOutcome}.*` | owns project/media/selection/playback/commands; one shared command request builder and one render-record append gate; injectable seams for model-free tests | UI |
+| Creator review (plan view) | `app/application/ReframePlanReview.*` | READ-ONLY derived view of a validated plan (every displayed fact is the plan's own value, a pure derivation, or decision-stage context); carries the plan by value plus a SHA-256 digest of its canonical JSON; never persisted, never a second plan schema | Application review API, UI panel |
+| Review decisions | `Application::{prepareReframeCommand,acceptReframeReview,rejectReframeReview}`, `m_commandPreparer` / `m_replayRenderer` | prepare = decision stage only through the shared request builder; accept renders EXACTLY the reviewed plan via the existing render seam and the single append gate; reject renders nothing; review lifetime is explicit | `main.cpp` wiring, UI |
+| UI shell | `app/ui/{MainWindow,ViewerWidget}.*` | presentation only; no decoding or planning logic (the review panel displays a plan and emits accept/reject requests; it cannot edit it) | user |
 
 ## 24. Behaviour -> test index
 
@@ -506,6 +508,7 @@ Section headers in `tests/test_project.cpp` name the objective each group belong
 | Lens / FOV control (Obj 29) | `reframeIntentParsesFraming`, `reframeBuilderAppliesRequestedFraming`, `reframeContractFieldOfViewFidelity`, `reframeCommandRunnerFollowsAtRequestedFraming`, `reframeCommandRunnerSpeakerFramingIsHonest`, `reframePipelineRendersRequestedFraming` |
 | Explicit subject sets (Obj 32) | `reframeIntentParsesExplicitSubjectSets`, `reframeCommandRunnerResolvesExplicitSubjects`, `reframeCommandRunnerExplicitSubjectsRefuseHonestly`, `reframeExplicitSubjectsRenderAndReplay` |
 | Group framing (Obj 30/31) | `reframeIntentParsesMultiSubjectFraming`, `reframeIntentParsesGroupFraming`, `reframeMultiSubjectFramingGeometry`, `reframeGroupFramingGeometrySweep`, `reframeGroupFramingResolvesCanonicalSets`, `reframeGroupFramingRefusesHonestly`, `reframeCommandRunnerFramesTwoSubjects`, `reframeCommandRunnerResolvesTwoDetectedPeople`, `reframeCommandRunnerRejectsUnsatisfiableMultiSubject`, `reframeCommandRunnerFramesMovingSubjectsAndReplays`, `reframeGroupFramingRendersAndReplays` |
+| Creator review: inspect, accept, reject (Obj 34) | `creatorReview*` |
 | Source playback + rendered playback | `sourcePlayback*`, `applicationPlayback*`, `realSourcePlaybackIntegration` |
 | Environment-gated real-media / model validation | `real*` (see `NEXT_TASK.md` §4) |
 

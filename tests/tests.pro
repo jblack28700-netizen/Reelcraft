@@ -11,6 +11,7 @@ SOURCES += \
     ../app/core/MediaSourceReference.cpp \
     ../app/core/Project.cpp \
     ../app/application/Application.cpp \
+    ../app/application/ReframePlanReview.cpp \
     ../app/analysis/MediaAnalysis.cpp \
     ../app/analysis/MediaAnalysisRunner.cpp \
     ../app/media/FfmpegFrameSource.cpp \
@@ -69,6 +70,7 @@ HEADERS += \
     ../app/analysis/MediaAnalysis.h \
     ../app/analysis/MediaAnalysisRunner.h \
     ../app/application/ReframeCommandOutcome.h \
+    ../app/application/ReframePlanReview.h \
     ../app/media/FfmpegFrameSource.h \
     ../app/media/FfprobeDurationProbe.h \
     ../app/media/FrameExtractor.h \

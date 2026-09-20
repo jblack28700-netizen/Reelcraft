@@ -2103,3 +2103,113 @@ inside it without disturbing those cases.
 
 *Decisions 001-052 are preserved verbatim; this decision adds to them and supersedes none of them.*
 
+---
+
+# Decision 054 — Creator Review Is a Read-Only View of the Canonical Plan, and Accept Executes Exactly That Plan
+
+**Status:** Accepted (2026-09-18, 360 Reframing Objective 34)
+
+## Context
+
+The documented creator workflow places a review step between the system's editing decision and its
+execution ("the creator remains in control and can review, modify, or reject any AI decision"). What
+existed instead was all-or-nothing: an instruction was parsed, resolved, planned and **rendered** in
+one call (`Application::runReframeCommand` → `ReframeCommandRunner::run`), so the creator's first sight of
+the edit was the finished file. The structured artifacts that make inspection possible were already
+there and already authoritative — the validated `ReframePlan`, and once a render is recorded, the
+immutable `EditDecision` that carries it — but nothing surfaced a plan before committing to it.
+
+The objective was scoped to a *foundation*: inspect the plan, then accept or reject it. Explicitly out
+of scope: revising the plan, editing a timeline, undo/redo, and any new plan or persistence schema.
+
+## Decision
+
+- **Review is a view, not a second editor.** `ReframePlanReview` (`app/application/ReframePlanReview.*`)
+  is a plain value type whose every displayed fact is either the plan's own value, a pure derivation
+  from it, or context the decision stage reported (the instruction, the resolved subject ids, the
+  notes). It carries the canonical plan by value plus a SHA-256 digest of that plan's canonical JSON,
+  which is the review's fingerprint of the exact plan it will execute. It is **never serialized, never
+  persisted and never a second plan schema**.
+- **Preparation is the decision stage only, through the same request the command path builds.** The
+  validation and `ReframeCommandRequest` construction that `runReframeCommandInternal` had always
+  performed were **extracted into one shared `Application::buildReframeCommandContext`**, and both paths
+  now use it: the direct command path, the revision path and review preparation. That is what makes
+  "the reviewed plan is the plan that would have run" a structural property rather than an inspection
+  claim. Preparation uses the new `m_commandPreparer` seam (default
+  `ReframeCommandRunner::prepare`, same signature as the executor) so no perception or decode is added
+  and tests stay model-free. It renders nothing, appends nothing and writes nothing.
+- **Accept renders EXACTLY the reviewed plan.** `acceptReframeReview()` calls the existing
+  `ReframePipeline::renderPlan` seam — the same one `replayEditDecision` uses, through the same
+  `m_replayRenderer` injection point — with the reviewed plan, its source and the reviewed
+  destination. Nothing is re-parsed, re-resolved or re-planned, and the plan is copied rather than
+  mutated, so accepting cannot change what the creator saw. The result is recorded through the
+  **single existing append gate** (`appendReframeOutput`) as an ordinary render record carrying an
+  `EditDecision::fromPlan` of that same plan, and the review's digest identifies it.
+- **Reject renders nothing.** Rejection is a pure state change: no render call, no record, no file
+  written, and the source media untouched.
+- **Review is session state with an explicit lifetime.** It is cleared on accept, reject, new project,
+  project open, active-media change and removal of the active media, and a new preparation replaces a
+  previous one, so a stale review can never be accepted. Nothing about it enters the project file.
+- **Honest failure.** A preparation that produced no plan appends no render record (it never reached
+  an output target) and is reported with its reason and an empty output path. A failed render is
+  recorded exactly as the command path records one — with its error and with the plan that was
+  attempted — and the review is consumed either way, so it cannot be re-accepted against stale state.
+- **Destination policy is the command path's.** Accept keeps the destination the review was prepared
+  with unless the caller names another one, which is validated identically (the directory must exist,
+  and the path must differ from the source). Accept does **not** adopt replay's never-overwrite rule:
+  accept is the continuation of a command, not a replay of a historical record.
+- **The direct command path is unchanged**, including its behaviour of recording a failed attempt that
+  reached an output target. Review is an additional path, not a replacement.
+- **No revision, no timeline, no undo.** There is deliberately no way to edit the reviewed plan; the
+  creator accepts it or goes back and runs a different command. `reviseEditDecision` remains an API
+  without a review-surface integration, and the plan has no mutator.
+
+## Consequences
+
+- A creator can now see what Reelcraft understood and what it intends to do — instruction and
+  understanding, framing, camera movement, lens, retained time spans, output geometry and the audio
+  policy — together with the plan's keyframe count and digest, **before** any render cost or output
+  file exists, and then accept or reject it. The UI panel is four widgets plus one signal pair; all
+  wiring stays in `main.cpp`.
+- The reviewed plan's identity is checkable after the fact: the review's digest equals the digest of
+  the plan handed to the renderer, which equals the plan stored in the record's `EditDecision`.
+- Recorded limits: the review cannot be revised (only accepted or rejected); it is not persisted, so
+  closing and reopening a project leaves nothing to accept; it shows the plan and not a preview image
+  (the rendered-result preview of Objective 12 operates on completed records); and the destination is
+  shown through the record rather than as an editable field.
+- No perception, parser, resolver, planner, camera-path, renderer, encoder, audio, decision-artifact
+  or schema change. No new dependency, provider or plan type. Replay remains perception-free, and the
+  Objective 33 real-media harness is untouched.
+
+## Verification
+
+- 13 new model-free tests: `creatorReviewPrepareBuildsTheReviewedPlan` (every displayed fact derived
+  from the plan, the digest, the summary lines, no render, no record, no file, one review signal);
+  `creatorReviewDescribesTemporalEditAndAudioPolicy` (retained spans and the execution-policy audio
+  line stated from the plan's own segments);
+  `creatorReviewRejectRendersNothing` (no render, no record, no file, source byte-identical, and a
+  rejected review cannot be accepted); `creatorReviewAcceptRendersTheExactReviewedPlan` (the plan
+  handed to the renderer is byte-equal in canonical JSON and equal by digest to the reviewed plan, from
+  the reviewed source, to the derived destination, recorded once with a decision built from that same
+  plan); `creatorReviewAcceptValidatesDestination` (missing directory, source-as-destination, and an
+  explicit alternative); `creatorReviewAcceptReportsRenderFailure` (honest failure, the attempt
+  recorded with its plan, no re-accept); `creatorReviewPrepareFailureLeavesNoReview` (no record, error
+  reported with an empty output path, no stale review); `creatorReviewPrepareReusesCommandValidation`
+  (no project / no active media / empty instruction / missing file report the **same** reason as the
+  command path); `creatorReviewInvalidatedByContextChange` (active-media switch, media removal, new
+  project, project open, reject — each with exactly one clearing signal); and
+  `creatorReviewIsNotASecondPlanRepresentation` (an invalid plan yields an invalid review, the digest is
+  a pure function of the plan, the review holds the plan by value, and saving a project before and
+  after a preparation produces an identical file with no review key);
+  `creatorReviewDoesNotChangeTheDirectCommandPath`, `creatorReviewPersistsOnlyThroughTheRenderRecord`
+  and `creatorReviewPanelPresentsPlanAndRequestsDecisions`.
+- Targeted regression over the command path, records, lifecycle, creator selection, playback, replay,
+  revision, provenance and the touched UI surfaces: **87 passed / 0 failed / 0 skipped**.
+- Official `scripts/build_and_test.sh`: exit 0, **500 passed / 0 failed / 14 skipped** (487 passes plus
+  the 13 new tests; the 14 skips are unchanged, because none of the new tests needs real media).
+
+---
+
+*Decisions 001-053 are preserved verbatim; this decision adds to them and supersedes none of them.*
+
+

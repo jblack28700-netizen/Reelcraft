@@ -23,6 +23,7 @@ Application::Application(QObject *parent)
 {
     m_durationProbe = m_ownedDurationProbe.get();
     resetReframeCommandExecutor();
+    resetReframeCommandPreparer();
     resetReframeReplayRenderer();
     resetReframePreviewDecoder();
     resetPlaybackSourceFactory();
@@ -121,6 +122,8 @@ void Application::newProject()
     m_hasCreatorSelection = false;
     m_creatorSelection = CreatorTargetSelection();
     resetViewport();
+    // Objective 34: a pending review describes media of the previous project.
+    clearPendingReview();
     emit mediaListChanged(m_mediaItems);
     if (hadCreatorSelection) {
         emit creatorSelectionChanged(false);
@@ -179,6 +182,8 @@ bool Application::openProject(const QString &filePath)
     }
     stopReframeOutputPlayback();
     stopSourcePlayback();
+    // Objective 34: a pending review describes media of the previous project.
+    clearPendingReview();
     m_currentProject = loaded;
     m_hasProject = true;
     resetViewport();
@@ -258,6 +263,9 @@ bool Application::removeMedia(const QString &mediaId)
                 if (m_previewTimeSeconds != 0.0) {
                     m_previewTimeSeconds = 0.0;
                 }
+                // Objective 34: a review of the removed media can never be
+                // accepted, so it is discarded rather than left dangling.
+                clearPendingReview();
             }
             emit backgroundCompleted(QStringLiteral("Removed media: %1").arg(fileName));
             emit mediaListChanged(m_mediaItems);
@@ -306,6 +314,8 @@ bool Application::setActiveMedia(const QString &mediaId)
     if (m_previewTimeSeconds != 0.0) {
         m_previewTimeSeconds = 0.0;
     }
+    // Objective 34: a review applies to the media it was prepared against.
+    clearPendingReview();
     emit backgroundCompleted(QStringLiteral("Active media: %1").arg(item->fileName()));
     emit activeMediaChanged(m_activeMediaId);
     emit previewTimeChanged(m_previewTimeSeconds);
@@ -530,11 +540,16 @@ bool Application::runReframeCommandTo(const QString &instruction, qint64 startMs
                                      nullptr);
 }
 
-bool Application::runReframeCommandInternal(const QString &instruction, qint64 startMs,
-                                            qint64 endMs, const QString &outputPath,
-                                            const EditDecision *parentDecision)
+// Objective 34. The shared command-side validation and request construction.
+// This is a mechanical extraction of the steps the command path has always
+// performed, in the same order, so the review prepare stage cannot build a
+// request that differs from the one the direct command path would execute.
+Application::CommandContext Application::buildReframeCommandContext(
+    const QString &instruction, qint64 startMs, qint64 endMs,
+    const QString &outputPath)
 {
-    ReframeCommandOutcome outcome;
+    CommandContext context;
+    ReframeCommandOutcome &outcome = context.outcome;
     outcome.instruction = instruction.trimmed();
     outcome.startMs = startMs;
     outcome.endMs = endMs;
@@ -542,78 +557,31 @@ bool Application::runReframeCommandInternal(const QString &instruction, qint64 s
     outcome.outputHeight = m_reframeOutputHeight;
     outcome.outputFps = m_reframeOutputFps;
 
-    // Every path (success and failure) records and emits the structured
-    // outcome; nothing is silently substituted.
-    // Objective 16 (Decision 033). These two values are prepared before finish()
-    // is defined so that the single finish path can attach the decision:
-    //   mediaSnapshot -- a BY-VALUE copy of the active media record, taken at
-    //     validation time. The decision must not hold a raw pointer into
-    //     m_mediaItems across the executor call.
-    //   executedPlan -- the decision stage's plan. It stays default-constructed
-    //     (and therefore invalid) on every early failure path, which correctly
-    //     produces no decision for those.
-    MediaItem mediaSnapshot;
-    ReframePlan executedPlan;
-
-    const auto finish = [this, &outcome, &mediaSnapshot, &executedPlan,
-                         parentDecision]() {
-        // Attach the decision whenever the decision stage produced a valid plan,
-        // including when the RENDER failed: the decision is the plan itself and
-        // the record is persisted either way, so replaying it later is
-        // meaningful. outcome.instruction is the single source of the instruction
-        // string -- it is not re-derived here.
-        if (executedPlan.isValid()) {
-            if (parentDecision) {
-                // Objective 17: a revision is a NEW decision whose single parent is
-                // the decision it revises. The parent is only read.
-                outcome.setEditDecision(EditDecision::revisedFrom(
-                    *parentDecision, executedPlan, mediaSnapshot,
-                    outcome.instruction));
-            } else {
-                outcome.setEditDecision(EditDecision::fromPlan(
-                    executedPlan, mediaSnapshot, outcome.instruction));
-            }
-        } else if (!outcome.outputPath.isEmpty()) {
-            outcome.setEditDecisionUnavailable(QStringLiteral(
-                "The decision stage produced no valid reframe plan, so no edit "
-                "decision is recorded for this render."));
-        }
-
-        m_lastReframeOutcome = outcome;
-        // Only commands that reached an output target are recorded/persisted;
-        // early state/validation failures are reported but not stored as
-        // renders. The record is the same structured outcome, so failures carry
-        // their error.
-        appendReframeOutput(outcome);
-        emit reframeCommandFinished(m_lastReframeOutcome);
-        return m_lastReframeOutcome.ok;
-    };
-
     if (!m_hasProject) {
         outcome.error = QStringLiteral(
             "Open or create a project before running a reframe command.");
-        return finish();
+        return context;
     }
     if (outcome.instruction.isEmpty()) {
         outcome.error = QStringLiteral("Enter a reframe command.");
-        return finish();
+        return context;
     }
     const MediaItem *media = activeMediaItem();
     if (!media) {
         outcome.error = QStringLiteral(
             "Select an active media item before running a reframe command.");
-        return finish();
+        return context;
     }
     if (!media->referenceExists()) {
         outcome.error = QStringLiteral(
             "The active media file is unavailable: %1").arg(media->path());
-        return finish();
+        return context;
     }
     outcome.sourceMediaId = media->id();
     outcome.sourcePath = media->path();
     // By-value snapshot of the validated media record: the decision is built from
     // this copy, so no pointer into m_mediaItems is held across the executor call.
-    mediaSnapshot = *media;
+    context.media = *media;
 
     // A zero start/end range means "the whole clip". Resolve it through the
     // replaceable duration-probe seam; when the duration is unknown the runner
@@ -649,19 +617,19 @@ bool Application::runReframeCommandInternal(const QString &instruction, qint64 s
         outcome.error = QStringLiteral(
             "The output directory does not exist: %1")
                             .arg(outputDir.absolutePath());
-        return finish();
+        return context;
     }
     if (outputInfo.absoluteFilePath()
         == QFileInfo(media->path()).absoluteFilePath()) {
         outcome.error = QStringLiteral(
             "The output path must differ from the source media path.");
-        return finish();
+        return context;
     }
     outcome.outputPath = outputInfo.absoluteFilePath();
 
-    // Delegate interpretation, resolution, planning, and execution to the
-    // library-level composition boundary (no duplicated logic here).
-    ReframeCommandRequest request;
+    // Delegation inputs. Interpretation, resolution, planning, and execution all
+    // happen behind the executor/preparer seam (no duplicated logic here).
+    ReframeCommandRequest &request = context.request;
     request.sourcePath = media->path();
     request.sourceMediaId = media->id();
     request.instruction = outcome.instruction;
@@ -677,41 +645,115 @@ bool Application::runReframeCommandInternal(const QString &instruction, qint64 s
     request.hasCreatorSelection = m_hasCreatorSelection;
     request.creatorSelection = m_creatorSelection;
 
-    const ReframeCommandResult result =
-        m_commandExecutor(request, m_targetDetector, m_commandFrameProvider);
+    context.ok = true;
+    return context;
+}
+
+// Applies the decision stage's structured result to an outcome: the fields the
+// command path and the review prepare stage both derive from it. Shared so the
+// two paths cannot report different ranges, outputs or subject references for
+// the same plan.
+static void applyCommandResultToOutcome(const ReframeCommandResult &result,
+                                        ReframeCommandOutcome *outcome)
+{
+    outcome->notes.append(result.notes);
+    outcome->unresolvedReferences = result.unresolvedReferences;
+    outcome->resolvedTargets = result.resolvedTargets;
+    if (result.intent.hasTimeRange) {
+        outcome->startMs = result.intent.startMs;
+        outcome->endMs = result.intent.endMs;
+    }
+    // Objective 14: keep the ordered retained ranges of a temporal edit.
+    for (const ReframePlan::TimeRange &segment : result.plan.segments()) {
+        outcome->temporalSegments.append(
+            qMakePair(segment.startMs, segment.endMs));
+    }
+    if (!outcome->temporalSegments.isEmpty()) {
+        qint64 rangeStart = outcome->temporalSegments.first().first;
+        qint64 rangeEnd = outcome->temporalSegments.first().second;
+        for (const QPair<qint64, qint64> &segment : outcome->temporalSegments) {
+            rangeStart = qMin(rangeStart, segment.first);
+            rangeEnd = qMax(rangeEnd, segment.second);
+        }
+        outcome->startMs = rangeStart;
+        outcome->endMs = rangeEnd;
+    }
+    const ReframePlan::OutputSpec planOutput = result.plan.output();
+    if (planOutput.isValid()) {
+        outcome->outputWidth = planOutput.width;
+        outcome->outputHeight = planOutput.height;
+        outcome->outputFps = planOutput.fps;
+    }
+}
+
+bool Application::runReframeCommandInternal(const QString &instruction, qint64 startMs,
+                                            qint64 endMs, const QString &outputPath,
+                                            const EditDecision *parentDecision)
+{
+    // Objective 34: validation and request construction are shared with the
+    // creator review prepare stage, so both paths execute the same request.
+    CommandContext context =
+        buildReframeCommandContext(instruction, startMs, endMs, outputPath);
+    ReframeCommandOutcome &outcome = context.outcome;
+
+    // Every path (success and failure) records and emits the structured
+    // outcome; nothing is silently substituted.
+    // Objective 16 (Decision 033). executedPlan is the decision stage's plan. It
+    // stays default-constructed (and therefore invalid) on every early failure
+    // path, which correctly produces no decision for those.
+    ReframePlan executedPlan;
+
+    const auto finish = [this, &outcome, &context, &executedPlan,
+                         parentDecision]() {
+        // Attach the decision whenever the decision stage produced a valid plan,
+        // including when the RENDER failed: the decision is the plan itself and
+        // the record is persisted either way, so replaying it later is
+        // meaningful. outcome.instruction is the single source of the instruction
+        // string -- it is not re-derived here.
+        if (executedPlan.isValid()) {
+            if (parentDecision) {
+                // Objective 17: a revision is a NEW decision whose single parent is
+                // the decision it revises. The parent is only read.
+                outcome.setEditDecision(EditDecision::revisedFrom(
+                    *parentDecision, executedPlan, context.media,
+                    outcome.instruction));
+            } else {
+                outcome.setEditDecision(EditDecision::fromPlan(
+                    executedPlan, context.media, outcome.instruction));
+            }
+        } else if (!outcome.outputPath.isEmpty()) {
+            outcome.setEditDecisionUnavailable(QStringLiteral(
+                "The decision stage produced no valid reframe plan, so no edit "
+                "decision is recorded for this render."));
+        }
+
+        m_lastReframeOutcome = outcome;
+        // Only commands that reached an output target are recorded/persisted;
+        // early state/validation failures are reported but not stored as
+        // renders. The record is the same structured outcome, so failures carry
+        // their error.
+        appendReframeOutput(outcome);
+        emit reframeCommandFinished(m_lastReframeOutcome);
+        return m_lastReframeOutcome.ok;
+    };
+
+    // Every validation failure is reported through the single finish path, which
+    // records and emits the structured outcome.
+    if (!context.ok) {
+        return finish();
+    }
+
+    // Delegate interpretation, resolution, planning, and execution to the
+    // library-level composition boundary (no duplicated logic here).
+    const ReframeCommandResult result = m_commandExecutor(
+        context.request, m_targetDetector, m_commandFrameProvider);
 
     // The decision stage's plan, consumed by the finish path above.
     executedPlan = result.plan;
 
-    outcome.notes.append(result.notes);
-    outcome.unresolvedReferences = result.unresolvedReferences;
-    outcome.resolvedTargets = result.resolvedTargets;
-    if (result.intent.hasTimeRange) {
-        outcome.startMs = result.intent.startMs;
-        outcome.endMs = result.intent.endMs;
-    }
-    // Objective 14: persist the ordered retained ranges when the command
-    // performed a temporal edit.
-    for (const ReframePlan::TimeRange &segment : result.plan.segments()) {
-        outcome.temporalSegments.append(
-            qMakePair(segment.startMs, segment.endMs));
-    }
-    if (!outcome.temporalSegments.isEmpty()) {
-        qint64 rangeStart = outcome.temporalSegments.first().first;
-        qint64 rangeEnd = outcome.temporalSegments.first().second;
-        for (const QPair<qint64, qint64> &segment : outcome.temporalSegments) {
-            rangeStart = qMin(rangeStart, segment.first);
-            rangeEnd = qMax(rangeEnd, segment.second);
-        }
-        outcome.startMs = rangeStart;
-        outcome.endMs = rangeEnd;
-    }
-    const ReframePlan::OutputSpec planOutput = result.plan.output();
-    if (planOutput.isValid()) {
-        outcome.outputWidth = planOutput.width;
-        outcome.outputHeight = planOutput.height;
-        outcome.outputFps = planOutput.fps;
-    }
+    // Shared with the review prepare stage, so both report the same range,
+    // output specification and subject references for the same plan.
+    applyCommandResultToOutcome(result, &outcome);
 
     if (!result.ok) {
         outcome.ok = false;
@@ -770,6 +812,24 @@ void Application::resetReframeCommandExecutor()
     };
 }
 
+// Objective 34: the decision-stage-only counterpart of the command executor.
+void Application::setReframeCommandPreparer(
+    const ReframeCommandExecutor &preparer)
+{
+    if (preparer) {
+        m_commandPreparer = preparer;
+    }
+}
+
+void Application::resetReframeCommandPreparer()
+{
+    m_commandPreparer = [](const ReframeCommandRequest &request,
+                           TargetDetector *detector,
+                           ReframeFrameProvider *provider) {
+        return ReframeCommandRunner::prepare(request, detector, provider);
+    };
+}
+
 void Application::setReframeDefaultOutput(int width, int height, double fps)
 {
     if (width > 0) {
@@ -793,6 +853,206 @@ QString Application::defaultReframeOutputPath(const MediaItem &media) const
 QList<ReframeCommandOutcome> Application::reframeOutputs() const
 {
     return m_reframeOutputs;
+}
+
+// --- Objective 34: creator review of the prepared plan -----------------------
+//
+// Review is READ-ONLY with respect to everything that is authoritative. It
+// builds the same request the command path would execute, runs the DECISION
+// stage only, and shows the creator what that produced. Accept renders exactly
+// the reviewed plan through the existing deterministic renderer; Reject renders
+// nothing. No plan is ever mutated by review, and no second plan representation
+// is created or persisted.
+
+void Application::clearPendingReview()
+{
+    const bool hadReview = m_pendingReview.isValid()
+        || !m_pendingReviewOutputPath.isEmpty() || !m_pendingReviewTargets.isEmpty();
+    m_pendingReview = ReframePlanReview();
+    m_pendingReviewOutputPath.clear();
+    m_pendingReviewTargets.clear();
+    if (hadReview) {
+        emit reframeReviewChanged(m_pendingReview);
+    }
+}
+
+bool Application::hasPendingReview() const
+{
+    return m_pendingReview.isValid();
+}
+
+ReframePlanReview Application::pendingReview() const
+{
+    return m_pendingReview;
+}
+
+void Application::rejectReframeReview()
+{
+    // A rejection is a pure state change: nothing is rendered, no record is
+    // appended, and the source media is not touched.
+    clearPendingReview();
+}
+
+bool Application::prepareReframeCommand(const QString &instruction, qint64 startMs,
+                                        qint64 endMs)
+{
+    // A new preparation always replaces the previous review, so a stale review
+    // can never be accepted.
+    clearPendingReview();
+
+    CommandContext context =
+        buildReframeCommandContext(instruction, startMs, endMs, QString());
+    ReframeCommandOutcome &outcome = context.outcome;
+
+    // A preparation that produced no plan never reached an output target. It is
+    // reported through the same command-feedback signal as any failed attempt
+    // (so the reason is visible), but with an EMPTY output path, which is exactly
+    // what keeps it out of the render record list.
+    const auto fail = [this, &outcome]() {
+        outcome.outputPath.clear();
+        outcome.ok = false;
+        m_lastReframeOutcome = outcome;
+        emit reframeCommandFinished(m_lastReframeOutcome);
+        return false;
+    };
+
+    if (!context.ok) {
+        return fail();
+    }
+
+    const ReframeCommandResult result = m_commandPreparer(
+        context.request, m_targetDetector, m_commandFrameProvider);
+    applyCommandResultToOutcome(result, &outcome);
+
+    if (!result.ok) {
+        outcome.error = result.error.isEmpty()
+            ? QStringLiteral("The reframe command could not be prepared.")
+            : result.error;
+        return fail();
+    }
+
+    const ReframePlanReview review = ReframePlanReview::fromPlan(
+        result.plan, outcome.instruction, outcome.notes, result.resolvedTargets);
+    if (!review.isValid()) {
+        // Defense in depth: a successful decision stage has already validated the
+        // plan, so this cannot happen. If it ever did, the review is refused
+        // rather than shown, because a review of an invalid plan would be a lie
+        // about what will be executed.
+        outcome.error = QStringLiteral(
+            "The decision stage produced no valid reframe plan to review.");
+        return fail();
+    }
+
+    m_pendingReview = review;
+    m_pendingReviewOutputPath = outcome.outputPath;
+    m_pendingReviewTargets = result.resolvedTargets;
+    emit reframeReviewChanged(m_pendingReview);
+    return true;
+}
+
+ReframeReviewResult Application::acceptReframeReview(const QString &outputPath)
+{
+    ReframeReviewResult result;
+    if (!m_pendingReview.isValid()) {
+        result.error = QStringLiteral("There is no reviewed plan to accept.");
+        return result;
+    }
+
+    // The reviewed plan is executed against the media it was prepared for, and
+    // only while that media is still the active one, so a review is never
+    // executed against a different source than the one it described.
+    const MediaItem *media = activeMediaItem();
+    if (!media || media->id() != m_pendingReview.plan.sourceMediaId()) {
+        clearPendingReview();
+        result.error = QStringLiteral(
+            "The reviewed plan no longer applies to the selected media, so it was "
+            "discarded. Prepare it again.");
+        return result;
+    }
+    if (!media->referenceExists()) {
+        clearPendingReview();
+        result.error =
+            QStringLiteral("The reviewed media is unavailable: %1. The review was "
+                           "discarded.")
+                .arg(media->path());
+        return result;
+    }
+
+    // Destination: the path the review was prepared with, unless the caller names
+    // another one, which is validated exactly as the command path validates it.
+    QString target = outputPath.trimmed();
+    if (target.isEmpty()) {
+        target = m_pendingReviewOutputPath;
+    }
+    if (target.isEmpty()) {
+        result.error = QStringLiteral("The reviewed plan has no output path.");
+        return result;
+    }
+    const QFileInfo outputInfo(target);
+    const QDir outputDir = outputInfo.absoluteDir();
+    if (!outputDir.exists()) {
+        result.error = QStringLiteral("The output directory does not exist: %1")
+                           .arg(outputDir.absolutePath());
+        return result;
+    }
+    const QString absoluteOutput = outputInfo.absoluteFilePath();
+    if (absoluteOutput == QFileInfo(media->path()).absoluteFilePath()) {
+        result.error = QStringLiteral(
+            "The output path must differ from the source media path.");
+        return result;
+    }
+
+    // EXACTLY the reviewed plan, through the existing deterministic render seam
+    // (the same ReframePipeline entry point replay uses). Nothing is re-parsed,
+    // re-resolved or re-planned, and the plan is copied rather than mutated, so
+    // Accept cannot change what the creator reviewed.
+    const ReframePlan reviewed = m_pendingReview.plan;
+    const ReframePipeline::Result executed =
+        m_replayRenderer(reviewed, media->path(), absoluteOutput);
+
+    ReframeCommandOutcome outcome;
+    outcome.ok = executed.ok;
+    outcome.instruction = m_pendingReview.instruction;
+    outcome.sourceMediaId = reviewed.sourceMediaId();
+    outcome.sourcePath = media->path();
+    outcome.outputPath = absoluteOutput;
+    outcome.startMs = m_pendingReview.startMs;
+    outcome.endMs = m_pendingReview.endMs;
+    outcome.outputWidth = m_pendingReview.outputWidth;
+    outcome.outputHeight = m_pendingReview.outputHeight;
+    outcome.outputFps = m_pendingReview.outputFps;
+    outcome.frameCount = executed.frameCount;
+    outcome.notes = m_pendingReview.notes;
+    outcome.resolvedTargets = m_pendingReviewTargets;
+    outcome.temporalSegments = m_pendingReview.retainedSegments;
+    if (executed.ok) {
+        outcome.notes.append(
+            QStringLiteral("Rendered from the reviewed plan (Creator Review)."));
+    } else {
+        outcome.error = executed.error.isEmpty()
+            ? QStringLiteral("The reviewed render failed.")
+            : executed.error;
+    }
+    // The decision IS the plan, attached exactly as the command path attaches it
+    // -- including when the render failed, because the record stays replayable.
+    outcome.setEditDecision(
+        EditDecision::fromPlan(reviewed, *media, outcome.instruction));
+
+    m_lastReframeOutcome = outcome;
+    appendReframeOutput(outcome);
+    emit reframeCommandFinished(m_lastReframeOutcome);
+
+    // The review is consumed either way: a failed render is reported honestly and
+    // cannot be re-accepted against a stale plan.
+    clearPendingReview();
+
+    result.ok = executed.ok;
+    result.frameCount = executed.frameCount;
+    result.newRecordIndex = m_reframeOutputs.size() - 1;
+    if (!executed.ok) {
+        result.error = outcome.error;
+    }
+    return result;
 }
 
 void Application::setMediaDurationProbe(MediaDurationProbe *probe)

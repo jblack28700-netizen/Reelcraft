@@ -60,7 +60,8 @@ post-objective gate; nothing in this file authorises starting one automatically.
 | **Lens / field-of-view control** | done | intent framing + builder/planner wiring + IPC-4 | intent, plan | **fixture only** | `d971009` |
 | **Group framing (2-10 subjects)** | done | `TargetTrackPlanner::{planTracks,enclosingFramingDeg}` (exact basis), `ReframeSubjectGroup`/`subjectCount`, runner group resolution | two or more resolved tracks | **fixture only** | `5592118`, this checkpoint (Obj 31) |
 | Persistent media analysis (artifact + runner) | partial | `app/analysis/{MediaAnalysis,MediaAnalysisRunner}.*` | detector / ffprobe | fixture; **no consumer** | `90f671c` |
-| Creator review / revision UI | missing | Application APIs exist (`decisionProvenance`, `reviseEditDecision`) | — | — | — |
+| **Creator review (inspect the plan, accept or reject)** | done | `app/application/ReframePlanReview.*`, `Application` review API + preparer seam, `MainWindow` review panel | — | **fixture only** | this checkpoint (Obj 34) |
+| Creator revision UI (revise a reviewed plan) | missing | `Application::reviseEditDecision` exists as an API only | a decision on whether a reviewed plan may be revised before render | — | — |
 | In-app audio playback | missing | — | audio-output subsystem decision (Decision 036) | — | — |
 | Explicit subject sets ("keep me and person 2 in frame", "frame the presenter and the guest") | done | `ReframeSubjectGroup::ExplicitSet` + `subjectReferences` + runner reference resolution | the existing selector vocabulary | **fixture only** | this checkpoint (Obj 32) |
 | Pair-path smoothing (containment-preserving) | missing | `TargetTrackPlanner::planTracks` | measured real-media jitter evidence | — | — |
@@ -75,10 +76,15 @@ post-objective gate; nothing in this file authorises starting one automatically.
 
 - **Objectives 28, 29, 30, 31 and 32 are fixture-validated only.** Their env-gated real-media counterparts have
   never run, because no real 360 clip / detector / speaker helper is configured in this environment.
-  The suite reports **9 skips**: 8 environment-gated integrations
+  The suite reports **14 skips**: 8 environment-gated integrations from Objectives 3-19
   (`realDetectorIntegration`, `realSpeakerCommandIntegration`, `realSourcePlaybackIntegration`,
   `realReframePlaybackIntegration`, `realTemporalEditIntegration`, `realCompoundCommandIntegration`,
-  `realUserCommandIntegration`, `realApplicationCommandIntegration`) plus `replayFreshProcessChild`.
+  `realUserCommandIntegration`, `realApplicationCommandIntegration`), the 5 Objective 28-32 harness
+  tests below, and the child-only `replayFreshProcessChild` slot.
+- **Objective 34 adds no validation debt.** Creator review is application/UI orchestration over
+  artifacts that are already validated (the plan, the decision, the render seam): it introduces no
+  perception, no geometry and no rendering behaviour, so its validation level is fixture by design and
+  it has no real-media counterpart to run.
 - Specifically unverified on real footage: audio muxing against a real (mono) source track; lens
   control under real detector noise; group framing with real detection footprints, occlusion, dropped
   observations and crowded scenes (where an honest "cannot fit" refusal is expected but unmeasured).
@@ -116,7 +122,8 @@ post-objective gate; nothing in this file authorises starting one automatically.
 | **Real-media validation sweep for Objectives 28-30** | ready (blocked on media) | a real 360 clip + optional detector/speaker helpers | closes the only validation debt in the current capability set |
 | **Real-media validation sweep** (see §4) | ready once media exists | a real 360 clip + optional helpers | closes the only validation debt in the framing capability |
 | **Containment-preserving group-path smoothing** | candidate | measured jitter evidence from the sweep above | quality refinement; evidence-poor today |
-| **Creator review / revision UI** | ready | — | makes persisted decisions and revisions usable without new pipeline work |
+| **Creator revision UI** | ready (needs scope) | a decision on revising a reviewed plan (Obj 34 kept review accept/reject-only) | completes the review step of the documented creator workflow |
+| **Real-media validation of the creator-review path** | not applicable | — | not a candidate: Obj 34 adds no perception or rendering behaviour (see §4) |
 | **Containment-preserving pair smoothing** | candidate | measured jitter evidence from the validation sweep | quality refinement; weak evidence today (see §6) |
 | **Analysis -> Reasoning seam** | blocked | app-level analysis action, reasoning semantics, evidence granularity | the documented successor stage (Decision 039) |
 | **In-app audio playback** | blocked | dependency decision (Decision 036 follow-up) | creator review of rendered audio |

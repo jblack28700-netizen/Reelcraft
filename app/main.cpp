@@ -52,6 +52,19 @@ int main(int argc, char *argv[])
                      &window, &MainWindow::showReframeCommandResult);
     QObject::connect(&application, &Application::reframeOutputsChanged,
                      &window, &MainWindow::showReframeOutputs);
+    // Objective 34: creator review. "Review Plan" runs the decision stage only;
+    // Accept renders the reviewed plan through the application, Reject discards
+    // it. The panel is a view of the canonical plan and never edits it.
+    QObject::connect(&window, &MainWindow::reframeReviewRequested,
+                     &application, &Application::prepareReframeCommand);
+    QObject::connect(&window, &MainWindow::acceptReframeReviewRequested,
+                     &application, [&application]() {
+                         application.acceptReframeReview();
+                     });
+    QObject::connect(&window, &MainWindow::rejectReframeReviewRequested,
+                     &application, &Application::rejectReframeReview);
+    QObject::connect(&application, &Application::reframeReviewChanged,
+                     &window, &MainWindow::showReframeReview);
     QObject::connect(&window, &MainWindow::selectCreatorTargetRequested,
                      &application, &Application::selectCreatorTargetFromViewport);
     QObject::connect(&window, &MainWindow::clearCreatorTargetRequested,

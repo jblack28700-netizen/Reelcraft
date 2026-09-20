@@ -1304,6 +1304,20 @@ private slots:
     void reframeContractAcceptsSpeakerPathPlans();
     void replaySameProcessProducesEquivalentRender();
     void speakerRegistryAnnotateDoesNotChangeResolution();
+    // Objective 34: creator review of the prepared plan (inspect -> accept/reject).
+    void creatorReviewPrepareBuildsTheReviewedPlan();
+    void creatorReviewDescribesTemporalEditAndAudioPolicy();
+    void creatorReviewRejectRendersNothing();
+    void creatorReviewAcceptRendersTheExactReviewedPlan();
+    void creatorReviewAcceptValidatesDestination();
+    void creatorReviewAcceptReportsRenderFailure();
+    void creatorReviewPrepareFailureLeavesNoReview();
+    void creatorReviewPrepareReusesCommandValidation();
+    void creatorReviewInvalidatedByContextChange();
+    void creatorReviewIsNotASecondPlanRepresentation();
+    void creatorReviewDoesNotChangeTheDirectCommandPath();
+    void creatorReviewPersistsOnlyThroughTheRenderRecord();
+    void creatorReviewPanelPresentsPlanAndRequestsDecisions();
 };
 
 void ProjectTest::initTestCase()
@@ -1312,6 +1326,7 @@ void ProjectTest::initTestCase()
     qRegisterMetaType<MediaItem>("MediaItem");
     qRegisterMetaType<QList<MediaItem>>("QList<MediaItem>");
     qRegisterMetaType<Player::State>("Player::State");
+    qRegisterMetaType<ReframePlanReview>("ReframePlanReview");
 }
 
 void ProjectTest::newProjectHasValidDefaults()
@@ -21099,6 +21114,853 @@ void ProjectTest::realMediaExplicitReferencesResolve()
     QCOMPARE(sourceAfter.size(), sourceBefore.size());
     QCOMPARE(sourceAfter.lastModified(), sourceBefore.lastModified());
     QCOMPARE(digestAfter, digestBefore);
+}
+
+// ================= Objective 34: creator review of the prepared plan =========
+// Creator Review is a VIEW of the canonical plan: prepare (decision stage only)
+// -> inspect -> accept (render EXACTLY the reviewed plan) or reject (render
+// nothing). These tests are model-free: the decision stage and the renderer are
+// both injected, so what is verified is the orchestration, not a model.
+
+namespace {
+
+// A decision-stage stand-in. It builds a valid plan from the request and never
+// renders. The plan carries the request's source media id, which is what an
+// accept is validated against.
+ReframeCommandExecutor reviewPreparer(int *calls = nullptr,
+                                      bool withSegments = false)
+{
+    return [calls, withSegments](const ReframeCommandRequest &request,
+                                 TargetDetector *, ReframeFrameProvider *) {
+        if (calls) {
+            ++(*calls);
+        }
+        ReframeCommandResult result;
+        result.ok = true;
+        result.plan.setSourceMediaId(request.sourceMediaId);
+        result.plan.setSourceRange(ReframePlan::TimeRange{ 0, 4000 });
+        result.plan.setOutput(ReframePlan::OutputSpec{ 640, 360, 2.0 });
+        CameraKeyframe first;
+        first.timeMs = 0;
+        first.yawDeg = 12.5;
+        first.pitchDeg = -3.0;
+        first.fieldOfViewDeg = 90.0;
+        CameraKeyframe second;
+        second.timeMs = 1000;
+        second.yawDeg = 40.0;
+        second.pitchDeg = 5.0;
+        second.fieldOfViewDeg = 60.0;
+        result.plan.setKeyframes({ first, second });
+        if (withSegments) {
+            result.plan.setSegments({ ReframePlan::TimeRange{ 0, 1000 },
+                                      ReframePlan::TimeRange{ 3000, 4000 } });
+        }
+        ReframeTarget one;
+        one.id = QStringLiteral("t1");
+        one.yawDeg = 12.5;
+        one.pitchDeg = -3.0;
+        ReframeTarget two;
+        two.id = QStringLiteral("t2");
+        two.yawDeg = 40.0;
+        two.pitchDeg = 5.0;
+        result.resolvedTargets = { one, two };
+        result.notes = QStringList{ QStringLiteral("fixture note") };
+        return result;
+    };
+}
+
+// A preparer that fails the way an unresolved subject reference does: no plan.
+ReframeCommandExecutor failingPreparer()
+{
+    return [](const ReframeCommandRequest &, TargetDetector *,
+              ReframeFrameProvider *) {
+        ReframeCommandResult result;
+        result.ok = false;
+        result.error = QStringLiteral("simulated unresolved subject reference");
+        return result;
+    };
+}
+
+// A renderer that records exactly what it was handed, plus the source it read.
+ReframeReplayRenderer recordingRenderer(int *calls, ReframePlan *handedPlan,
+                                       QString *handedSource,
+                                       QString *handedOutput)
+{
+    return [calls, handedPlan, handedSource, handedOutput](
+               const ReframePlan &plan, const QString &sourcePath,
+               const QString &outputPath) {
+        ++(*calls);
+        if (handedPlan) {
+            *handedPlan = plan;
+        }
+        if (handedSource) {
+            *handedSource = sourcePath;
+        }
+        if (handedOutput) {
+            *handedOutput = outputPath;
+        }
+        ReframePipeline::Result result;
+        result.plan = plan;
+        result.outputPath = outputPath;
+        result.frameCount = plan.frameCount();
+        QFile file(outputPath);
+        if (!file.open(QIODevice::WriteOnly)) {
+            result.error = QStringLiteral("simulated output write failure");
+            return result;
+        }
+        file.write("fake-reviewed-render");
+        file.close();
+        result.ok = true;
+        return result;
+    };
+}
+
+// The number of files in a directory: used to prove that preparing a review
+// writes nothing beside the source.
+int fileCountIn(const QTemporaryDir &directory)
+{
+    return QDir(directory.path()).entryList(QDir::Files).size();
+}
+
+QJsonObject projectFileJson(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return QJsonObject();
+    }
+    return QJsonDocument::fromJson(file.readAll()).object();
+}
+
+} // namespace
+
+void ProjectTest::creatorReviewPrepareBuildsTheReviewedPlan()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+
+    int prepareCalls = 0;
+    int renderCalls = 0;
+    app.setReframeCommandPreparer(reviewPreparer(&prepareCalls));
+    app.setReframeReplayRenderer(countingReplayRenderer(&renderCalls));
+
+    int finishedCount = 0;
+    QObject::connect(&app, &Application::reframeCommandFinished,
+                     [&finishedCount](const ReframeCommandOutcome &) {
+                         ++finishedCount;
+                     });
+    int reviewSignals = 0;
+    QObject::connect(&app, &Application::reframeReviewChanged,
+                     [&reviewSignals](const ReframePlanReview &) {
+                         ++reviewSignals;
+                     });
+
+    const int filesBefore = fileCountIn(directory);
+    QVERIFY(app.prepareReframeCommand(
+        QStringLiteral("follow person 1 and person 2"), 0, 4000));
+    QCOMPARE(prepareCalls, 1);
+    QVERIFY(app.hasPendingReview());
+
+    const ReframePlanReview review = app.pendingReview();
+    QVERIFY(review.isValid());
+    QCOMPARE(review.instruction, QStringLiteral("follow person 1 and person 2"));
+    // Every displayed fact is the plan's own fact.
+    QCOMPARE(review.keyframeCount, 2);
+    QCOMPARE(review.startMs, qint64(0));
+    QCOMPARE(review.endMs, qint64(4000));
+    QCOMPARE(review.startYawDeg, 12.5);
+    QCOMPARE(review.endYawDeg, 40.0);
+    QCOMPARE(review.startPitchDeg, -3.0);
+    QCOMPARE(review.endPitchDeg, 5.0);
+    QVERIFY(review.cameraMoves);
+    QVERIFY(!review.lensIsConstant);
+    QCOMPARE(review.lensStartDeg, 90.0);
+    QCOMPARE(review.lensEndDeg, 60.0);
+    QCOMPARE(review.outputWidth, 640);
+    QCOMPARE(review.outputHeight, 360);
+    QCOMPARE(review.outputFps, 2.0);
+    QCOMPARE(review.orientation, QStringLiteral("landscape"));
+    QCOMPARE(review.resolvedSubjects.size(), 2);
+    QCOMPARE(review.resolvedSubjects.at(0), QStringLiteral("t1"));
+    QCOMPARE(review.resolvedSubjects.at(1), QStringLiteral("t2"));
+
+    // The canonical plan travels with the review, and is the thing the digest
+    // identifies.
+    QCOMPARE(review.plan.sourceMediaId(), app.activeMediaId());
+    QCOMPARE(review.planDigest, ReframePlanReview::digestOf(review.plan));
+    QCOMPARE(review.planDigest.size(), 64);
+
+    const QString summary = review.summaryLines().join(QStringLiteral("\n"));
+    QVERIFY(summary.startsWith(QStringLiteral("Instruction: follow person 1")));
+    QVERIFY(summary.contains(QStringLiteral("Understood: 2 subject(s) resolved (t1, t2)")));
+    QVERIFY(summary.contains(QStringLiteral("Keeps all 2 resolved subjects")));
+    QVERIFY(summary.contains(QStringLiteral("Camera: 2 keyframes")));
+    QVERIFY(summary.contains(QStringLiteral("Lens: 90.0 deg -> 60.0 deg")));
+    QVERIFY(summary.contains(QStringLiteral("Output: 640x360 at 2 fps (landscape)")));
+    QVERIFY(summary.contains(QStringLiteral("Note: fixture note")));
+    QVERIFY(summary.contains(QStringLiteral("Plan: 2 keyframe(s), digest ")));
+
+    // Inspecting a plan renders nothing, records nothing, and writes nothing.
+    QCOMPARE(renderCalls, 0);
+    QCOMPARE(app.reframeOutputs().size(), 0);
+    QCOMPARE(finishedCount, 0);
+    QCOMPARE(fileCountIn(directory), filesBefore);
+    QCOMPARE(reviewSignals, 1);
+}
+
+void ProjectTest::creatorReviewDescribesTemporalEditAndAudioPolicy()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandPreparer(reviewPreparer(nullptr, /*withSegments=*/true));
+
+    QVERIFY(app.prepareReframeCommand(QStringLiteral("remove the pause"), 0, 4000));
+    const ReframePlanReview review = app.pendingReview();
+    QVERIFY(review.isValid());
+
+    // The retained spans are the plan's own segments, in order.
+    QCOMPARE(review.retainedSegments.size(), 2);
+    QCOMPARE(review.retainedSegments.at(0).first, qint64(0));
+    QCOMPARE(review.retainedSegments.at(0).second, qint64(1000));
+    QCOMPARE(review.retainedSegments.at(1).first, qint64(3000));
+    QCOMPARE(review.retainedSegments.at(1).second, qint64(4000));
+
+    const QString summary = review.summaryLines().join(QStringLiteral("\n"));
+    QVERIFY(review.understanding.contains(QStringLiteral("2 retained source span(s)")));
+    QVERIFY(summary.contains(QStringLiteral("Time: 2 retained source span(s): 0.000-1.000 s, 3.000-4.000 s")));
+    // The audio line states the execution policy for exactly these spans; it
+    // never claims to know whether the source carries an audio track.
+    QVERIFY(review.audio.contains(QStringLiteral("2 retained source span(s)")));
+    QVERIFY(review.audio.contains(QStringLiteral("when the source has an audio track")));
+    QVERIFY(summary.contains(QStringLiteral("Audio: ")));
+}
+
+void ProjectTest::creatorReviewRejectRendersNothing()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QString mediaPath;
+    QVERIFY(setupActiveMedia(app, directory, &mediaPath));
+
+    int renderCalls = 0;
+    app.setReframeCommandPreparer(reviewPreparer());
+    app.setReframeReplayRenderer(countingReplayRenderer(&renderCalls));
+
+    const QFileInfo sourceBefore(mediaPath);
+    const int filesBefore = fileCountIn(directory);
+
+    QVERIFY(app.prepareReframeCommand(QStringLiteral("follow person 1"), 0, 4000));
+    QVERIFY(app.hasPendingReview());
+
+    int clearedSignals = 0;
+    QObject::connect(&app, &Application::reframeReviewChanged,
+                     [&clearedSignals](const ReframePlanReview &review) {
+                         if (!review.isValid()) {
+                             ++clearedSignals;
+                         }
+                     });
+
+    app.rejectReframeReview();
+    QVERIFY(!app.hasPendingReview());
+    QCOMPARE(clearedSignals, 1);
+    // Rejecting is a pure state change: nothing rendered, nothing recorded,
+    // nothing written, and the source media is byte-identical.
+    QCOMPARE(renderCalls, 0);
+    QCOMPARE(app.reframeOutputs().size(), 0);
+    QCOMPARE(fileCountIn(directory), filesBefore);
+    QCOMPARE(QFileInfo(mediaPath).size(), sourceBefore.size());
+    QCOMPARE(QFileInfo(mediaPath).lastModified(), sourceBefore.lastModified());
+
+    // A rejected plan cannot be accepted afterwards.
+    const ReframeReviewResult after = app.acceptReframeReview();
+    QVERIFY(!after.ok);
+    QCOMPARE(after.newRecordIndex, -1);
+    QVERIFY(after.error.contains(QStringLiteral("no reviewed plan")));
+    QCOMPARE(renderCalls, 0);
+    QCOMPARE(app.reframeOutputs().size(), 0);
+
+    // Rejecting with nothing pending is a harmless no-op (and does not signal).
+    app.rejectReframeReview();
+    QCOMPARE(clearedSignals, 1);
+}
+
+void ProjectTest::creatorReviewAcceptRendersTheExactReviewedPlan()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QString mediaPath;
+    QVERIFY(setupActiveMedia(app, directory, &mediaPath));
+
+    int renderCalls = 0;
+    ReframePlan handedPlan;
+    QString handedSource;
+    QString handedOutput;
+    app.setReframeCommandPreparer(reviewPreparer());
+    app.setReframeReplayRenderer(
+        recordingRenderer(&renderCalls, &handedPlan, &handedSource, &handedOutput));
+
+    int finishedCount = 0;
+    ReframeCommandOutcome finishedOutcome;
+    QObject::connect(&app, &Application::reframeCommandFinished,
+                     [&finishedCount, &finishedOutcome](
+                         const ReframeCommandOutcome &outcome) {
+                         ++finishedCount;
+                         finishedOutcome = outcome;
+                     });
+
+    QVERIFY(app.prepareReframeCommand(QStringLiteral("follow person 1"), 0, 4000));
+    const ReframePlan reviewed = app.pendingReview().plan;
+    const QString reviewedDigest = app.pendingReview().planDigest;
+    const QString reviewedJson =
+        QString::fromUtf8(QJsonDocument(reviewed.toJsonObject()).toJson(QJsonDocument::Compact));
+    QVERIFY(!reviewedJson.isEmpty());
+
+    const ReframeReviewResult accepted = app.acceptReframeReview();
+    QVERIFY2(accepted.ok, qPrintable(accepted.error));
+    QCOMPARE(accepted.frameCount, reviewed.frameCount());
+    QCOMPARE(accepted.newRecordIndex, 0);
+
+    // The renderer received EXACTLY the reviewed plan -- not a re-parse, not a
+    // re-resolution, not a re-plan -- from the source the review was made for.
+    QCOMPARE(renderCalls, 1);
+    QCOMPARE(QString::fromUtf8(
+                 QJsonDocument(handedPlan.toJsonObject()).toJson(QJsonDocument::Compact)),
+             reviewedJson);
+    QCOMPARE(ReframePlanReview::digestOf(handedPlan), reviewedDigest);
+    QCOMPARE(handedSource, mediaPath);
+    QVERIFY(handedOutput.endsWith(QStringLiteral("clip_reframe.mp4")));
+
+    // The record is an ordinary render record: appended once, through the single
+    // gate, carrying the reviewed plan's own EditDecision.
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    const ReframeCommandOutcome record = app.reframeOutputs().at(0);
+    QVERIFY(record.ok);
+    QCOMPARE(record.instruction, QStringLiteral("follow person 1"));
+    QCOMPARE(record.sourcePath, mediaPath);
+    QCOMPARE(record.outputPath, QFileInfo(handedOutput).absoluteFilePath());
+    QCOMPARE(record.startMs, qint64(0));
+    QCOMPARE(record.endMs, qint64(4000));
+    QCOMPARE(record.outputWidth, 640);
+    QCOMPARE(record.frameCount, reviewed.frameCount());
+    QCOMPARE(record.resolvedTargets.size(), 2);
+    QVERIFY(record.notes.contains(QStringLiteral("Rendered from the reviewed plan (Creator Review).")));
+    QVERIFY(record.hasEditDecision());
+    QVERIFY(record.editDecisionError().isEmpty());
+    QCOMPARE(QString::fromUtf8(QJsonDocument(record.editDecision().plan().toJsonObject())
+                                   .toJson(QJsonDocument::Compact)),
+             reviewedJson);
+    QCOMPARE(ReframePlanReview::digestOf(record.editDecision().plan()), reviewedDigest);
+
+    QCOMPARE(finishedCount, 1);
+    QCOMPARE(finishedOutcome.outputPath, record.outputPath);
+    QVERIFY(finishedOutcome.ok);
+
+    // The review is consumed by the decision it produced.
+    QVERIFY(!app.hasPendingReview());
+    QVERIFY(app.pendingReview().summaryLines().isEmpty());
+}
+
+void ProjectTest::creatorReviewAcceptValidatesDestination()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QString mediaPath;
+    QVERIFY(setupActiveMedia(app, directory, &mediaPath));
+
+    int renderCalls = 0;
+    app.setReframeCommandPreparer(reviewPreparer());
+    app.setReframeReplayRenderer(countingReplayRenderer(&renderCalls));
+
+    QVERIFY(app.prepareReframeCommand(QStringLiteral("follow person 1"), 0, 4000));
+
+    // A destination whose directory does not exist is refused before any render.
+    const ReframeReviewResult missingDir =
+        app.acceptReframeReview(directory.filePath(QStringLiteral("nope/alt.mp4")));
+    QVERIFY(!missingDir.ok);
+    QVERIFY(missingDir.error.contains(QStringLiteral("output directory does not exist")));
+    QCOMPARE(renderCalls, 0);
+    QCOMPARE(app.reframeOutputs().size(), 0);
+    // The plan itself was fine, so the review survives a destination error.
+    QVERIFY(app.hasPendingReview());
+
+    // The source media can never be the destination.
+    const ReframeReviewResult sameAsSource = app.acceptReframeReview(mediaPath);
+    QVERIFY(!sameAsSource.ok);
+    QVERIFY(sameAsSource.error.contains(QStringLiteral("must differ from the source media path")));
+    QCOMPARE(renderCalls, 0);
+    QVERIFY(app.hasPendingReview());
+
+    // An explicit alternative destination is honoured.
+    const QString alternative = directory.filePath(QStringLiteral("alt.mp4"));
+    const ReframeReviewResult accepted = app.acceptReframeReview(alternative);
+    QVERIFY2(accepted.ok, qPrintable(accepted.error));
+    QCOMPARE(renderCalls, 1);
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    QCOMPARE(app.reframeOutputs().at(0).outputPath,
+             QFileInfo(alternative).absoluteFilePath());
+    QVERIFY(!app.hasPendingReview());
+}
+
+void ProjectTest::creatorReviewAcceptReportsRenderFailure()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+
+    int renderCalls = 0;
+    app.setReframeCommandPreparer(reviewPreparer());
+    app.setReframeReplayRenderer(
+        countingReplayRenderer(&renderCalls, /*succeed=*/false));
+
+    QVERIFY(app.prepareReframeCommand(QStringLiteral("follow person 1"), 0, 4000));
+    const ReframePlan reviewed = app.pendingReview().plan;
+
+    const ReframeReviewResult accepted = app.acceptReframeReview();
+    QVERIFY(!accepted.ok);
+    QVERIFY(accepted.error.contains(QStringLiteral("simulated replay render failure")));
+    QCOMPARE(renderCalls, 1);
+
+    // A failed render is recorded exactly as the command path records one: the
+    // attempt reached an output target, so it is persisted with its error and
+    // with the plan that was attempted.
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    const ReframeCommandOutcome record = app.reframeOutputs().at(0);
+    QVERIFY(!record.ok);
+    QVERIFY(record.error.contains(QStringLiteral("simulated replay render failure")));
+    QVERIFY(record.hasEditDecision());
+    QCOMPARE(record.editDecision().plan().toJsonObject(), reviewed.toJsonObject());
+
+    // And it cannot be re-accepted: the review was consumed either way.
+    QVERIFY(!app.hasPendingReview());
+    const ReframeReviewResult again = app.acceptReframeReview();
+    QVERIFY(!again.ok);
+    QCOMPARE(renderCalls, 1);
+    QCOMPARE(app.reframeOutputs().size(), 1);
+}
+
+void ProjectTest::creatorReviewPrepareFailureLeavesNoReview()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+
+    int renderCalls = 0;
+    app.setReframeReplayRenderer(countingReplayRenderer(&renderCalls));
+
+    int finishedCount = 0;
+    ReframeCommandOutcome finishedOutcome;
+    QObject::connect(&app, &Application::reframeCommandFinished,
+                     [&finishedCount, &finishedOutcome](
+                         const ReframeCommandOutcome &outcome) {
+                         ++finishedCount;
+                         finishedOutcome = outcome;
+                     });
+
+    app.setReframeCommandPreparer(failingPreparer());
+    QVERIFY(!app.prepareReframeCommand(QStringLiteral("follow person 9"), 0, 4000));
+    QVERIFY(!app.hasPendingReview());
+    // Nothing reached an output target, so nothing is recorded as a render...
+    QCOMPARE(app.reframeOutputs().size(), 0);
+    // ...but the failure is reported, with no output path to mistake for one.
+    QCOMPARE(finishedCount, 1);
+    QVERIFY(!finishedOutcome.ok);
+    QVERIFY(finishedOutcome.error.contains(QStringLiteral("unresolved subject reference")));
+    QVERIFY(finishedOutcome.outputPath.isEmpty());
+    QCOMPARE(renderCalls, 0);
+
+    // A new preparation replaces the previous review, so a stale review can
+    // never be accepted after a later command failed.
+    app.setReframeCommandPreparer(reviewPreparer());
+    QVERIFY(app.prepareReframeCommand(QStringLiteral("follow person 1"), 0, 4000));
+    QVERIFY(app.hasPendingReview());
+
+    app.setReframeCommandPreparer(failingPreparer());
+    QVERIFY(!app.prepareReframeCommand(QStringLiteral("follow person 9"), 0, 4000));
+    QVERIFY(!app.hasPendingReview());
+    QCOMPARE(app.reframeOutputs().size(), 0);
+
+    const ReframeReviewResult stale = app.acceptReframeReview();
+    QVERIFY(!stale.ok);
+    QVERIFY(stale.error.contains(QStringLiteral("no reviewed plan")));
+    QCOMPARE(renderCalls, 0);
+    QCOMPARE(app.reframeOutputs().size(), 0);
+}
+
+void ProjectTest::creatorReviewPrepareReusesCommandValidation()
+{
+    // (a) No project. Both paths run the same validation, so they report the
+    // same reason -- that sharing is what keeps a review honest about what the
+    // command path would do.
+    Application empty;
+    const QString unreachable = QStringLiteral("/tmp/reelcraft-never-written.mp4");
+    QVERIFY(!empty.prepareReframeCommand(QStringLiteral("pan right"), 0, 2000));
+    QVERIFY(!empty.hasPendingReview());
+    const QString prepareError = empty.lastReframeCommandOutcome().error;
+    QVERIFY(prepareError.contains(QStringLiteral("Open or create a project")));
+    QVERIFY(!empty.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                      unreachable));
+    QCOMPARE(empty.lastReframeCommandOutcome().error, prepareError);
+    QVERIFY(empty.reframeOutputs().isEmpty());
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    // (b) A project with no active media.
+    Application app;
+    app.setReframeCommandPreparer(reviewPreparer());
+    app.newProject();
+    QVERIFY(!app.prepareReframeCommand(QStringLiteral("pan right"), 0, 2000));
+    QVERIFY(app.lastReframeCommandOutcome().error.contains(
+        QStringLiteral("Select an active media item")));
+    QVERIFY(!app.hasPendingReview());
+    QVERIFY(app.reframeOutputs().isEmpty());
+
+    // (c) An empty instruction.
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    QVERIFY(!app.prepareReframeCommand(QStringLiteral("   "), 0, 2000));
+    QVERIFY(app.lastReframeCommandOutcome().error.contains(
+        QStringLiteral("Enter a reframe command")));
+    QVERIFY(!app.hasPendingReview());
+    QVERIFY(app.reframeOutputs().isEmpty());
+
+    // (d) An unavailable active media file.
+    QString mediaPath;
+    QTemporaryDir second;
+    QVERIFY(second.isValid());
+    Application unavailableApp;
+    QVERIFY(setupActiveMedia(unavailableApp, second, &mediaPath));
+    unavailableApp.setReframeCommandPreparer(reviewPreparer());
+    QVERIFY(QFile::remove(mediaPath));
+    QVERIFY(!unavailableApp.prepareReframeCommand(QStringLiteral("pan right"), 0, 2000));
+    QVERIFY(unavailableApp.lastReframeCommandOutcome().error.contains(
+        QStringLiteral("unavailable")));
+    QVERIFY(!unavailableApp.hasPendingReview());
+    QVERIFY(unavailableApp.reframeOutputs().isEmpty());
+}
+
+void ProjectTest::creatorReviewInvalidatedByContextChange()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+
+    // A second media file, for the active-media switch.
+    const QString secondPath = directory.filePath(QStringLiteral("clip2.bin"));
+    {
+        QFile file(secondPath);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.write("reelcraft-media-2") > 0);
+    }
+    QVERIFY(app.importMediaFile(secondPath));
+    QCOMPARE(app.mediaItems().size(), 2);
+    const QString secondId = app.mediaItems().at(1).id();
+
+    int renderCalls = 0;
+    app.setReframeCommandPreparer(reviewPreparer());
+    app.setReframeReplayRenderer(countingReplayRenderer(&renderCalls));
+
+    int clearedSignals = 0;
+    QObject::connect(&app, &Application::reframeReviewChanged,
+                     [&clearedSignals](const ReframePlanReview &review) {
+                         if (!review.isValid()) {
+                             ++clearedSignals;
+                         }
+                     });
+
+    // Each context change below is checked on its own: a review is armed, the
+    // context moves, and the review is gone with exactly one clearing signal.
+    const QString firstId = app.mediaItems().first().id();
+
+    // 1. Switching the active media makes a review of the previous media
+    //    inapplicable, so it is discarded rather than left dangling.
+    QVERIFY(app.prepareReframeCommand(QStringLiteral("follow person 1"), 0, 4000));
+    QVERIFY(app.hasPendingReview());
+    int before = clearedSignals;
+    QVERIFY(app.setActiveMedia(secondId));
+    QVERIFY(!app.hasPendingReview());
+    QCOMPARE(clearedSignals, before + 1);
+    QVERIFY(!app.acceptReframeReview().ok);
+    QCOMPARE(renderCalls, 0);
+
+    // 2. Removing the media a review was prepared against does the same.
+    QVERIFY(app.prepareReframeCommand(QStringLiteral("follow person 1"), 0, 4000));
+    QVERIFY(app.hasPendingReview());
+    before = clearedSignals;
+    QVERIFY(app.removeMedia(secondId));
+    QVERIFY(!app.hasPendingReview());
+    QCOMPARE(clearedSignals, before + 1);
+    QVERIFY(app.setActiveMedia(firstId));
+
+    // 3. A new project clears it.
+    QVERIFY(app.prepareReframeCommand(QStringLiteral("follow person 1"), 0, 4000));
+    QVERIFY(app.hasPendingReview());
+    before = clearedSignals;
+    app.newProject();
+    QVERIFY(!app.hasPendingReview());
+    QCOMPARE(clearedSignals, before + 1);
+
+    // 4. Opening a project clears it too (the review belonged to the previous
+    //    one, and it described that project's media).
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    QVERIFY(app.prepareReframeCommand(QStringLiteral("follow person 1"), 0, 4000));
+    QVERIFY(app.hasPendingReview());
+    const QString projectPath = directory.filePath(QStringLiteral("context.reel"));
+    QVERIFY(app.saveProject(projectPath));
+    before = clearedSignals;
+    QVERIFY(app.openProject(projectPath));
+    QVERIFY(!app.hasPendingReview());
+    QCOMPARE(clearedSignals, before + 1);
+
+    // 5. Rejecting the review itself is the same kind of state change.
+    QVERIFY(app.prepareReframeCommand(QStringLiteral("follow person 1"), 0, 4000));
+    QVERIFY(app.hasPendingReview());
+    before = clearedSignals;
+    app.rejectReframeReview();
+    QVERIFY(!app.hasPendingReview());
+    QCOMPARE(clearedSignals, before + 1);
+
+    // Nothing in this test ever rendered, because nothing was accepted.
+    QCOMPARE(renderCalls, 0);
+    QCOMPARE(app.reframeOutputs().size(), 0);
+}
+
+void ProjectTest::creatorReviewIsNotASecondPlanRepresentation()
+{
+    // (a) A review of an invalid plan is invalid and shows nothing, because a
+    // review of a plan that cannot execute would be a lie.
+    const ReframePlanReview none =
+        ReframePlanReview::fromPlan(ReframePlan(), QStringLiteral("pan right"), {}, {});
+    QVERIFY(!none.isValid());
+    QVERIFY(none.summaryLines().isEmpty());
+    QVERIFY(none.planDigest.isEmpty());
+    QVERIFY(!none.plan.isValid());
+
+    // (b) The digest is a pure function of the canonical plan.
+    ReframePlan plan;
+    plan.setSourceMediaId(QStringLiteral("m1"));
+    plan.setSourceRange(ReframePlan::TimeRange{ 0, 4000 });
+    plan.setOutput(ReframePlan::OutputSpec{ 640, 360, 2.0 });
+    CameraKeyframe fixed;
+    fixed.timeMs = 0;
+    fixed.yawDeg = 10.0;
+    fixed.pitchDeg = 0.0;
+    fixed.fieldOfViewDeg = 90.0;
+    plan.setKeyframes({ fixed });
+
+    const ReframePlanReview review = ReframePlanReview::fromPlan(
+        plan, QStringLiteral("aim at the stage"), {}, {});
+    QVERIFY(review.isValid());
+    QCOMPARE(review.planDigest, ReframePlanReview::digestOf(plan));
+    QCOMPARE(review.planDigest, ReframePlanReview::digestOf(plan)); // deterministic
+    QCOMPARE(review.plan.toJsonObject(), plan.toJsonObject());
+    QCOMPARE(review.keyframeCount, 1);
+    QVERIFY(!review.cameraMoves);
+    QVERIFY(review.lensIsConstant);
+    QVERIFY(review.framing.contains(QStringLiteral("No subject is being framed")));
+    QVERIFY(review.summaryLines().join(QStringLiteral("\n"))
+                .contains(QStringLiteral("Lens: 90.0 deg (constant)")));
+
+    // (c) A review carries the plan by value: editing the review cannot reach
+    // the plan it came from, and the digest keeps identifying the plan.
+    ReframePlanReview mutableReview = review;
+    mutableReview.plan.setOutput(ReframePlan::OutputSpec{ 1920, 1080, 30.0 });
+    mutableReview.keyframeCount = 99;
+    QCOMPARE(review.plan.output().width, 640);
+    QCOMPARE(review.keyframeCount, 1);
+    QCOMPARE(ReframePlanReview::digestOf(review.plan), review.planDigest);
+
+    // (d) A different plan has a different digest.
+    ReframePlan other = plan;
+    other.setOutput(ReframePlan::OutputSpec{ 320, 180, 2.0 });
+    QVERIFY(ReframePlanReview::digestOf(other) != review.planDigest);
+    const ReframePlanReview otherReview = ReframePlanReview::fromPlan(
+        other, QStringLiteral("aim at the stage"), {}, {});
+    QCOMPARE(otherReview.outputWidth, 320);
+    QVERIFY(otherReview.planDigest != review.planDigest);
+
+    // (e) Nothing about a review is persisted, and the project schema is
+    // untouched: saving before and after a preparation produces the same file.
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandPreparer(reviewPreparer());
+    const QString projectPath = directory.filePath(QStringLiteral("state.reel"));
+    QVERIFY(app.saveProject(projectPath));
+    const QJsonObject before = projectFileJson(projectPath);
+    QVERIFY(!before.isEmpty());
+
+    QVERIFY(app.prepareReframeCommand(QStringLiteral("follow person 1"), 0, 4000));
+    QVERIFY(app.hasPendingReview());
+    QVERIFY(app.saveProject(projectPath));
+    QCOMPARE(projectFileJson(projectPath), before);
+    QVERIFY(!before.contains(QStringLiteral("reframeReview")));
+}
+
+void ProjectTest::creatorReviewDoesNotChangeTheDirectCommandPath()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+
+    int prepareCalls = 0;
+    int renderCalls = 0;
+    app.setReframeCommandPreparer(reviewPreparer(&prepareCalls));
+    app.setReframeCommandExecutor(successExecutor());
+    app.setReframeReplayRenderer(countingReplayRenderer(&renderCalls));
+
+    // The direct command path still runs its own executor, creates no review,
+    // and appends exactly one record.
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                    directory.filePath(QStringLiteral("direct.mp4"))));
+    QCOMPARE(prepareCalls, 0);
+    QCOMPARE(renderCalls, 0);
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    QVERIFY(!app.hasPendingReview());
+
+    // Preparing a review afterwards does not touch what already ran.
+    const QJsonObject directRecordBefore = app.reframeOutputs().at(0).toJsonObject();
+    QVERIFY(app.prepareReframeCommand(QStringLiteral("follow person 1"), 0, 4000));
+    QCOMPARE(prepareCalls, 1);
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    QCOMPARE(app.reframeOutputs().at(0).toJsonObject(), directRecordBefore);
+    QVERIFY(app.hasPendingReview());
+
+    // And running another command does not silently consume the pending review.
+    QVERIFY(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 2000,
+                                    directory.filePath(QStringLiteral("direct2.mp4"))));
+    QCOMPARE(app.reframeOutputs().size(), 2);
+    QVERIFY(app.hasPendingReview());
+
+    // Accepting then records the reviewed plan through the same append gate.
+    const ReframeReviewResult accepted = app.acceptReframeReview();
+    QVERIFY2(accepted.ok, qPrintable(accepted.error));
+    QCOMPARE(app.reframeOutputs().size(), 3);
+    QCOMPARE(accepted.newRecordIndex, 2);
+    QCOMPARE(renderCalls, 1);
+    QVERIFY(!app.hasPendingReview());
+}
+
+void ProjectTest::creatorReviewPersistsOnlyThroughTheRenderRecord()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    Application app;
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+
+    int renderCalls = 0;
+    app.setReframeCommandPreparer(reviewPreparer(nullptr, /*withSegments=*/true));
+    app.setReframeReplayRenderer(countingReplayRenderer(&renderCalls));
+
+    QVERIFY(app.prepareReframeCommand(QStringLiteral("follow person 1"), 0, 4000));
+    const QJsonObject reviewedJson = app.pendingReview().plan.toJsonObject();
+    const ReframePlan::TimeRange reviewedRange = app.pendingReview().plan.sourceRange();
+    const ReframeReviewResult accepted = app.acceptReframeReview();
+    QVERIFY2(accepted.ok, qPrintable(accepted.error));
+
+    const QString projectPath = directory.filePath(QStringLiteral("review.reel"));
+    QVERIFY(app.saveProject(projectPath));
+
+    // A fresh process-equivalent load: the review was session state and is gone;
+    // the reviewed plan survives exactly where it belongs, in the render record's
+    // decision.
+    Application reopened;
+    QVERIFY(reopened.openProject(projectPath));
+    QVERIFY(!reopened.hasPendingReview());
+    QCOMPARE(reopened.reframeOutputs().size(), 1);
+    const ReframeCommandOutcome record = reopened.reframeOutputs().at(0);
+    QVERIFY(record.hasEditDecision());
+    QVERIFY(record.editDecisionError().isEmpty());
+    QCOMPARE(record.editDecision().plan().toJsonObject(), reviewedJson);
+    QCOMPARE(record.editDecision().plan().sourceRange().startMs, reviewedRange.startMs);
+    QCOMPARE(record.editDecision().plan().sourceRange().endMs, reviewedRange.endMs);
+    QCOMPARE(record.temporalSegments.size(), 2);
+    QCOMPARE(reopened.currentProject().schemaVersion(),
+             app.currentProject().schemaVersion());
+}
+
+void ProjectTest::creatorReviewPanelPresentsPlanAndRequestsDecisions()
+{
+    MainWindow window;
+    auto *reviewButton = window.findChild<QPushButton *>(QStringLiteral("reviewReframePlanButton"));
+    auto *acceptButton = window.findChild<QPushButton *>(QStringLiteral("acceptReframeReviewButton"));
+    auto *rejectButton = window.findChild<QPushButton *>(QStringLiteral("rejectReframeReviewButton"));
+    auto *summary = window.findChild<QLabel *>(QStringLiteral("reframeReviewSummaryLabel"));
+    auto *commandEdit = window.findChild<QLineEdit *>(QStringLiteral("reframeCommandEdit"));
+    auto *startSeconds = window.findChild<QDoubleSpinBox *>(QStringLiteral("reframeStartSeconds"));
+    auto *endSeconds = window.findChild<QDoubleSpinBox *>(QStringLiteral("reframeEndSeconds"));
+    QVERIFY(reviewButton);
+    QVERIFY(acceptButton);
+    QVERIFY(rejectButton);
+    QVERIFY(summary);
+    QVERIFY(commandEdit);
+    QVERIFY(startSeconds);
+    QVERIFY(endSeconds);
+
+    // Without a pending plan the decision controls are inert.
+    QVERIFY(!acceptButton->isEnabled());
+    QVERIFY(!rejectButton->isEnabled());
+    QVERIFY(summary->text().contains(QStringLiteral("No plan is waiting")));
+
+    // "Review Plan" asks the application to prepare the SAME instruction and
+    // range the command inputs hold.
+    QSignalSpy reviewSpy(&window, &MainWindow::reframeReviewRequested);
+    QVERIFY(reviewSpy.isValid());
+    commandEdit->setText(QStringLiteral("follow person 1"));
+    startSeconds->setValue(1.5);
+    endSeconds->setValue(4.0);
+    reviewButton->click();
+    QCOMPARE(reviewSpy.count(), 1);
+    const QList<QVariant> request = reviewSpy.first();
+    QCOMPARE(request.at(0).toString(), QStringLiteral("follow person 1"));
+    QCOMPARE(request.at(1).toLongLong(), qint64(1500));
+    QCOMPARE(request.at(2).toLongLong(), qint64(4000));
+
+    // The panel presents the review's own lines and enables the two decisions.
+    Application app;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QVERIFY(setupActiveMedia(app, directory, nullptr));
+    app.setReframeCommandPreparer(reviewPreparer());
+    QVERIFY(app.prepareReframeCommand(QStringLiteral("follow person 1"), 0, 4000));
+    const ReframePlanReview review = app.pendingReview();
+    window.showReframeReview(review);
+    QVERIFY(acceptButton->isEnabled());
+    QVERIFY(rejectButton->isEnabled());
+    QVERIFY(summary->text().contains(
+        QStringLiteral("Reviewing a plan of 2 keyframe(s) (digest %1)")
+            .arg(review.planDigest.left(12))));
+    QVERIFY(summary->text().contains(QStringLiteral("Nothing has been rendered yet.")));
+    QVERIFY(summary->text().contains(QStringLiteral("Lens: 90.0 deg -> 60.0 deg")));
+    QVERIFY(summary->text().contains(QStringLiteral("Output: 640x360 at 2 fps")));
+
+    // The two decisions are requests, not actions: the panel changes nothing.
+    QSignalSpy acceptSpy(&window, &MainWindow::acceptReframeReviewRequested);
+    QSignalSpy rejectSpy(&window, &MainWindow::rejectReframeReviewRequested);
+    QVERIFY(acceptSpy.isValid());
+    QVERIFY(rejectSpy.isValid());
+    acceptButton->click();
+    rejectButton->click();
+    QCOMPARE(acceptSpy.count(), 1);
+    QCOMPARE(rejectSpy.count(), 1);
+    QVERIFY(app.hasPendingReview());
+    QCOMPARE(app.reframeOutputs().size(), 0);
+
+    // A cleared review resets the panel.
+    window.showReframeReview(ReframePlanReview());
+    QVERIFY(!acceptButton->isEnabled());
+    QVERIFY(!rejectButton->isEnabled());
+    QVERIFY(summary->text().contains(QStringLiteral("No plan is waiting")));
 }
 
 QTEST_MAIN(ProjectTest)

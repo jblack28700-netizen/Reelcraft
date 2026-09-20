@@ -2586,3 +2586,106 @@ Five gated tests plus a small shared prerequisite block (no new framework):
 
 - None. Decisions 001-053 preserved.
 
+
+
+## 2026-09-18 — 360 Reframing Objective 34: Creator Review Foundation (Plan Preview Before Render)
+
+### Objective
+
+Let a creator inspect the structured edit/reframe plan **before** committing to a render, and then
+accept or reject it — as a *view* of the canonical plan, with no revision, no timeline editing and no
+undo, and with Accept executing exactly the reviewed plan through the existing deterministic render
+path.
+
+### What inspection found
+
+- **The decision and the execution were welded together.** `ReframeCommandRunner::prepare` (parse,
+  resolve, plan) already existed separately from `run`, but the application only ever called the pair:
+  `runReframeCommandInternal` built the request, called `m_commandExecutor`, and the `finish` lambda
+  attached the `EditDecision` and appended the record. Nothing in the application could stop between
+  the plan and the render.
+- **The two seams needed for a safe review already existed.** `appendReframeOutput` is the single
+  append gate for render records (shared by the command path and by `replayEditDecision`), and
+  `m_replayRenderer` is a plan-plus-source-plus-destination render function defaulting to
+  `ReframePipeline::renderPlan`. A reviewed plan therefore needs no new execution path: it is the
+  input replay already uses.
+- **The valuable invariant was already available**: `ReframePlan::toJsonObject()` is deterministic and
+  `EditDecision::fromPlan` hashes it, so "the plan you reviewed is the plan that ran" is a checkable
+  statement rather than a claim about intent.
+- **The risk was drift between the two paths.** If review built its own request, a reviewed plan could
+  differ from the command path's plan in a way nobody would notice (a different effective range, a
+  different output path, a different creator seed). Inspection of `runReframeCommandInternal` showed
+  the validation/request construction was a clean, self-contained block, so it could be extracted
+  rather than copied.
+
+### What was built
+
+- **`ReframePlanReview`** (`app/application/ReframePlanReview.{h,cpp}`): a plain QtCore value type
+  derived from a plan by a pure function — instruction and understanding, resolved subject ids, notes,
+  the source range and ordered retained spans, keyframe count, start/end yaw and pitch, whether the
+  camera moves, whether the lens is constant and its start/end value, output width/height/fps and
+  orientation, plus human-readable framing/camera/lens/time/output/audio lines and
+  `summaryLines()` ("Label: value", fixed order). The audio line states the renderer's execution
+  policy for exactly the plan's retained spans and never claims to know whether the source has audio.
+  It carries the canonical plan by value and `digestOf(plan)` (SHA-256 over the plan's compact
+  canonical JSON). A review of an invalid plan is invalid and shows nothing.
+- **One shared request builder.** `Application::buildReframeCommandContext` is the extracted
+  validation + `ReframeCommandRequest` construction, used by the direct command path, the revision
+  path and review preparation; `applyCommandResultToOutcome` applies the decision stage's result to an
+  outcome for both the command path and preparation. Behaviour is unchanged — verified by the existing
+  command tests, which pass unmodified.
+- **`Application::prepareReframeCommand(instruction, startMs, endMs)`**: decision stage only, through
+  the new `m_commandPreparer` seam (default `ReframeCommandRunner::prepare`, same signature as the
+  executor). Renders nothing, appends nothing, writes nothing; emits `reframeReviewChanged(review)` on
+  success. A failure appends no record — it never reached an output target — and is reported through
+  the existing `reframeCommandFinished` signal with an empty output path, so the reason is visible
+  without a second failure channel.
+- **`Application::acceptReframeReview(outputPath = {})`**: validates that the reviewed plan's media is
+  still the active, available one and that the destination is usable (directory exists, path differs
+  from the source), then calls the existing renderer seam with **exactly** the reviewed plan, records
+  the result through `appendReframeOutput`, attaches `EditDecision::fromPlan` of that same plan, emits
+  `reframeCommandFinished`, and consumes the review either way (a failed render cannot be re-accepted).
+- **`Application::rejectReframeReview()`** and the review lifetime: cleared on accept, reject, new
+  project, project open, active-media change and removal of the active media, and replaced by a new
+  preparation.
+- **UI**: a "Review Plan" button, an "Accept & Render" and a "Reject" button (both inert until a plan
+  is waiting), and a word-wrapped summary label showing the review's own lines with the plan digest;
+  signals `reframeReviewRequested` / `acceptReframeReviewRequested` / `rejectReframeReviewRequested`
+  wired in `main.cpp`. The panel displays; it cannot edit.
+- **No schema or persistence change.** Review state is session-only; the rendered record is an ordinary
+  Objective 16 record, and a project saved before and after a preparation is byte-identical.
+
+### Verification
+
+- 13 new model-free tests (listed in Decision 054) covering: the derived view and its digest, the
+  temporal/audio lines, reject, accept rendering the exact reviewed plan, destination validation, an
+  honest render failure, a preparation failure leaving no review and no stale review, shared
+  validation with the command path, invalidation by every context change, "not a second plan
+  representation" (purity, no persistence, no schema change), the unchanged direct command path, the
+  record as the only carrier of the reviewed plan, and the panel's inert/enabled states and requests.
+- Targeted regression (command path, records, lifecycle, creator selection, playback, replay,
+  revision, provenance, touched UI): **87 passed / 0 failed / 0 skipped** (9.1 s).
+- Official `scripts/build_and_test.sh`: exit 0, **500 passed / 0 failed / 14 skipped** (79.9 s) —
+  the previous 487 passes plus the 13 new tests, with the skip count unchanged.
+
+### Boundary notes / not implemented
+
+- Deliberately **not** built: revising a reviewed plan, a timeline editor, undo/redo, a plan mutator,
+  a persisted review, a review of a finished render (Objective 12 already previews those), an editable
+  destination field, and any integration of `reviseEditDecision` into the review surface.
+- Accept keeps the command path's destination policy and does **not** adopt replay's never-overwrite
+  rule: accept continues a command, replay reproduces a historical record.
+- The Objective 33 harness was not touched and still skips; **no real-media validation is claimed** for
+  this objective, because it adds no perception or rendering behaviour — its validation level is
+  fixture by design, and it adds no validation debt.
+- No new dependency, provider, plan type or serialized form; the renderer, encoder, audio policy,
+  camera geometry, parser, resolver, planner and decision artifact are unchanged.
+- `PROJECT_HISTORY.md` was deliberately not touched: under the Objective P1 convention it records
+  milestone-level narrative, and the creator-review family is not complete — revision UI is still
+  absent.
+
+### Decisions
+
+- Decision 054 recorded (creator review as a read-only view; accept executes the exact reviewed plan
+  through the existing render seam and the single append gate; shared command context builder).
+  Decisions 001-053 preserved.
