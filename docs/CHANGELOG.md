@@ -828,3 +828,16 @@ Date: 2026-09-18
 - Four tests that had been carrying a wider setting to work around this problem no longer do, so the behaviour that ships is the behaviour the test suite checks.
 - Nothing else about how subjects are detected, tracked or identified changed, no stored edit or project data changed, and following resolves at the normal settings. 3 new tests; targeted regression 73 passed / 0 failed / 0 skipped. Decision 047 records the design.
 
+
+## v0.2.65 — Reframed results now keep their sound
+
+Date: 2026-09-18
+
+- A 360 reframe no longer comes out silent. The flat video Reelcraft produces now carries the audio of the footage it kept, so a reframed clip can be watched (or handed on) as a finished result instead of a mute picture.
+- When an edit keeps only part of the footage — a trimmed section, or several separate sections joined together — the sound follows exactly the same sections, in the same order, and starts at the beginning of the result. Nothing from the parts that were left out is heard.
+- The picture is unchanged in every measurable way: it comes out of exactly the same encoding path as before. For footage that simply has no sound, the result is byte-for-byte the file Reelcraft produced before this change.
+- The sound is re-encoded with fixed settings rather than copied, so the same edit always produces the same result; the original file is only ever read.
+- If the footage's audio cannot even be identified, Reelcraft renders the silent result it produced before and says why, rather than guessing. If audio is identified but cannot be produced, the render fails honestly instead of quietly handing back a silent file.
+- Still to come: Reelcraft cannot *play* sound. Playback inside the application remains pictures-only, and adding that is a separate piece of work with its own dependency decision; this change is about what Reelcraft exports.
+- 7 new tests, all on generated fixtures, none requiring real footage; targeted regression 20 passed / 0 failed / 0 skipped and the full model-free suite 466 passed / 0 failed / 9 skipped. Decision 048 records the design.
+

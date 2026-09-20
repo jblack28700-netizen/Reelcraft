@@ -620,3 +620,26 @@ Analysis artifacts are stored as separate files named from their content identit
 
 A retention policy (keep the current artifact per media plus a bounded number of recent revisions, prune the rest on explicit creator action) is a future decision. Analysis is regenerable, so pruning can never lose information that cannot be recomputed.
 
+
+# Issue — Rendered results carry audio, but Reelcraft cannot play it (2026-09-18)
+
+### Status
+
+Open — intentional boundary, not a defect (Decisions 036 and 048).
+
+### Description
+
+Objective 28 made a rendered 360 -> flat output preserve the source audio of the plan's retained source spans, so an exported result is a complete file. Nothing inside Reelcraft can *hear* it: Decision 036 deferred an audio output subsystem, both playback pipelines are video-only, the decode seams pass `-an`, and `QtMultimedia` was deliberately not adopted. Objective 28 deliberately did not add one as a side effect of an execution-stage objective.
+
+### Impact
+
+A creator can produce a result with sound and play it in any external player, but cannot review the sound inside the application — which matters for judging dialogue timing, speaker behaviour and loudness. This is a review-experience gap, not a correctness one: the artifact itself is complete, deterministic and reproducible, and replay reproduces its audio exactly.
+
+### Planned Resolution
+
+An audio output seam driven by the existing position/seek model — a `QAudioSink`-based or external-player implementation behind an injectable interface — remains the smallest viable follow-up recorded by Decision 036. It needs its own scoped objective and its own dependency decision, and must not be added as a side effect of another objective.
+
+---
+
+*Related, resolved by Objective 28: renders are no longer silent. Earlier statements that "rendered results are silent by design" (Decision 036 and the Objective 19 release notes) described the state before Decision 048 and are preserved as history.*
+

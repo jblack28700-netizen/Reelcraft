@@ -1696,3 +1696,57 @@ It was also verified that the fix is not a disguised threshold increase: a contr
 - Targeted regression over the perception, tracking, planning, camera-path, command-runner, resolution, streaming-provider and real-media pipeline tests: **73 passed / 0 failed / 0 skipped** (240 s).
 - The real-media follow pipeline and the decoder-reuse test both pass **with the 24° overrides removed**, which is the evidence that the fix, not a test setting, is doing the work.
 
+
+---
+
+# Decision 048 — The Rendered 360 Output Preserves the Source Audio of the Plan's Retained Spans
+
+**Status:** Accepted (2026-09-18, 360 Reframing Objective 28)
+
+## Context
+
+The priority pipeline is *360 source -> understanding -> request -> structured edit/reframe plan -> virtual-camera decisions -> deterministic execution -> flat video output*. Every stage of it was implemented and tested except the last one's completeness: **the artifact the engine produced was silent**. `ReframeRenderer::encodeVideo` accepted only a rendered-PNG pattern and wrote H.264 video with no audio input, no audio map and no audio codec at all, `ReframePipeline::renderPlan` never handed the source path to the encoder, and the decode seams explicitly discard audio (`-an`). Nothing in the suite observed the absence, because every generated fixture is video-only.
+
+Objective 14 changed what silence costs. `ReframePlan` gained ordered retained `segments`, and `frameTimeMs()` walks them to build the **output** timeline, so a retimed render no longer shares the source's timeline. Any audio an output carries therefore has to be mapped through the same spans the picture was built from — which makes this deterministic-execution work driven by the plan, not a container-level toggle.
+
+## Decision
+
+- **The rendered output carries the source audio of the plan's retained source spans**: `ReframePlan::segments()` in order when the plan has them, otherwise `sourceRange()`. Each span is trimmed out of the source, its timestamps are reset, and the spans are concatenated in order, so the audio begins at output time zero and corresponds exactly to the retained picture.
+- **Audio is an execution policy, not a plan field.** The plan continues to describe only *what* (source spans, camera keyframes, output specification); carrying the audio of those spans is a documented default behaviour of the deterministic engine, exactly as the pixel format and codec are. No field is added to `ReframePlan`, `CameraKeyframe`, `EditDecision` or `Project`, no schema version changes, and every stored decision's payload and digest are untouched. Because audio is a pure function of `(source, plan)`, replay reproduces it without consulting anything new.
+- **Two passes, and the picture keeps its existing encoder.** Pass 1 renders the PNG sequence into a temporary file through the **unchanged** `encodeVideo`; pass 2 remuxes that file with `-c:v copy` and adds the audio stream. The video elementary stream of an output that carries audio is therefore byte-identical to the video-only output of the same frames — the change cannot alter a pixel, and the Objective 16/20 equivalence guarantees apply to the picture unchanged.
+- **The audio is always re-encoded, never stream-copied.** Stream copy cannot be trimmed to an arbitrary source span (it is keyframe-bound), and it would make the output depend on the source's codec rather than on this command. Fixed parameters (AAC, 192 kbit/s) make the result a deterministic function of the input.
+- **The concatenated audio is bounded to the rendered picture.** `framesForRange` rounds a span's frame count **down**, so a retained span can be longer than the frames it produced; the output duration is `frameCount / fps` and the audio is trimmed to it. Without that bound a rounded span leaves an audio-only tail and extends the container past the last frame (measured: a 2333 ms span at 2 fps renders 2000 ms of picture and produced a 3000 ms container when left unbounded).
+- **Source audio format is preserved from a reported fact, never assumed.** Sample rate is passed through, and the channel count is forced only for the unambiguous mono/stereo layouts; anything else is left to FFmpeg so an uncommon layout is preserved by the muxer rather than approximated. **Spatial audio is carried as-is and is not rotated** — a virtual-camera rotation does not rotate the recorded sound field. Recorded as a limitation, not a silent approximation.
+- **Whether the source has audio is a FACT from the probe seam** (`MediaDurationProbe::streamSummary`, the same seam the media-analysis technical layer uses), never a guess:
+  - no audio track -> the previous silent output, **no error, nothing reported**;
+  - the probe cannot answer -> the previous silent output plus an **explicit recorded reason** in the result notes;
+  - audio exists but cannot be mapped or encoded -> an **honest failure**, never a silent file.
+- **The audio map is required, not optional.** The graph maps `[aout]` rather than `1:a?`, so a source whose audio cannot be produced fails loudly instead of quietly degenerating into a silent success.
+- **The original media is only ever read.** No source file is opened for writing anywhere in this path, verified by the project's own fingerprint vocabulary and by a content digest before and after.
+
+## Rationale
+
+The alternative — an audio field on the plan — was rejected for the reason the plan's design already implies: the plan describes a *decision*, and "keep the audio of the footage you kept" contradicts no decision anyone can currently express. No command asks for a silent output, so a field would exist to encode a default, while changing the payload and therefore the digest of every already-persisted decision and requiring a migration. The smallest correct change was to let the plan keep deciding the spans and let execution carry the audio those spans contain.
+
+Making the picture pass through the existing encoder first was chosen over a single-pass two-input encode because it converts a behavioural question into a structural one: the video stream is not merely *equal* to the previous one, it *is* the previous encoder's output remuxed. That is why the video-only container remains byte-identical and why the existing equivalence tests needed no relaxation.
+
+## Consequences
+
+- A render of a source that has audio is now a complete deliverable: picture and sound, correctly retimed when the plan retains disjoint spans.
+- **No existing guarantee is relaxed.** A video-only source renders a byte-identical container to the standalone video-only encoder (asserted directly, not inferred), and the Objective 20 streaming-vs-seek container-equality test still passes untouched.
+- **Reproducibility is extended, not weakened.** Where container equality is meaningful it is still asserted; where it is not (a container that now carries a stream is a different container) the guarantees asserted are equal **decoded video** and equal **decoded PCM audio**, for repeated renders and for replay.
+- Replay of a stored `EditDecision` reproduces the audio as well as the picture, with the same perception-free path (no parser, no detector, no analysis).
+- **Recorded limitation:** Reelcraft still cannot *play* audio. In-app source playback and rendered-result playback remain video-only (Decision 036), and the rendered file is where the audio lives. Adding an audio output subsystem remains its own objective with its own dependency decision, and is deliberately not a side effect of this one.
+- The limitation is also real for real footage: the project's real 360 clip is mono, so channel-layout preservation beyond mono/stereo is exercised only by generated fixtures in this environment.
+- Not in this objective: audio editing (mute, volume, fades, mixing, music), any parser keyword for them, transcription/diarization/audio analysis, spatial or ambisonic rendering, and any change to `ReframePlan`, `CameraKeyframe`, `EditDecision`, the `Project` schema, `ReframeIntent`, the parser, the contract checker, perception, target tracking, camera-path generation, analysis, reasoning or the UI. Decisions 017-047 are preserved.
+
+## Verification
+
+- 7 new model-free tests: audio preserved on a continuous range (stream present, channel count and sample rate preserved, container duration matches the picture, tone/silence content verified where the fixture puts it, the **video elementary stream byte-identical** to the same plan rendered without audio while the container differs, repeated renders equal in decoded video and decoded PCM, source bytes and modification time unchanged); audio follows disjoint retained segments in order (both retained spans sound, the dropped silent middle does not, container is the picture's length); a late-starting range keeps only its own audio and a range whose frame count rounds down leaves no audio tail; a video-only source yields **no** audio stream and a container **byte-identical** to the standalone video-only encoder, with no note recorded; an unusable probe degrades to the silent output with the reason recorded; a stereo source round-trips with its layout preserved and its fingerprint and content digest unchanged; and an application-level command followed by a replay reproduces both the decoded picture and the decoded audio.
+- Targeted regression over the renderer, pipeline, replay, command-runner and real-media follow tests: **20 passed / 0 failed / 0 skipped** (14 s), including `reframeRenderEquivalenceStreamingVersusSeek` unchanged.
+- Full model-free suite run at the checkpoint.
+
+---
+
+*Decisions 001-047 are preserved verbatim; this decision adds to them and supersedes none of them.*
+

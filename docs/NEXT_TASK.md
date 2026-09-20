@@ -175,6 +175,40 @@ No coverage, projection, detector, gate, identity, sampling (Obj 24), smoothing 
 - Decision 047 (contract change: duplicate consolidation is no longer distance-only). Decisions 017-046 preserved.
 
 ---
+## 360 Reframing Objective 28 — Rendered Output Preserves Source Audio — Complete
+
+Status: **Complete — implemented and verified (2026-09-18).**
+
+### Objective
+
+The priority pipeline ends in *flat video output*, and that output was silent: the encoder accepted only a rendered PNG pattern and wrote no audio stream at all, while Objective 14's retained `segments` move the output onto a different timeline from the source. Make the deterministic execution stage produce a complete artifact — the picture it already produced, plus the source audio of exactly the source spans the plan retained — without touching the plan, the decision artifact, replay or any persisted schema.
+
+### Scope (implemented)
+
+- **Spans come from the plan, unchanged.** The audio follows `ReframePlan::segments()` in order when the plan has them, otherwise `sourceRange()`. Each span is trimmed out of the source, its timestamps are reset, and the spans are concatenated, so the audio begins at output time zero and corresponds exactly to the retained picture.
+- **`ReframeRenderer::AudioSpec` + `ReframeRenderer::encodeVideoWithAudio()`** (additive; the existing `encodeVideo` API and behaviour are untouched). Two passes: the picture is produced by the **unchanged** video-only encoder into a temporary file, then remuxed with `-c:v copy` plus the audio graph. The video elementary stream of an output carrying audio is therefore byte-identical to the video-only output of the same frames.
+- **The audio is always re-encoded** (AAC, fixed bitrate), never stream-copied: a copy is keyframe-bound and would make the output depend on the source codec rather than on the command.
+- **The concatenated audio is bounded to the picture** (`atrim=end=<frameCount/fps>`), because `framesForRange` rounds a span's frame count down: without the bound, a 2333 ms span at 2 fps (4 frames = 2000 ms of picture) produced a 3000 ms container with an audio-only tail.
+- **Source format preserved from a reported fact**: sample rate passed through, channel count forced only for mono/stereo, anything else left to FFmpeg so an uncommon layout is preserved rather than approximated. Spatial audio is carried as-is and not rotated (recorded limitation).
+- **`ReframePipeline::renderPlan()` gained an optional `MediaDurationProbe` injection point** (defaulting to the external ffprobe probe, the same seam the media-analysis technical layer uses). The audio decision is a reported **fact**, never a guess: no audio track -> the previous silent output with no error and nothing reported; probe cannot answer -> the previous silent output plus an explicit recorded reason in `Result::notes`; audio present but unmappable -> honest failure. The audio map is required (`[aout]`, not `1:a?`), so a failure cannot silently degenerate into a silent file.
+- **Notes now travel**: `ReframePipeline::run()` and `ReframeCommandRunner::run()` append execution notes to their results, so a degradation reason reaches the application outcome and the caller.
+- **Original media read-only**, verified by the project's own fingerprint vocabulary (`MediaSourceReference` + `checkMediaSourceStatus`) and by a content digest before and after.
+
+### Verification
+
+- 7 new model-free tests (`reframeRenderPreservesSourceAudio`, `reframeRenderAudioFollowsRetainedSegments`, `reframeRenderAudioTrimsToSourceRange`, `reframeRenderSilentSourceStaysSilent`, `reframeRenderUnusableAudioFactsDegradesHonestly`, `reframeRenderLeavesSourceMediaUntouched`, `replayReproducesRenderedAudio`) using generated fixtures whose audio is a tone except inside one silent window, so content is judged by *where the signal is* rather than by a fragile waveform.
+- The video-only path is proven unchanged **directly**: the pipeline's output for a video-only source is byte-identical to the standalone `encodeVideo` output of the same frames, and no note is recorded.
+- Targeted regression over the renderer, pipeline, replay, command-runner and real-media follow tests: **20 passed / 0 failed / 0 skipped** (14 s), including `reframeRenderEquivalenceStreamingVersusSeek` unchanged.
+- Full model-free suite run at the checkpoint.
+
+### Boundary
+
+No change to `ReframePlan`, `CameraKeyframe`, `EditDecision`, the `Project` schema, `ReframeIntent`, the parser, the contract checker, perception, target tracking, camera-path generation, analysis, reasoning or the UI. No new dependency, no model, no LLM, no network. In-app playback remains video-only (Decision 036): the rendered file is where the audio lives.
+
+### Decision
+
+- Decision 048 (the rendered output preserves the source audio of the plan's retained spans; audio is an execution policy, not a plan field). Decisions 017-047 preserved.
+
 ---
 
 ## Next Objective (Phase 3, Objective 5) — NOT STARTED (deferred behind the 360 priority)
@@ -601,7 +635,7 @@ Human-authorized scope (Decision 038). Close the documented gap between the work
 The established product direction is that Reelcraft must first become a working 360 video editor, with 360 reframing as the central problem. Leading candidates, in the light of Objective 19:
 
 - **the Analysis -> Reasoning boundary** (editorial reasoning over persisted analysis evidence), which is the stage Decision 039 defines as producing only the existing validated ReframePlan;
-- **audio in the rendered output** (renders are still silent; Objective 20 removed the per-frame decoder process but added no audio);
+- **audio in the rendered output** — **DONE by Objective 28 (Decision 048)**: a rendered output now carries the source audio of the plan's retained source spans, re-encoded deterministically and bounded to the picture, while a video-only source still renders a byte-identical video-only container. What remains is audio *playback* inside Reelcraft (Decision 036's deferred follow-up), which is a separate objective with its own dependency decision.
 - **the covering-view duplicate-identity finding from Objective 23** (two cover views reporting one subject with centroids further apart than the tracker merge distance) — **CLOSED by Objective 27 (Decision 047)**, which consolidates duplicates by the overlapping angular footprint the detection already reports; the merge distance was deliberately left at 8.0°.
 
 - **creator review and revision surface** over persisted decisions (`decisionProvenance()` and `reviseEditDecision()` exist as APIs with no UI);

@@ -2075,3 +2075,47 @@ A diagnostic premise also had to be corrected during the work: setting `mergeDis
 
 - Decision 047 recorded, including the explicit contract change that `mergeNearDuplicates` no longer decides duplicates by distance alone. Decisions 017-046 preserved; the Objective 23 finding recorded in Decisions 043-046 as open is closed by this objective, with their historical text left unchanged.
 
+
+
+## 2026-09-18 — Phase 4 Objective 28: Rendered Output Preserves Source Audio
+
+### Objective
+
+Close the last incomplete stage of the priority pipeline. Every stage of *360 source -> understanding -> request -> plan -> virtual camera -> deterministic execution -> flat video output* existed and was tested, and the artifact the last stage produced was silent: `ReframeRenderer::encodeVideo` accepted only a rendered-PNG pattern and wrote H.264 video with no audio input, no audio map and no audio codec, `ReframePipeline::renderPlan` never handed the source path to the encoder, and the decode seams pass `-an`. Objective 14 had already made silence *wrong* rather than merely incomplete: retained `segments` move the output onto a different timeline from the source, so audio must be mapped through the same spans the picture was built from.
+
+### What inspection found
+
+- The gap is structural, not a missing flag: the encoder has no second input at all, and no test observes the absence because every generated fixture is video-only (`generateTestClip`, `createProviderTestClip`, `createEquirectReviewVideo`).
+- The information needed to decide *whether* there is audio already exists behind a seam: `MediaDurationProbe::streamSummary()` reports `hasAudio`, `audioSampleRate` and `audioChannels`, and `FfprobeDurationProbe` implements it for the media-analysis technical layer. Nothing new had to be invented or linked.
+- `ReframePlan::frameCount()` uses `framesForRange`, which **floors**: a retained span can be longer than the frames it produced, so a naive "sum of the spans" audio would outlast the picture. Measured directly before implementation: a 2333 ms span at 2 fps renders 4 frames (2000 ms of picture) and an unbounded audio produced a **3000 ms container** with an audio-only tail.
+- `MediaDurationProbe` already has the established additive-seam pattern (a virtual whose default reports *unavailable*), which is what makes the degradation branches testable with the existing `FakeDurationProbe` double.
+
+### What was built
+
+- **`ReframeRenderer::AudioSpec` + `ReframeRenderer::encodeVideoWithAudio()`** (additive; `encodeVideo`'s signature and body semantics are unchanged apart from extracting the shared process runner). Two passes: the picture is rendered and encoded by the **unchanged** video-only encoder into a temporary file, then remuxed with `-c:v copy` plus an audio filtergraph. The video elementary stream of an output that carries audio is therefore the very stream the verified encoder produced.
+- **The filtergraph is plan-driven**: one `atrim` per retained span with `asetpts=PTS-STARTPTS`, ordered `concat`, then `atrim=end=<frameCount/fps>` so the audio ends with the picture. Times are written with fixed six decimals, so the generated command is a pure function of the spec.
+- **Audio is always re-encoded** (AAC, 192 kbit/s), never stream-copied: a copy is keyframe-bound and cannot be trimmed to an arbitrary span, and it would tie the output to the source's codec.
+- **The source format is preserved from a reported fact**: `-ar` from the probed sample rate, `-ac` only for the unambiguous mono/stereo layouts, so an uncommon layout is preserved by the muxer rather than approximated. Spatial audio is carried as-is and **not rotated** by the virtual camera — recorded as a limitation rather than approximated.
+- **`ReframePipeline::renderPlan()` gained an optional `MediaDurationProbe` injection point** (defaulting to the external ffprobe probe, exactly as the frame rate already is). The decision is a fact, never a guess: no audio track -> the previous silent output with no error and nothing reported; the probe cannot answer -> the previous silent output plus an explicit recorded reason in `Result::notes`; audio present but unmappable -> honest failure. The audio map is required (`[aout]`, not `1:a?`), so nothing can silently degenerate into a silent success.
+- **Execution notes now reach the caller**: `ReframePipeline::run()` and `ReframeCommandRunner::run()` append their execution notes to their results, so a degradation reason appears in the application outcome instead of only inside the inner call.
+- **Nothing persisted changed**: no `ReframePlan`, `CameraKeyframe`, `EditDecision` or `Project` schema change, no new field, no new artifact. Audio is a deterministic function of `(source, plan)`, so the existing perception-free replay reproduces it by re-executing.
+
+### Verification
+
+- **7 new model-free tests** on generated fixtures whose audio is a 440 Hz tone except inside one silent window, so "did the output keep the right audio?" is answered by *where the signal is*: `reframeRenderPreservesSourceAudio` (stream present, channel count and sample rate preserved, container duration matches the picture, tone/silence content, repeated renders equal in decoded PCM and decoded frames, source bytes and mtime unchanged), `reframeRenderAudioFollowsRetainedSegments` (both retained spans sound, the dropped silent middle does not, container is the picture's length), `reframeRenderAudioTrimsToSourceRange` (a late range keeps only its own audio; a range whose frame count rounds down leaves no tail), `reframeRenderSilentSourceStaysSilent`, `reframeRenderUnusableAudioFactsDegradesHonestly`, `reframeRenderLeavesSourceMediaUntouched` (stereo layout preserved, fingerprint via `checkMediaSourceStatus` and content digest unchanged), `replayReproducesRenderedAudio`.
+- **The video-only regression is asserted directly, not assumed**: for a source with no audio, the pipeline's container is **byte-identical** to the standalone `encodeVideo` output of the same frames, and no note is recorded.
+- **The picture is proven untouched by adding audio**: the same plan and source rendered with audio and rendered with a probe that reports nothing produce an identical **video elementary stream** (copied out of both files without re-encoding) while their containers necessarily differ.
+- Targeted regression over the renderer, pipeline, replay, command-runner and real-media follow tests: **20 passed / 0 failed / 0 skipped** (14 s), including `reframeRenderEquivalenceStreamingVersusSeek` unchanged.
+- Full model-free suite: **466 passed / 0 failed / 9 skipped** (59.9 s on this container; six minutes faster than the recorded proot figure).
+- The 9 skips are unchanged and by design: 8 environment-gated real-media/model integrations plus the child-only fresh-process replay slot. No real 360 clip or helper is configured in this environment, so verification here is model-free and fixture-based, which is stated rather than glossed.
+
+### Boundary notes / not implemented
+
+- Deliberately out of scope: audio editing (mute, volume, fades, mixing, music), any parser keyword for it, transcription/diarization/audio analysis, spatial or ambisonic rendering, in-app audio **playback** (Decision 036's separate follow-up, which needs its own dependency decision), and any change to `ReframePlan`, `CameraKeyframe`, `EditDecision`, the `Project` schema, `ReframeIntent`, the parser, the contract checker, perception, target tracking, camera-path generation, analysis, reasoning or the UI.
+- Recorded limitation: the project's real 360 footage is mono, so channel-layout preservation beyond mono/stereo is exercised only by generated fixtures in this environment.
+- Recorded limitation: Reelcraft still cannot play audio, so the creator cannot *hear* a result inside the application; the rendered file is where the audio lives.
+
+### Decisions
+
+- Decision 048 recorded (the rendered output preserves the source audio of the plan's retained spans; audio is an execution policy, not a plan field, and the picture keeps the encoder it always had). Decisions 017-047 preserved unchanged.
+

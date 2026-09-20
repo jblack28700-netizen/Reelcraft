@@ -566,6 +566,10 @@ ReframeCommandResult ReframeCommandRunner::run(
     // be re-derived. Execution stays the deterministic ReframePipeline.
     const ReframePipeline::Result executed = ReframePipeline::renderPlan(
         result.plan, request.sourcePath, request.outputPath, nullptr);
+    // Objective 28: execution diagnostics (for example why an output carries no
+    // audio) travel with the command result, so the application outcome and the
+    // caller see them.
+    result.notes.append(executed.notes);
     if (!executed.ok) {
         result.ok = false;
         result.error = executed.error;

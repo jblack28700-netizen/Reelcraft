@@ -29,6 +29,7 @@
 #include "analysis/MediaAnalysisRunner.h"
 #include "application/Application.h"
 #include "core/MediaItem.h"
+#include "core/MediaSourceReference.h"
 #include "core/Project.h"
 #include "media/FfmpegFrameSource.h"
 #include "media/FfprobeDurationProbe.h"
@@ -1067,6 +1068,15 @@ private slots:
     void ffmpegFrameSourceLifecycleIsSafe();
     void reframeStreamProviderRejectsBadInputAndEndOfSource();
     void reframeRenderEquivalenceStreamingVersusSeek();
+    // Objective 28: the rendered 360 -> flat output preserves source audio over
+    // the plan's retained source spans.
+    void reframeRenderPreservesSourceAudio();
+    void reframeRenderAudioFollowsRetainedSegments();
+    void reframeRenderAudioTrimsToSourceRange();
+    void reframeRenderSilentSourceStaysSilent();
+    void reframeRenderUnusableAudioFactsDegradesHonestly();
+    void reframeRenderLeavesSourceMediaUntouched();
+    void replayReproducesRenderedAudio();
     void mediaAnalysisJsonRoundTripAndIdentity();
     void mediaAnalysisSchemaVersionAndDigestHandling();
     void mediaAnalysisSourceStatusDistinguishesMissingFromChanged();
@@ -10946,6 +10956,647 @@ void ProjectTest::reframeRenderEquivalenceStreamingVersusSeek()
                  QCryptographicHash::hash(readFileBytes(seekOutput),
                                           QCryptographicHash::Sha256).toHex());
     }
+}
+
+// ============ 360 reframed output audio (Objective 28) ============
+//
+// Deterministic, generated fixtures only: no real footage, no model, no
+// network. The fixture's audio is a 440 Hz tone EXCEPT inside one silent window,
+// so "did the output keep the audio of the retained spans?" is answered by where
+// the signal is, not by comparing a fragile waveform.
+
+namespace {
+
+// 440 Hz tone outside [silentFromMs, silentToMs), digital silence inside it.
+// Both the tone and the picture are deterministic. channelCount is 1 or 2.
+bool createAudioTestClip(const QString &directory, int frameCount, int fps,
+                         qint64 silentFromMs, qint64 silentToMs, int channelCount,
+                         QString *outPath)
+{
+    const QString ffmpeg = FrameExtractor::defaultExecutablePath();
+    if (ffmpeg.isEmpty() || frameCount <= 0 || fps <= 0 || channelCount < 1
+        || silentToMs <= silentFromMs) {
+        return false;
+    }
+    for (int i = 0; i < frameCount; ++i) {
+        const QString name =
+            QStringLiteral("/s_%1.png").arg(i, 3, 10, QLatin1Char('0'));
+        if (!buildReviewFrame(180, 90, i).save(directory + name, "PNG")) {
+            return false;
+        }
+    }
+    const double seconds = static_cast<double>(frameCount) / fps;
+    const QString audioPath = directory + QStringLiteral("/tone.wav");
+    const auto run = [](const QString &executable,
+                        const QStringList &arguments) {
+        QProcess process;
+        process.setProcessChannelMode(QProcess::SeparateChannels);
+        process.start(executable, arguments);
+        if (!process.waitForStarted(15000)) {
+            return false;
+        }
+        if (!process.waitForFinished(60000)) {
+            process.kill();
+            process.waitForFinished(2000);
+            return false;
+        }
+        return process.exitStatus() == QProcess::NormalExit
+            && process.exitCode() == 0;
+    };
+
+    if (!run(ffmpeg, {
+                    QStringLiteral("-y"), QStringLiteral("-v"),
+                    QStringLiteral("error"),
+                    QStringLiteral("-f"), QStringLiteral("lavfi"),
+                    QStringLiteral("-i"),
+                    QStringLiteral("sine=frequency=440:sample_rate=48000:"
+                                   "duration=%1").arg(seconds, 0, 'f', 6),
+                    QStringLiteral("-af"),
+                    QStringLiteral("volume=0:enable='between(t,%1,%2)'")
+                        .arg(static_cast<double>(silentFromMs) / 1000.0, 0, 'f', 6)
+                        .arg(static_cast<double>(silentToMs) / 1000.0, 0, 'f', 6),
+                    QStringLiteral("-ac"), QString::number(channelCount),
+                    QStringLiteral("-c:a"), QStringLiteral("pcm_s16le"),
+                    audioPath
+                })) {
+        return false;
+    }
+
+    const QString videoPath = directory + QStringLiteral("/audio_clip.mp4");
+    if (!run(ffmpeg, {
+                    QStringLiteral("-y"), QStringLiteral("-v"),
+                    QStringLiteral("error"),
+                    QStringLiteral("-framerate"), QString::number(fps),
+                    QStringLiteral("-i"),
+                    directory + QStringLiteral("/s_%03d.png"),
+                    QStringLiteral("-i"), audioPath,
+                    QStringLiteral("-c:v"), QStringLiteral("libx264"),
+                    QStringLiteral("-pix_fmt"), QStringLiteral("yuv420p"),
+                    QStringLiteral("-g"), QStringLiteral("1"),
+                    QStringLiteral("-r"), QString::number(fps),
+                    QStringLiteral("-c:a"), QStringLiteral("aac"),
+                    QStringLiteral("-shortest"),
+                    videoPath
+                })) {
+        return false;
+    }
+
+    for (int i = 0; i < frameCount; ++i) {
+        QFile::remove(directory
+                      + QStringLiteral("/s_%1.png")
+                            .arg(i, 3, 10, QLatin1Char('0')));
+    }
+    if (outPath) {
+        *outPath = videoPath;
+    }
+    return QFileInfo::exists(videoPath) && QFileInfo(videoPath).size() > 0;
+}
+
+double jsonSeconds(const QJsonValue &value)
+{
+    if (value.isString()) {
+        return value.toString().toDouble();
+    }
+    return value.isDouble() ? value.toDouble() : 0.0;
+}
+
+int jsonInteger(const QJsonValue &value)
+{
+    if (value.isString()) {
+        return value.toString().toInt();
+    }
+    return value.isDouble() ? value.toInt() : 0;
+}
+
+struct AudioStreamFacts
+{
+    bool hasAudio = false;
+    int channels = 0;
+    int sampleRate = 0;
+    double durationSeconds = 0.0;
+};
+
+// Elementary-stream facts of a file, read with the external ffprobe (the same
+// tool the duration/stream seam uses; nothing is linked and nothing is written).
+bool probeAudioFacts(const QString &mediaPath, AudioStreamFacts *outFacts)
+{
+    const QString ffprobe = FfprobeDurationProbe::defaultExecutablePath();
+    if (ffprobe.isEmpty()) {
+        return false;
+    }
+    QProcess process;
+    process.setProcessChannelMode(QProcess::SeparateChannels);
+    process.start(ffprobe, {
+        QStringLiteral("-v"), QStringLiteral("error"),
+        QStringLiteral("-show_entries"),
+        QStringLiteral("stream=codec_type,channels,sample_rate,"
+                       "duration:format=duration"),
+        QStringLiteral("-of"), QStringLiteral("json"),
+        mediaPath
+    });
+    if (!process.waitForStarted(15000)) {
+        return false;
+    }
+    if (!process.waitForFinished(60000)) {
+        process.kill();
+        process.waitForFinished(2000);
+        return false;
+    }
+    if (process.exitStatus() != QProcess::NormalExit
+        || process.exitCode() != 0) {
+        return false;
+    }
+    const QJsonObject root =
+        QJsonDocument::fromJson(process.readAllStandardOutput()).object();
+    AudioStreamFacts facts;
+    for (const QJsonValue &value :
+         root.value(QStringLiteral("streams")).toArray()) {
+        const QJsonObject stream = value.toObject();
+        if (stream.value(QStringLiteral("codec_type")).toString()
+            != QLatin1String("audio")) {
+            continue;
+        }
+        facts.hasAudio = true;
+        facts.channels = jsonInteger(stream.value(QStringLiteral("channels")));
+        facts.sampleRate =
+            jsonInteger(stream.value(QStringLiteral("sample_rate")));
+        facts.durationSeconds =
+            jsonSeconds(stream.value(QStringLiteral("duration")));
+        break;
+    }
+    if (facts.durationSeconds <= 0.0) {
+        facts.durationSeconds = jsonSeconds(
+            root.value(QStringLiteral("format")).toObject().value(
+                QStringLiteral("duration")));
+    }
+    if (outFacts) {
+        *outFacts = facts;
+    }
+    return true;
+}
+
+// Decodes [startMs, startMs + durationMs) of a file's audio to mono 16-bit PCM
+// at a fixed rate. Output-side seeking keeps it sample accurate. Empty when the
+// file carries no audio stream or decoding fails; durationMs <= 0 decodes to the
+// end.
+QByteArray decodeAudioPcm(const QString &mediaPath, qint64 startMs,
+                          qint64 durationMs)
+{
+    const QString ffmpeg = FrameExtractor::defaultExecutablePath();
+    if (ffmpeg.isEmpty()) {
+        return QByteArray();
+    }
+    QStringList arguments{ QStringLiteral("-v"), QStringLiteral("error"),
+                           QStringLiteral("-i"), mediaPath };
+    if (startMs > 0) {
+        arguments << QStringLiteral("-ss")
+                  << QString::number(startMs / 1000.0, 'f', 6);
+    }
+    if (durationMs > 0) {
+        arguments << QStringLiteral("-t")
+                  << QString::number(durationMs / 1000.0, 'f', 6);
+    }
+    arguments << QStringLiteral("-vn") << QStringLiteral("-f")
+              << QStringLiteral("s16le") << QStringLiteral("-ac")
+              << QStringLiteral("1") << QStringLiteral("-ar")
+              << QStringLiteral("8000") << QStringLiteral("-");
+
+    QProcess process;
+    process.setProcessChannelMode(QProcess::SeparateChannels);
+    process.start(ffmpeg, arguments);
+    if (!process.waitForStarted(15000)) {
+        return QByteArray();
+    }
+    if (!process.waitForFinished(60000)) {
+        process.kill();
+        process.waitForFinished(2000);
+        return QByteArray();
+    }
+    if (process.exitStatus() != QProcess::NormalExit
+        || process.exitCode() != 0) {
+        return QByteArray();
+    }
+    return process.readAllStandardOutput();
+}
+
+QByteArray decodeAllAudioPcm(const QString &mediaPath)
+{
+    return decodeAudioPcm(mediaPath, 0, 0);
+}
+
+// The video ELEMENTARY stream of a file, copied out without re-encoding. Used to
+// assert that adding an audio stream does not touch the picture at all.
+QByteArray videoStreamBytes(const QString &mediaPath)
+{
+    const QString ffmpeg = FrameExtractor::defaultExecutablePath();
+    if (ffmpeg.isEmpty()) {
+        return QByteArray();
+    }
+    QProcess process;
+    process.setProcessChannelMode(QProcess::SeparateChannels);
+    process.start(ffmpeg, { QStringLiteral("-v"), QStringLiteral("error"),
+                            QStringLiteral("-i"), mediaPath,
+                            QStringLiteral("-map"), QStringLiteral("0:v"),
+                            QStringLiteral("-c"), QStringLiteral("copy"),
+                            QStringLiteral("-f"), QStringLiteral("h264"),
+                            QStringLiteral("-") });
+    if (!process.waitForStarted(15000)) {
+        return QByteArray();
+    }
+    if (!process.waitForFinished(60000)) {
+        process.kill();
+        process.waitForFinished(2000);
+        return QByteArray();
+    }
+    if (process.exitStatus() != QProcess::NormalExit
+        || process.exitCode() != 0) {
+        return QByteArray();
+    }
+    return process.readAllStandardOutput();
+}
+
+// RMS amplitude (0..1) of 16-bit little-endian mono PCM; negative when empty.
+double pcmRms(const QByteArray &pcm)
+{
+    const int samples = pcm.size() / 2;
+    if (samples <= 0) {
+        return -1.0;
+    }
+    double sum = 0.0;
+    for (int i = 0; i < samples; ++i) {
+        const quint16 low = static_cast<quint8>(pcm.at(2 * i));
+        const quint16 high = static_cast<quint8>(pcm.at(2 * i + 1));
+        const qint16 sample = static_cast<qint16>(low | (high << 8));
+        sum += static_cast<double>(sample) * static_cast<double>(sample);
+    }
+    return std::sqrt(sum / static_cast<double>(samples)) / 32768.0;
+}
+
+// The fixture's tone measures ~0.088 RMS and its digital silence ~0.000, both
+// well clear of these bounds even through AAC.
+constexpr double kToneRmsFloor = 0.05;
+constexpr double kSilenceRmsCeiling = 0.01;
+
+QString sha256Of(const QByteArray &bytes)
+{
+    return QString::fromLatin1(
+        QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
+}
+
+ReframePlan makeAudioPlan(qint64 startMs, qint64 endMs, double fps,
+                          const QList<ReframePlan::TimeRange> &segments = {})
+{
+    ReframePlan plan = makeReframePlan(startMs, endMs, 160, 90, fps,
+                                       { makeKeyframe(startMs, 0.0),
+                                         makeKeyframe(endMs, 60.0) });
+    plan.setSegments(segments);
+    return plan;
+}
+
+} // namespace
+
+void ProjectTest::reframeRenderPreservesSourceAudio()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable in this environment");
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString source;
+    // 4 s at 2 fps; tone in [0,1) and [3,4), silence in [1,3).
+    QVERIFY(createAudioTestClip(directory.path(), 8, 2, 1000, 3000, 1, &source));
+
+    const QFileInfo sourceInfoBefore(source);
+    const QString sourceDigestBefore = sha256Of(readFileBytes(source));
+
+    const ReframePlan plan = makeAudioPlan(0, 4000, 2.0);
+    QVERIFY(plan.isValid());
+    QCOMPARE(plan.frameCount(), 8);
+
+    const QString output = directory.filePath(QStringLiteral("with_audio.mp4"));
+    const ReframePipeline::Result result =
+        ReframePipeline::renderPlan(plan, source, output, nullptr);
+    QVERIFY2(result.ok, qPrintable(result.error));
+
+    AudioStreamFacts facts;
+    QVERIFY(probeAudioFacts(output, &facts));
+    QVERIFY2(facts.hasAudio, "the rendered output must carry the source audio");
+    // Channel layout and sample rate are preserved from the source.
+    QCOMPARE(facts.channels, 1);
+    QCOMPARE(facts.sampleRate, 48000);
+    QVERIFY2(qAbs(facts.durationSeconds - 4.0) < 0.2,
+             qPrintable(QString::number(facts.durationSeconds, 'f', 4)));
+
+    // Content, not waveform: signal where the source had signal, and silence
+    // where it had silence.
+    QVERIFY2(pcmRms(decodeAudioPcm(output, 200, 600)) > kToneRmsFloor,
+             "tone expected at 0.2-0.8 s");
+    QVERIFY2(pcmRms(decodeAudioPcm(output, 1500, 1000)) < kSilenceRmsCeiling,
+             "silence expected at 1.5-2.5 s");
+    QVERIFY2(pcmRms(decodeAudioPcm(output, 3200, 600)) > kToneRmsFloor,
+             "tone expected at 3.2-3.8 s");
+
+    // Adding audio does not touch the picture. The degraded (probe reports
+    // nothing, so no audio is added) render of the SAME plan and source is the
+    // previous output exactly, and the two files must carry the identical video
+    // elementary stream — the container differs, because it gained a stream, but
+    // the picture is not re-encoded.
+    FakeDurationProbe silentProbe;
+    const QString silent =
+        directory.filePath(QStringLiteral("same_picture_no_audio.mp4"));
+    const ReframePipeline::Result silentResult =
+        ReframePipeline::renderPlan(plan, source, silent, nullptr, &silentProbe);
+    QVERIFY2(silentResult.ok, qPrintable(silentResult.error));
+    const QByteArray withAudioVideo = videoStreamBytes(output);
+    QVERIFY(!withAudioVideo.isEmpty());
+    QCOMPARE(sha256Of(withAudioVideo), sha256Of(videoStreamBytes(silent)));
+    AudioStreamFacts silentFacts;
+    QVERIFY(probeAudioFacts(silent, &silentFacts));
+    QVERIFY(!silentFacts.hasAudio);
+    QVERIFY2(sha256Of(readFileBytes(output)) != sha256Of(readFileBytes(silent)),
+             "an output carrying a stream is a different container");
+
+    // Determinism: the same plan renders an equal decoded picture AND equal
+    // decoded audio. Container equality is asserted only on the video-only path;
+    // a container that carries a stream is a different container.
+    const QString repeated =
+        directory.filePath(QStringLiteral("with_audio_again.mp4"));
+    const ReframePipeline::Result again =
+        ReframePipeline::renderPlan(plan, source, repeated, nullptr);
+    QVERIFY2(again.ok, qPrintable(again.error));
+    QCOMPARE(sha256Of(decodeAllAudioPcm(repeated)),
+             sha256Of(decodeAllAudioPcm(output)));
+    QCOMPARE(sha256Of(decodeAllFramesRaw(repeated)),
+             sha256Of(decodeAllFramesRaw(output)));
+
+    // The original media is only ever read.
+    QCOMPARE(QFileInfo(source).size(), sourceInfoBefore.size());
+    QCOMPARE(QFileInfo(source).lastModified(), sourceInfoBefore.lastModified());
+    QCOMPARE(sha256Of(readFileBytes(source)), sourceDigestBefore);
+}
+
+void ProjectTest::reframeRenderAudioFollowsRetainedSegments()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable in this environment");
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString source;
+    QVERIFY(createAudioTestClip(directory.path(), 8, 2, 1000, 3000, 1, &source));
+
+    // Keep the two sounding seconds and drop the silent middle: the output is
+    // the ordered concatenation of [0,1) and [3,4) of the SOURCE.
+    const ReframePlan plan =
+        makeAudioPlan(0, 4000, 2.0,
+                      { ReframePlan::TimeRange{ 0, 1000 },
+                        ReframePlan::TimeRange{ 3000, 4000 } });
+    QVERIFY(plan.isValid());
+    QCOMPARE(plan.frameCount(), 4);
+
+    const QString output = directory.filePath(QStringLiteral("segments.mp4"));
+    const ReframePipeline::Result result =
+        ReframePipeline::renderPlan(plan, source, output, nullptr);
+    QVERIFY2(result.ok, qPrintable(result.error));
+
+    AudioStreamFacts facts;
+    QVERIFY(probeAudioFacts(output, &facts));
+    QVERIFY(facts.hasAudio);
+    QVERIFY2(qAbs(facts.durationSeconds - 2.0) < 0.2,
+             qPrintable(QString::number(facts.durationSeconds, 'f', 4)));
+
+    // Both halves are the RETAINED spans, in order. A mapping that used the
+    // source range, or the first two seconds, would leave the second half — or
+    // both — silent, because the source is silent between one and three seconds.
+    QVERIFY2(pcmRms(decodeAudioPcm(output, 100, 800)) > kToneRmsFloor,
+             "the first retained span is the source's first second of tone");
+    QVERIFY2(pcmRms(decodeAudioPcm(output, 1100, 800)) > kToneRmsFloor,
+             "the second retained span is the source's last second of tone");
+}
+
+void ProjectTest::reframeRenderAudioTrimsToSourceRange()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable in this environment");
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString source;
+    QVERIFY(createAudioTestClip(directory.path(), 8, 2, 1000, 3000, 1, &source));
+
+    // (a) A plan whose range starts late keeps the audio of THAT range only.
+    const ReframePlan trimmed = makeAudioPlan(3000, 4000, 2.0);
+    QVERIFY(trimmed.isValid());
+    QCOMPARE(trimmed.frameCount(), 2);
+    const QString trimmedOutput =
+        directory.filePath(QStringLiteral("trimmed.mp4"));
+    const ReframePipeline::Result trimmedResult =
+        ReframePipeline::renderPlan(trimmed, source, trimmedOutput, nullptr);
+    QVERIFY2(trimmedResult.ok, qPrintable(trimmedResult.error));
+
+    AudioStreamFacts trimmedFacts;
+    QVERIFY(probeAudioFacts(trimmedOutput, &trimmedFacts));
+    QVERIFY(trimmedFacts.hasAudio);
+    QVERIFY2(qAbs(trimmedFacts.durationSeconds - 1.0) < 0.2,
+             qPrintable(QString::number(trimmedFacts.durationSeconds, 'f', 4)));
+    QVERIFY2(pcmRms(decodeAudioPcm(trimmedOutput, 100, 800)) > kToneRmsFloor,
+             "the retained range is the source's last, sounding second");
+
+    // (b) A range whose output frame count rounds DOWN must not leave an
+    // audio-only tail: 2333 ms at 2 fps renders 4 frames, i.e. 2000 ms of
+    // picture, and the audio must end with the picture.
+    const ReframePlan ragged = makeAudioPlan(1000, 3333, 2.0);
+    QVERIFY(ragged.isValid());
+    QCOMPARE(ragged.frameCount(), 4);
+    const QString raggedOutput = directory.filePath(QStringLiteral("ragged.mp4"));
+    const ReframePipeline::Result raggedResult =
+        ReframePipeline::renderPlan(ragged, source, raggedOutput, nullptr);
+    QVERIFY2(raggedResult.ok, qPrintable(raggedResult.error));
+
+    AudioStreamFacts raggedFacts;
+    QVERIFY(probeAudioFacts(raggedOutput, &raggedFacts));
+    QVERIFY(raggedFacts.hasAudio);
+    QVERIFY2(qAbs(raggedFacts.durationSeconds - 2.0) < 0.2,
+             qPrintable(QStringLiteral("container audio is %1 s; the picture is "
+                                       "2.000 s")
+                            .arg(raggedFacts.durationSeconds, 0, 'f', 4)));
+}
+
+void ProjectTest::reframeRenderSilentSourceStaysSilent()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable in this environment");
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString clip;
+    QVERIFY(createProviderTestClip(directory.path(), 8, 2, &clip));
+    const QString ffmpeg = FrameExtractor::defaultExecutablePath();
+
+    const ReframePlan plan = makeAudioPlan(0, 4000, 2.0);
+    QVERIFY(plan.isValid());
+
+    // The picture the renderer produces, encoded by the standalone video-only
+    // encoder — the path every existing equivalence guarantee is built on.
+    QTemporaryDir frameDirectory;
+    QVERIFY(frameDirectory.isValid());
+    ReframeStreamFrameProvider provider(clip, ffmpeg, 2.0);
+    QStringList framePaths;
+    QString error;
+    QVERIFY2(ReframeRenderer::renderToPngSequence(plan, &provider,
+                                                  frameDirectory.path(),
+                                                  &framePaths, &error),
+             qPrintable(error));
+    QCOMPARE(framePaths.size(), 8);
+    const QString standalonePicture =
+        directory.filePath(QStringLiteral("picture_only.mp4"));
+    QVERIFY2(ReframeRenderer::encodeVideo(
+                 ffmpeg,
+                 QDir(frameDirectory.path())
+                     .filePath(ReframeRenderer::frameFileNamePattern()),
+                 plan.output().fps, standalonePicture, &error),
+             qPrintable(error));
+
+    const QString rendered = directory.filePath(QStringLiteral("rendered.mp4"));
+    const ReframePipeline::Result result =
+        ReframePipeline::renderPlan(plan, clip, rendered, nullptr);
+    QVERIFY2(result.ok, qPrintable(result.error));
+
+    // A source with no audio goes through exactly the path it always did: the
+    // container is byte-identical to the video-only encoder's output.
+    QCOMPARE(sha256Of(readFileBytes(rendered)),
+             sha256Of(readFileBytes(standalonePicture)));
+
+    AudioStreamFacts facts;
+    QVERIFY(probeAudioFacts(rendered, &facts));
+    QVERIFY2(!facts.hasAudio, "a video-only source renders a video-only output");
+    // Absence of audio is the normal case, not a degradation: nothing is
+    // reported and nothing changed.
+    QVERIFY2(result.notes.isEmpty(),
+             qPrintable(result.notes.join(QStringLiteral(" | "))));
+}
+
+void ProjectTest::reframeRenderUnusableAudioFactsDegradesHonestly()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable in this environment");
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString source;
+    // A source that really does have audio.
+    QVERIFY(createAudioTestClip(directory.path(), 8, 2, 1000, 3000, 1, &source));
+
+    const ReframePlan plan = makeAudioPlan(0, 4000, 2.0);
+    QVERIFY(plan.isValid());
+
+    // A probe that cannot answer: the audio decision degrades to the previous
+    // silent output and says why, rather than guessing.
+    FakeDurationProbe probe;
+    const QString output = directory.filePath(QStringLiteral("degraded.mp4"));
+    const ReframePipeline::Result result =
+        ReframePipeline::renderPlan(plan, source, output, nullptr, &probe);
+    QVERIFY2(result.ok, qPrintable(result.error));
+
+    AudioStreamFacts facts;
+    QVERIFY(probeAudioFacts(output, &facts));
+    QVERIFY(!facts.hasAudio);
+    const QString notes = result.notes.join(QStringLiteral("\n"));
+    QVERIFY2(notes.contains(QStringLiteral("Source audio could not be determined")),
+             qPrintable(notes));
+}
+
+void ProjectTest::reframeRenderLeavesSourceMediaUntouched()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable in this environment");
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString source;
+    QVERIFY(createAudioTestClip(directory.path(), 8, 2, 1000, 3000, 2, &source));
+
+    // The project's own fingerprint vocabulary: the same reference an
+    // EditDecision records must still describe the file afterwards.
+    QString snapshotError;
+    const MediaItem snapshot = MediaItem::createFromFilePath(source, &snapshotError);
+    QVERIFY2(snapshot.isValid(), qPrintable(snapshotError));
+    MediaSourceReference reference;
+    reference.mediaId = snapshot.id();
+    reference.path = snapshot.path();
+    reference.sizeBytes = snapshot.sizeBytes();
+    reference.lastModifiedUtc =
+        mediaSourceTimestampToUtcMs(snapshot.lastModifiedUtc());
+    QVERIFY(reference.isValid());
+    QByteArray digestBefore;
+    QVERIFY(computeMediaContentSha256(source, &digestBefore));
+
+    // A stereo source, so channel preservation is exercised too.
+    const ReframePlan plan = makeAudioPlan(0, 4000, 2.0);
+    const QString output = directory.filePath(QStringLiteral("stereo.mp4"));
+    const ReframePipeline::Result result =
+        ReframePipeline::renderPlan(plan, source, output, nullptr);
+    QVERIFY2(result.ok, qPrintable(result.error));
+
+    AudioStreamFacts facts;
+    QVERIFY(probeAudioFacts(output, &facts));
+    QVERIFY(facts.hasAudio);
+    QCOMPARE(facts.channels, 2);
+
+    QString detail;
+    QCOMPARE(mediaSourceStatusToString(checkMediaSourceStatus(reference, &detail)),
+             QStringLiteral("matches"));
+    QCOMPARE(detail, QString());
+    QByteArray digestAfter;
+    QVERIFY(computeMediaContentSha256(source, &digestAfter));
+    QCOMPARE(digestAfter, digestBefore);
+}
+
+void ProjectTest::replayReproducesRenderedAudio()
+{
+    if (!FrameExtractor::isAvailable()) {
+        QSKIP("ffmpeg is unavailable in this environment");
+    }
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString source;
+    QVERIFY(createAudioTestClip(directory.path(), 8, 2, 1000, 3000, 1, &source));
+
+    Application app;
+    app.newProject();
+    QVERIFY(app.importMediaFile(source));
+    QVERIFY(app.setActiveMedia(app.mediaItems().first().id()));
+    app.setReframeDefaultOutput(160, 90, 2.0);
+
+    const QString firstOutput = directory.filePath(QStringLiteral("render1.mp4"));
+    QVERIFY2(app.runReframeCommandTo(QStringLiteral("pan right"), 0, 4000,
+                                     firstOutput),
+             qPrintable(app.lastReframeCommandOutcome().error));
+    QCOMPARE(app.reframeOutputs().size(), 1);
+    QVERIFY(app.reframeOutputs().at(0).hasEditDecision());
+
+    AudioStreamFacts facts;
+    QVERIFY(probeAudioFacts(firstOutput, &facts));
+    QVERIFY(facts.hasAudio);
+    const QByteArray firstAudio = decodeAllAudioPcm(firstOutput);
+    QVERIFY(!firstAudio.isEmpty());
+    const QByteArray firstFrames = decodeAllFramesRaw(firstOutput);
+    QVERIFY(!firstFrames.isEmpty());
+
+    // The replay uses the DEFAULT renderer: the stored plan plus the source path,
+    // no parser and no perception provider. The audio must come back with it.
+    const QString replayOutput =
+        directory.filePath(QStringLiteral("render1_replay.mp4"));
+    const ReplayResult replay = app.replayEditDecision(0, replayOutput);
+    QVERIFY2(replay.ok, qPrintable(replay.error));
+
+    QCOMPARE(sha256Of(decodeAllAudioPcm(replayOutput)), sha256Of(firstAudio));
+    QCOMPARE(sha256Of(decodeAllFramesRaw(replayOutput)), sha256Of(firstFrames));
+    AudioStreamFacts replayFacts;
+    QVERIFY(probeAudioFacts(replayOutput, &replayFacts));
+    QVERIFY(replayFacts.hasAudio);
+    QCOMPARE(replayFacts.channels, facts.channels);
+    QCOMPARE(replayFacts.sampleRate, facts.sampleRate);
 }
 
 void ProjectTest::mainWindowShowsReframeOutputs()
